@@ -644,6 +644,280 @@ body {
 }
 
 /* ------------------------------------------------------------
+   Filter bar
+   ------------------------------------------------------------ */
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 24px;
+}
+
+.filter-input {
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-mid);
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  width: 220px;
+  letter-spacing: 0.02em;
+  transition: border-color 120ms ease, color 120ms ease;
+  outline: none;
+}
+
+.filter-input::placeholder {
+  color: var(--text-muted);
+}
+
+.filter-input:focus {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.filter-select {
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-mid);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 120ms ease;
+  /* Normalise the native arrow across browsers */
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23545c6b'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 28px;
+}
+
+.filter-select:focus {
+  border-color: var(--border-strong);
+}
+
+.filter-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  user-select: none;
+  padding: 6px 4px;
+}
+
+.filter-toggle input[type="checkbox"] {
+  accent-color: var(--text-accent);
+  cursor: pointer;
+}
+
+.filter-toggle:hover {
+  color: var(--text-secondary);
+}
+
+.filter-btn {
+  /* Inherits .btn — add no overrides beyond the selector */
+}
+
+.filter-clear {
+  font-family: var(--font-mono);
+  font-size: 0.73rem;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  text-decoration: none;
+  padding: 5px 8px;
+  transition: color 100ms ease;
+}
+
+.filter-clear:hover {
+  color: var(--text-secondary);
+  text-decoration: underline;
+}
+
+/* ------------------------------------------------------------
+   Collapsible cards — <details> / <summary>
+   ------------------------------------------------------------ */
+
+/* Strip the default browser disclosure triangle */
+.card-details > summary {
+  list-style: none;
+}
+.card-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* Outer wrapper — mirrors the old .card styles */
+.card-details {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-left: 3px solid var(--accent-null);
+  border-radius: var(--radius-lg);
+  position: relative;
+  transition: box-shadow 120ms ease, border-left-color 80ms ease;
+  overflow: hidden;
+}
+
+.card-details:hover {
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+  border-color: var(--border-mid);
+}
+
+/* Tier accent colours via data attribute */
+.card-details[data-tier="high"] { border-left-color: var(--accent-high); }
+.card-details[data-tier="mid"]  { border-left-color: var(--accent-mid); }
+.card-details[data-tier="low"]  { border-left-color: var(--accent-low); }
+.card-details[data-tier="null"] { border-left-color: var(--accent-null); }
+
+/* Summary row — collapsed one-liner */
+.card-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 18px;
+  cursor: pointer;
+  transition: background-color 100ms ease;
+}
+
+.card-summary:hover {
+  background-color: var(--bg-hover);
+}
+
+/* Compact score badge used inside summary */
+.score-badge--sm {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 0.70rem;
+  font-weight: normal;
+  letter-spacing: 0.03em;
+  padding: 2px 8px;
+  border-radius: 20px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+/* Reuse tier colour classes from the regular .score-badge */
+.score-badge--sm.tier-high {
+  background: var(--score-high-bg);
+  color: var(--score-high-text);
+  border-color: var(--score-high-border);
+}
+.score-badge--sm.tier-mid {
+  background: var(--score-mid-bg);
+  color: var(--score-mid-text);
+  border-color: var(--score-mid-border);
+}
+.score-badge--sm.tier-low {
+  background: var(--score-low-bg);
+  color: var(--score-low-text);
+  border-color: var(--score-low-border);
+}
+.score-badge--sm.tier-null {
+  background: var(--score-null-bg);
+  color: var(--score-null-text);
+  border-color: var(--score-null-border);
+}
+
+.score-denom {
+  opacity: 0.55;
+  font-size: 0.62rem;
+}
+
+/* Job title in summary */
+.summary-title {
+  font-family: var(--font-ui);
+  font-size: 0.93rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* Company · location · salary in summary */
+.summary-meta {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 0 5px;
+  flex-shrink: 0;
+}
+
+.summary-company,
+.summary-location {
+  color: var(--text-secondary);
+}
+
+.summary-meta .sep {
+  color: var(--text-muted);
+}
+
+/* Expanded body — padding without top padding (summary provides it) */
+.card-body {
+  padding: 0 22px 16px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* Re-instate top spacing for the first content element in the body */
+.card-body .skill-section:first-child,
+.card-body .concerns-section:first-child {
+  margin-top: 14px;
+}
+
+/* Ensure card-divider margin works relative to card-body padding */
+.card-body .card-divider {
+  margin: 0 -22px 14px;
+}
+
+/* HTMX request indicator */
+.htmx-request .card-summary {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* ------------------------------------------------------------
+   Remote / On-site badges
+   ------------------------------------------------------------ */
+.badge-remote,
+.badge-onsite {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 20px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.badge-remote {
+  background: var(--score-high-bg);
+  color: var(--score-high-text);
+  border-color: var(--score-high-border);
+}
+
+.badge-onsite {
+  background: var(--bg-raised);
+  color: var(--text-muted);
+  border-color: var(--border-mid);
+}
+
+/* ------------------------------------------------------------
    Stats page — disclaimer
    ------------------------------------------------------------ */
 .stats-disclaimer {

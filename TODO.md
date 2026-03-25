@@ -35,6 +35,14 @@
 - [x] Write `README.md` — setup steps, config instructions, how to run ingest + server, cron example
 - [ ] Manual end-to-end test with real Adzuna API credentials
 
+## Feature: Collapsible Cards + UI Filters
+
+- [x] Make listing cards collapsible — collapsed state shows title, company, location, salary, remote/onsite badge, score
+- [x] Add filter bar to feed: min score selector, remote-only toggle, title/company text search
+- [x] Update `db.get_feed()` to accept optional filter params (min_score, remote_only, search query)
+- [x] Wire filters through `app.py` feed route via query params
+- [x] CSS for filter bar, collapsible details/summary, remote/onsite badge
+
 ## Feature: max_days_old Filter
 
 - [x] Add `search.max_days_old` to `config.example.json`

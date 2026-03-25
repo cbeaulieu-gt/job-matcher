@@ -1,6 +1,6 @@
-{#- _card.html — a single job listing card.
-    Used by index.html via {% include %} for each listing.
-    The id on the root element is the HTMX target for the dismiss action. -#}
+{#- _card.html — a single job listing card, rendered as a collapsible <details> element.
+    The id on the root <details> is the HTMX target for the dismiss action.
+    The <summary> shows the collapsed one-line view; the <article> holds the full detail. -#}
 
 {#- Resolve score tier once for data-attr and badge class. -#}
 {% if listing.score is none %}
@@ -16,81 +16,100 @@
 {#- Format salary via the app.py template filter. -#}
 {% set salary = listing | salary_fmt %}
 
-<article class="card" id="card-{{ listing.id }}" data-tier="{{ tier }}">
+{#- Determine remote/onsite badge. -#}
+{% if listing.location and 'remote' in listing.location | lower %}
+  {% set is_remote = true %}
+{% else %}
+  {% set is_remote = false %}
+{% endif %}
 
-  {# ── Header: title + score badge ────────────────────────────── #}
-  <div class="card-header">
-    <h2 class="card-title">{{ listing.title }}</h2>
+<details class="card-details" id="card-{{ listing.id }}" data-tier="{{ tier }}">
 
-    <span class="score-badge tier-{{ tier }}">
+  {# ── Summary: collapsed one-line view ────────────────────────── #}
+  <summary class="card-summary">
+
+    <span class="score-badge score-badge--sm tier-{{ tier }}">
       {%- if listing.score is none -%}
-        pending
+        ?
       {%- else -%}
-        {{ listing.score | int }} / 10
+        {{ listing.score | int }}<span class="score-denom">/10</span>
       {%- endif -%}
     </span>
-  </div>
 
-  {# ── Meta: company · location · salary ──────────────────────── #}
-  <div class="card-meta">
-    {%- if listing.company -%}
-      <span>{{ listing.company }}</span>
-    {%- endif -%}
-    {%- if listing.company and listing.location -%}
-      <span class="sep">·</span>
-    {%- endif -%}
-    {%- if listing.location -%}
-      <span>{{ listing.location }}</span>
-    {%- endif -%}
-    {%- if salary -%}
-      <span class="sep">·</span>
-      <span class="salary{% if listing.salary_is_predicted %} predicted{% endif %}">{{ salary }}</span>
-    {%- endif -%}
-  </div>
+    <span class="summary-title">{{ listing.title }}</span>
 
-  {# ── Matched skills ──────────────────────────────────────────── #}
-  {% if listing.matched_skills %}
-    <div class="skill-section">
-      <div class="skill-label">matched</div>
-      <div class="chip-list">
-        {% for skill in listing.matched_skills %}
-          <span class="chip matched">{{ skill }}</span>
-        {% endfor %}
+    <span class="summary-meta">
+      {%- if listing.company -%}
+        <span class="summary-company">{{ listing.company }}</span>
+      {%- endif -%}
+      {%- if listing.company and listing.location -%}
+        <span class="sep">·</span>
+      {%- endif -%}
+      {%- if listing.location -%}
+        <span class="summary-location">{{ listing.location }}</span>
+      {%- endif -%}
+      {%- if salary -%}
+        <span class="sep">·</span>
+        <span class="salary{% if listing.salary_is_predicted %} predicted{% endif %}">{{ salary }}</span>
+      {%- endif -%}
+    </span>
+
+    {% if is_remote %}
+      <span class="badge-remote">Remote</span>
+    {% else %}
+      <span class="badge-onsite">On-site</span>
+    {% endif %}
+
+  </summary>
+
+  {# ── Body: full card detail, shown when open ─────────────────── #}
+  <article class="card-body">
+
+    {# ── Matched skills ──────────────────────────────────────────── #}
+    {% if listing.matched_skills %}
+      <div class="skill-section">
+        <div class="skill-label">matched</div>
+        <div class="chip-list">
+          {% for skill in listing.matched_skills %}
+            <span class="chip matched">{{ skill }}</span>
+          {% endfor %}
+        </div>
       </div>
-    </div>
-  {% endif %}
+    {% endif %}
 
-  {# ── Missing skills ──────────────────────────────────────────── #}
-  {% if listing.missing_skills %}
-    <div class="skill-section">
-      <div class="skill-label">missing</div>
-      <div class="chip-list">
-        {% for skill in listing.missing_skills %}
-          <span class="chip missing">{{ skill }}</span>
-        {% endfor %}
+    {# ── Missing skills ──────────────────────────────────────────── #}
+    {% if listing.missing_skills %}
+      <div class="skill-section">
+        <div class="skill-label">missing</div>
+        <div class="chip-list">
+          {% for skill in listing.missing_skills %}
+            <span class="chip missing">{{ skill }}</span>
+          {% endfor %}
+        </div>
       </div>
-    </div>
-  {% endif %}
+    {% endif %}
 
-  {# ── Concerns ────────────────────────────────────────────────── #}
-  {% if listing.concerns %}
-    <div class="concerns-section">
-      <div class="concerns-label">concerns</div>
-      <ul class="concerns-list">
-        {% for concern in listing.concerns %}
-          <li>{{ concern }}</li>
-        {% endfor %}
-      </ul>
-    </div>
-  {% endif %}
+    {# ── Concerns ────────────────────────────────────────────────── #}
+    {% if listing.concerns %}
+      <div class="concerns-section">
+        <div class="concerns-label">concerns</div>
+        <ul class="concerns-list">
+          {% for concern in listing.concerns %}
+            <li>{{ concern }}</li>
+          {% endfor %}
+        </ul>
+      </div>
+    {% endif %}
 
-  {# ── Verdict ─────────────────────────────────────────────────── #}
-  {% if listing.verdict %}
-    <p class="verdict">{{ listing.verdict }}</p>
-  {% endif %}
+    {# ── Verdict ─────────────────────────────────────────────────── #}
+    {% if listing.verdict %}
+      <p class="verdict">{{ listing.verdict }}</p>
+    {% endif %}
 
-  {# ── Action row ──────────────────────────────────────────────── #}
-  <div class="card-divider"></div>
-  {% include "_actions.html" %}
+    {# ── Action row ──────────────────────────────────────────────── #}
+    <div class="card-divider"></div>
+    {% include "_actions.html" %}
 
-</article>
+  </article>
+
+</details>

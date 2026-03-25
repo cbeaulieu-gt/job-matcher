@@ -8,7 +8,7 @@ Business logic lives in ingest.py; none of it belongs here.
 import json
 import os
 
-from flask import Flask, render_template, make_response
+from flask import Flask, render_template, make_response, request
 
 import db
 
@@ -87,14 +87,34 @@ def salary_fmt(listing: dict) -> str | None:
 
 @app.route("/")
 def feed():
-    """Main feed: listings scored at or above the configured threshold."""
+    """Main feed: listings scored at or above the configured threshold.
+
+    Accepts optional query params for filtering:
+      - min_score: float override for the score floor
+      - remote_only: "1" to restrict to remote listings
+      - search: text matched against title and company
+    """
     threshold = CONFIG["scoring"]["threshold"]
-    listings = db.get_feed(threshold)
+
+    min_score_raw = request.args.get("min_score")
+    min_score = float(min_score_raw) if min_score_raw else None
+    remote_only = request.args.get("remote_only") == "1"
+    search = request.args.get("search", "").strip() or None
+
+    listings = db.get_feed(
+        threshold=threshold,
+        min_score=min_score,
+        remote_only=remote_only,
+        search=search,
+    )
     return render_template(
         "index.html",
         listings=listings,
         view="feed",
         threshold=threshold,
+        min_score=min_score,
+        remote_only=remote_only,
+        search=search,
     )
 
 

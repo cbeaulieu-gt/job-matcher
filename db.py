@@ -222,20 +222,44 @@ def _deserialise_row(row: sqlite3.Row) -> dict:
     return d
 
 
-def get_feed(threshold: float = 7.0, db_path: str = "jobs.db") -> list[dict]:
-    """Return listings with score >= threshold and dismissed = 0, ordered by score DESC.
+def get_feed(
+    threshold: float = 7.0,
+    min_score: float | None = None,
+    remote_only: bool = False,
+    search: str | None = None,
+    db_path: str = "jobs.db",
+) -> list[dict]:
+    """Return listings with score >= effective threshold and dismissed = 0, ordered by score DESC.
 
     Listings whose score is NULL are excluded (they have not been scored yet).
+
+    Args:
+        threshold:   Default score floor used when min_score is not provided.
+        min_score:   If provided, overrides threshold as the score floor.
+        remote_only: If True, restricts to listings whose location contains "remote".
+        search:      If provided, filters by title or company containing the search string.
+        db_path:     Path to the SQLite database file.
     """
+    effective = min_score if min_score is not None else threshold
+
+    conditions = ["score >= ?", "dismissed = 0"]
+    params: list = [effective]
+
+    if remote_only:
+        conditions.append("LOWER(location) LIKE '%remote%'")
+
+    if search:
+        conditions.append("(LOWER(title) LIKE ? OR LOWER(company) LIKE ?)")
+        term = f"%{search.lower()}%"
+        params.extend([term, term])
+
+    where_clause = " AND ".join(conditions)
+
     conn = get_connection(db_path)
     try:
         rows = conn.execute(
-            """
-            SELECT * FROM listings
-            WHERE score >= ? AND dismissed = 0
-            ORDER BY score DESC
-            """,
-            (threshold,),
+            f"SELECT * FROM listings WHERE {where_clause} ORDER BY score DESC",
+            params,
         ).fetchall()
         return [_deserialise_row(r) for r in rows]
     finally:

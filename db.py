@@ -79,6 +79,7 @@ def init_db(db_path: str = "jobs.db") -> None:
         for column, typedef in (
             ("tokens_input", "INTEGER"),
             ("tokens_output", "INTEGER"),
+            ("applied", "INTEGER DEFAULT 0"),
         ):
             try:
                 conn.execute(
@@ -126,9 +127,10 @@ def insert_listing(listing: dict, db_path: str = "jobs.db") -> None:
         elif val is None:
             row[col] = json.dumps([])
 
-    # Ensure token columns are present even if absent from the source dict.
+    # Ensure token and status columns are present even if absent from the source dict.
     row.setdefault("tokens_input", None)
     row.setdefault("tokens_output", None)
+    row.setdefault("applied", 0)
 
     conn = get_connection(db_path)
     try:
@@ -142,7 +144,8 @@ def insert_listing(listing: dict, db_path: str = "jobs.db") -> None:
                 created_at, fetched_at,
                 score, matched_skills, missing_skills, concerns, verdict,
                 bookmarked, dismissed, seen,
-                tokens_input, tokens_output
+                tokens_input, tokens_output,
+                applied
             ) VALUES (
                 :adzuna_id, :title, :company, :location,
                 :salary_min, :salary_max, :salary_is_predicted,
@@ -151,7 +154,8 @@ def insert_listing(listing: dict, db_path: str = "jobs.db") -> None:
                 :created_at, :fetched_at,
                 :score, :matched_skills, :missing_skills, :concerns, :verdict,
                 :bookmarked, :dismissed, :seen,
-                :tokens_input, :tokens_output
+                :tokens_input, :tokens_output,
+                :applied
             )
             """,
             row,
@@ -242,7 +246,7 @@ def get_feed(
     """
     effective = min_score if min_score is not None else threshold
 
-    conditions = ["score >= ?", "dismissed = 0"]
+    conditions = ["score >= ?", "dismissed = 0", "applied = 0"]
     params: list = [effective]
 
     if remote_only:
@@ -404,5 +408,34 @@ def set_dismissed(listing_id: int, value: int, db_path: str = "jobs.db") -> None
             (int(bool(value)), listing_id),
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def set_applied(listing_id: int, value: int, db_path: str = "jobs.db") -> None:
+    """Set applied to 1 (mark as applied) or 0 (unmark) for the given internal id."""
+    conn = get_connection(db_path)
+    try:
+        conn.execute(
+            "UPDATE listings SET applied = ? WHERE id = ?",
+            (int(bool(value)), listing_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_applied(db_path: str = "jobs.db") -> list[dict]:
+    """Return all listings where applied = 1, ordered by fetched_at DESC."""
+    conn = get_connection(db_path)
+    try:
+        rows = conn.execute(
+            """
+            SELECT * FROM listings
+            WHERE applied = 1
+            ORDER BY fetched_at DESC
+            """,
+        ).fetchall()
+        return [_deserialise_row(r) for r in rows]
     finally:
         conn.close()

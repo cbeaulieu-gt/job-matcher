@@ -16,6 +16,14 @@
     hx-swap="outerHTML"
   >{% if listing.bookmarked %}★ saved{% else %}☆ save{% endif %}</button>
 
+  <button
+    class="btn btn-apply{% if listing.applied %} applied{% endif %}"
+    hx-post="/apply/{{ listing.id }}"
+    hx-target="#actions-{{ listing.id }}"
+    hx-swap="outerHTML"
+    title="{% if listing.applied %}Applied{% else %}Mark as applied{% endif %}"
+  >{% if listing.applied %}✓ applied{% else %}↗ apply{% endif %}</button>
+
   <span class="actions-spacer"></span>
 
   <button

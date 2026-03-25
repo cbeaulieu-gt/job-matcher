@@ -35,6 +35,17 @@
 - [x] Write `README.md` — setup steps, config instructions, how to run ingest + server, cron example
 - [ ] Manual end-to-end test with real Adzuna API credentials
 
+## Feature: Applied Tracking
+
+- [x] Add `applied` column to `listings` table via `init_db()` migration
+- [x] Add `set_applied()` and `get_applied()` helpers to `db.py`
+- [x] Exclude applied listings from `get_feed()` by default
+- [x] Add `POST /apply/<id>` route to `app.py`
+- [x] Add `GET /applied` route and nav tab
+- [x] Add apply button to `_actions.html` (distinct from bookmark/dismiss)
+- [x] Create `templates/applied.html` (or reuse index.html with applied view)
+- [x] CSS for applied button state and applied badge on cards
+
 ## Feature: Collapsible Cards + UI Filters
 
 - [x] Make listing cards collapsible — collapsed state shows title, company, location, salary, remote/onsite badge, score

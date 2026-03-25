@@ -469,6 +469,29 @@ body {
   border-color: var(--btn-border);
 }
 
+/* Apply button */
+.btn-apply {
+  color: var(--text-muted);
+}
+
+.btn-apply:hover {
+  color: var(--score-high-text);
+  border-color: var(--score-high-border);
+}
+
+.btn-apply.applied {
+  color: var(--score-high-text);
+  border-color: var(--score-high-border);
+  background: var(--score-high-bg);
+  font-weight: 500;
+}
+
+.btn-apply.applied:hover {
+  color: #2acc65;
+  background: #0a2215;
+  border-color: #1a5c36;
+}
+
 /* Spacer pushes dismiss to the right */
 .actions-spacer {
   flex: 1;

@@ -150,6 +150,37 @@ def toggle_bookmark(listing_id: int):
     return render_template("_actions.html", listing=listing)
 
 
+@app.route("/apply/<int:listing_id>", methods=["POST"])
+def toggle_apply(listing_id: int):
+    """Toggle the applied state for a listing.
+
+    Reads the current state, flips it, writes it back, then returns the
+    re-rendered action button group as an HTMX partial. Same read-modify-write
+    pattern as toggle_bookmark — only the action row is swapped in the DOM.
+    """
+    listing = db.get_listing_by_id(listing_id)
+    if listing is None:
+        return make_response("", 404)
+
+    new_value = 0 if listing["applied"] else 1
+    db.set_applied(listing_id, new_value)
+
+    # Re-fetch to get the authoritative updated state.
+    listing = db.get_listing_by_id(listing_id)
+    return render_template("_actions.html", listing=listing)
+
+
+@app.route("/applied")
+def applied():
+    """Applied listings — all listings marked as applied, most recent first."""
+    listings = db.get_applied()
+    return render_template(
+        "index.html",
+        listings=listings,
+        view="applied",
+    )
+
+
 @app.route("/stats")
 def stats():
     """API usage and cost statistics."""

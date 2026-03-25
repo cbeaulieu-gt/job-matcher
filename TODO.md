@@ -1,0 +1,34 @@
+# Job Matcher — Implementation Plan
+
+## Phase 1: Foundation
+
+- [ ] Create `requirements.txt` with `flask`, `requests`, `beautifulsoup4`, `anthropic`
+- [ ] Create `config.example.json` with all keys, placeholder values, and comments
+- [ ] Create `profile.json` with example skills profile structure
+- [ ] Create `.gitignore` (exclude `config.json`, `jobs.db`, `__pycache__`, `.env`)
+- [ ] Implement `db.py` — schema init, all query helpers (`init_db`, `listing_exists`, `insert_listing`, `update_score`, `get_feed`, `get_bookmarks`, `set_bookmarked`, `set_dismissed`)
+
+## Phase 2: Ingestion Pipeline
+
+- [ ] Implement `AdzunaClient` in `ingest.py` — paginated fetch, respects `max_pages` config
+- [ ] Implement `prefilter()` — title include/exclude regex, salary floor, contract type/time
+- [ ] Implement `scrape_description()` — GET redirect_url, extract visible text via BS4, fallback to API snippet on failure
+- [ ] Implement `score_listing()` — call Claude Haiku, parse structured JSON response, retry once on failure
+- [ ] Wire up `run()` orchestrator in `ingest.py` — full pipeline with summary output
+- [ ] Add startup validation — raise clearly if config keys are missing
+
+## Phase 3: Flask UI
+
+- [ ] Implement `app.py` — routes for `/`, `/bookmarks`, `/bookmark/<id>`, `/dismiss/<id>`
+- [ ] Create `templates/index.html` — header/nav, listing cards, score badge, skill tags
+- [ ] Create `templates/_card.html` — reusable card partial for HTMX swaps
+- [ ] Wire up HTMX bookmark toggle — `hx-post`, `hx-swap="outerHTML"` on action buttons
+- [ ] Wire up HTMX dismiss — `hx-post`, removes card from DOM on success
+- [ ] Create `static/style.css` — score badge colours, card layout, minimal polish
+
+## Phase 4: Polish & Documentation
+
+- [ ] Add logging throughout `ingest.py` (counts: fetched / pre-filtered / deduped / scraped / scored)
+- [ ] Handle `score = NULL` listings in UI gracefully (show "pending score" state)
+- [ ] Write `README.md` — setup steps, config instructions, how to run ingest + server, cron example
+- [ ] Manual end-to-end test with real Adzuna API credentials

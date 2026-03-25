@@ -668,8 +668,80 @@ def run(config_path: str = "config.json", profile_path: str = "profile.json") ->
 
 
 # ---------------------------------------------------------------------------
+# Rescorer
+# ---------------------------------------------------------------------------
+
+def rescore(config_path: str = "config.json", profile_path: str = "profile.json") -> None:
+    """Re-score all previously scored listings against the current profile.
+
+    Loads config and profile, fetches every listing with seen = 1 from the
+    database, and re-runs Claude scoring on each one.  Does not fetch new
+    listings from Adzuna.
+
+    Args:
+        config_path:  Path to config.json (default ``"config.json"``).
+        profile_path: Path to profile.json (default ``"profile.json"``).
+    """
+    config = load_config(config_path)
+    profile = load_profile(profile_path)
+
+    api_key: str = config["anthropic_api_key"]
+    model: str = config["scoring"]["model"]
+
+    listings = db.get_all_scored()
+    if not listings:
+        print("No scored listings to rescore.")
+        return
+
+    total = len(listings)
+    rescored = 0
+    failed = 0
+    tokens_input = 0
+    tokens_output = 0
+
+    for listing in listings:
+        title = listing.get("title", "(no title)")
+        result = score_listing(listing["description"], profile, model, api_key)
+
+        if result is not None:
+            db.update_score(listing["adzuna_id"], result)
+            rescored += 1
+            tokens_input += result.get("tokens_input") or 0
+            tokens_output += result.get("tokens_output") or 0
+            logger.info("RESCORED %d/10  %s", result.get("score", 0), title)
+        else:
+            failed += 1
+            logger.warning("RESCORE FAILED  %s", title)
+
+    total_tokens = tokens_input + tokens_output
+    cost = (
+        tokens_input / 1_000_000 * 0.80
+        + tokens_output / 1_000_000 * 4.00
+    )
+    print(
+        f"Rescore complete: {total} listings | {rescored} rescored ({failed} failed) | "
+        f"~{total_tokens:,} tok | ~${cost:.4f}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    run()
+    import argparse
+    parser = argparse.ArgumentParser(description="Job Matcher ingestion pipeline")
+    parser.add_argument(
+        "--rescore",
+        action="store_true",
+        help="Re-score all previously scored listings against the current profile. "
+             "Does not fetch new listings.",
+    )
+    parser.add_argument("--config", default="config.json", help="Path to config.json")
+    parser.add_argument("--profile", default="profile.json", help="Path to profile.json")
+    args = parser.parse_args()
+
+    if args.rescore:
+        rescore(config_path=args.config, profile_path=args.profile)
+    else:
+        run(config_path=args.config, profile_path=args.profile)

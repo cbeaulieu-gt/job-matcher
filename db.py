@@ -318,6 +318,18 @@ def get_bookmarks(db_path: str = "jobs.db") -> list[dict]:
         conn.close()
 
 
+def get_all_scored(db_path: str = "jobs.db") -> list[dict]:
+    """Return all listings that have been scored (seen = 1), ordered by fetched_at DESC."""
+    conn = get_connection(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT * FROM listings WHERE seen = 1 ORDER BY fetched_at DESC"
+        ).fetchall()
+        return [_deserialise_row(r) for r in rows]
+    finally:
+        conn.close()
+
+
 def get_listing_by_id(listing_id: int, db_path: str = "jobs.db") -> dict | None:
     """Return a single listing by internal id, or None if not found.
 

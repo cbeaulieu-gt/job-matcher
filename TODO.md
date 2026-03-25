@@ -35,6 +35,13 @@
 - [x] Write `README.md` — setup steps, config instructions, how to run ingest + server, cron example
 - [ ] Manual end-to-end test with real Adzuna API credentials
 
+## Feature: Rescore Existing Listings
+
+- [x] Add `get_all_scored(db_path)` to `db.py` — fetch all listings with `seen = 1`
+- [x] Add `--rescore` flag to `ingest.py` entry point
+- [x] Implement `rescore()` function — re-runs all scored listings through Haiku, updates scores in place
+- [x] Print per-listing rescore log and final summary with token cost
+
 ## Feature: Job Type Tagging & Filter
 
 - [x] Add `job_type` TEXT column to `listings` table via migration

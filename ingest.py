@@ -481,8 +481,18 @@ def score_listing(
             )
             continue
 
+        # Strip markdown code fences that the model sometimes wraps around JSON
+        # despite being instructed not to (e.g. ```json ... ```).
+        stripped = raw_content.strip()
+        lines = stripped.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        stripped = "\n".join(lines).strip()
+
         try:
-            parsed = json.loads(raw_content)
+            parsed = json.loads(stripped)
         except json.JSONDecodeError as exc:
             logger.warning(
                 "Anthropic returned non-JSON (attempt %d/2): %s — raw: %.200s",

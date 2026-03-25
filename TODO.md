@@ -35,6 +35,11 @@
 - [x] Write `README.md` — setup steps, config instructions, how to run ingest + server, cron example
 - [ ] Manual end-to-end test with real Adzuna API credentials
 
+## Feature: Pre-filter Rejection Reasons
+
+- [x] Change `prefilter()` to return the rejection reason string instead of bare `False`
+- [x] Log the specific reason for each filtered listing (title_exclude match, title_include miss, salary, contract type/time)
+
 ## Feature: Usage & Cost Tracking
 
 - [x] Add `tokens_input` and `tokens_output` columns to `listings` table (migrate existing DB)

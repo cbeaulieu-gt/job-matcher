@@ -271,8 +271,8 @@ class AdzunaClient:
 # Pre-filter
 # ---------------------------------------------------------------------------
 
-def prefilter(listing: dict, config: dict) -> bool:
-    """Return True if the listing passes all configured heuristic filters.
+def prefilter(listing: dict, config: dict) -> str | None:
+    """Check whether a listing passes all configured heuristic filters.
 
     Checks (each skipped if the corresponding config key is absent/empty):
 
@@ -288,22 +288,25 @@ def prefilter(listing: dict, config: dict) -> bool:
         config: Full config dict.
 
     Returns:
-        True if the listing passes all checks; False if any check fails.
+        None if the listing passes all checks (i.e. should be scored).
+        A short descriptive string identifying the first failing check.
     """
     pf = config.get("prefilter", {})
-    title_lower = listing.get("title", "").lower()
+    title = listing.get("title", "")
+    title_lower = title.lower()
 
     # Title include — must match at least one pattern.
     include_patterns: list[str] = pf.get("title_include", [])
     if include_patterns:
         if not any(pat.lower() in title_lower for pat in include_patterns):
-            return False
+            return f'title_include: no match for "{title}"'
 
     # Title exclude — must match none.
     exclude_patterns: list[str] = pf.get("title_exclude", [])
     if exclude_patterns:
-        if any(pat.lower() in title_lower for pat in exclude_patterns):
-            return False
+        for pat in exclude_patterns:
+            if pat.lower() in title_lower:
+                return f'title_exclude: "{pat}" matched "{title}"'
 
     # Salary floor — only checked when listing has a salary_max value.
     salary_max = listing.get("salary_max")
@@ -315,23 +318,25 @@ def prefilter(listing: dict, config: dict) -> bool:
     if configured_floor and salary_max is not None:
         try:
             if float(salary_max) < float(configured_floor):
-                return False
+                return f"salary: max {salary_max} below floor {configured_floor}"
         except (TypeError, ValueError):
             pass  # If we can't compare, let it through.
 
     # Contract time.
     require_time: str | None = pf.get("require_contract_time")
     if require_time is not None:
-        if listing.get("contract_time", "").lower() != require_time.lower():
-            return False
+        actual_time = listing.get("contract_time", "")
+        if actual_time.lower() != require_time.lower():
+            return f'contract_time: got "{actual_time}" expected "{require_time}"'
 
     # Contract type.
     require_type: str | None = pf.get("require_contract_type")
     if require_type is not None:
-        if listing.get("contract_type", "").lower() != require_type.lower():
-            return False
+        actual_type = listing.get("contract_type", "")
+        if actual_type.lower() != require_type.lower():
+            return f'contract_type: got "{actual_type}" expected "{require_type}"'
 
-    return True
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -571,9 +576,10 @@ def run(config_path: str = "config.json", profile_path: str = "profile.json") ->
             title = listing.get("title", "(no title)")
 
             # --- Pre-filter ---
-            if not prefilter(listing, config):
+            reason = prefilter(listing, config)
+            if reason is not None:
                 prefiltered += 1
-                logger.info("FILTERED  %s", title)
+                logger.info("FILTERED  %s — %s", title, reason)
                 continue
 
             # --- Dedup ---

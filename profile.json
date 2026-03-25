@@ -1,30 +1,39 @@
 {
   "primary_skills": [
+    "C#, 7yr, active",
     "Python, 7yr, active",
-    "Go, 3yr, active",
-    "SQL, 8yr, active",
-    "PostgreSQL, 5yr, active",
-    "Docker, 4yr, active",
-    "Kubernetes, 2yr, active",
-    "AWS, 4yr, active",
-    "REST API design, 6yr, active",
-    "gRPC, 2yr, active",
-    "Redis, 3yr, active"
+    "SQL, 7yr, active",
+    ".NET Framework / .NET Core / ASP.NET, 7yr, active",
+    "RESTful API design, 7yr, active",
+    "GitLab CI/CD / GitHub CI/CD, 7yr, active",
+    "Data preparation pipelines, 5yr, active",
+    "ML pipeline development and model integration, 5yr, active",
+    "NumPy / Pandas, 5yr, active",
+    "SQL Server / PostgreSQL, 5yr, active",
+    "Microsoft Azure, 5yr, active",
+    "Docker, 5yr, active",
+    "Linux, 5yr, active",
+    "RAG / LLM integration / Prompt Engineering, 3yr, active",
+    "FastAPI, 2yr, active",
+    "C++, 7yr, dormant",
+    "Feature engineering, 5yr, active",
+    "Analytics services and platforms, 7yr, active"
   ],
   "anti_preferences": [
-    "no .NET or C#",
-    "no pure frontend (React/Vue/Angular-only roles)",
-    "no QA or testing engineer roles",
-    "no Java enterprise stacks",
-    "no on-call-heavy SRE with no development scope"
+    "no pure frontend roles (React / Vue / Angular only — no backend component)",
+    "no QA or test engineer roles",
+    "no pure DevOps or sysadmin roles with no software development scope",
+    "no junior or associate level positions",
+    "no roles requiring active C++ as the primary language"
   ],
   "seniority": "Senior / Staff",
   "preferred_industries": [
-    "fintech",
-    "developer tooling",
-    "infrastructure and platform engineering",
-    "data engineering",
-    "B2B SaaS"
+    "developer tooling and platforms",
+    "AI and ML platforms",
+    "data engineering and analytics",
+    "B2B enterprise software",
+    "semiconductor or hardware-adjacent software",
+    "fintech"
   ],
-  "location_preference": "remote or Miami, FL"
+  "location_preference": "remote, or on-site / hybrid in South Florida (Miami, Fort Lauderdale, Broward County)"
 }

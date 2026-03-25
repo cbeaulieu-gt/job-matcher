@@ -4,7 +4,7 @@
     {
       "label": "Start Web UI",
       "type": "shell",
-      "command": "python app.py",
+      "command": ".venv/Scripts/python app.py",
       "options": {
         "cwd": "${workspaceFolder}"
       },
@@ -19,7 +19,7 @@
     {
       "label": "Run Ingestion",
       "type": "shell",
-      "command": "python ingest.py",
+      "command": ".venv/Scripts/python ingest.py",
       "options": {
         "cwd": "${workspaceFolder}"
       },

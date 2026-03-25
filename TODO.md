@@ -35,6 +35,16 @@
 - [x] Write `README.md` — setup steps, config instructions, how to run ingest + server, cron example
 - [ ] Manual end-to-end test with real Adzuna API credentials
 
+## Feature: Job Type Tagging & Filter
+
+- [x] Add `job_type` TEXT column to `listings` table via migration
+- [x] Store `search.what` value as `job_type` on each listing at ingestion
+- [x] Add `job_type` filter param to `db.get_feed()`
+- [x] Add `db.get_job_types()` helper returning distinct job_type values present in DB
+- [x] Add job type dropdown to feed filter bar (populated from DB)
+- [x] Wire `job_type` query param through `app.py` feed route
+- [x] Show job type badge on each card summary row
+
 ## Feature: Applied Tracking
 
 - [x] Add `applied` column to `listings` table via `init_db()` migration

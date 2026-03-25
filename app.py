@@ -100,13 +100,16 @@ def feed():
     min_score = float(min_score_raw) if min_score_raw else None
     remote_only = request.args.get("remote_only") == "1"
     search = request.args.get("search", "").strip() or None
+    job_type = request.args.get("job_type", "").strip() or None
 
     listings = db.get_feed(
         threshold=threshold,
         min_score=min_score,
         remote_only=remote_only,
         search=search,
+        job_type=job_type,
     )
+    job_types = db.get_job_types()
     return render_template(
         "index.html",
         listings=listings,
@@ -115,6 +118,8 @@ def feed():
         min_score=min_score,
         remote_only=remote_only,
         search=search,
+        job_type=job_type,
+        job_types=job_types,
     )
 
 

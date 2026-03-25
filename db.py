@@ -80,6 +80,7 @@ def init_db(db_path: str = "jobs.db") -> None:
             ("tokens_input", "INTEGER"),
             ("tokens_output", "INTEGER"),
             ("applied", "INTEGER DEFAULT 0"),
+            ("job_type", "TEXT"),
         ):
             try:
                 conn.execute(
@@ -127,10 +128,11 @@ def insert_listing(listing: dict, db_path: str = "jobs.db") -> None:
         elif val is None:
             row[col] = json.dumps([])
 
-    # Ensure token and status columns are present even if absent from the source dict.
+    # Ensure token, status, and classification columns are present even if absent from the source dict.
     row.setdefault("tokens_input", None)
     row.setdefault("tokens_output", None)
     row.setdefault("applied", 0)
+    row.setdefault("job_type", None)
 
     conn = get_connection(db_path)
     try:
@@ -145,7 +147,8 @@ def insert_listing(listing: dict, db_path: str = "jobs.db") -> None:
                 score, matched_skills, missing_skills, concerns, verdict,
                 bookmarked, dismissed, seen,
                 tokens_input, tokens_output,
-                applied
+                applied,
+                job_type
             ) VALUES (
                 :adzuna_id, :title, :company, :location,
                 :salary_min, :salary_max, :salary_is_predicted,
@@ -155,7 +158,8 @@ def insert_listing(listing: dict, db_path: str = "jobs.db") -> None:
                 :score, :matched_skills, :missing_skills, :concerns, :verdict,
                 :bookmarked, :dismissed, :seen,
                 :tokens_input, :tokens_output,
-                :applied
+                :applied,
+                :job_type
             )
             """,
             row,
@@ -231,6 +235,7 @@ def get_feed(
     min_score: float | None = None,
     remote_only: bool = False,
     search: str | None = None,
+    job_type: str | None = None,
     db_path: str = "jobs.db",
 ) -> list[dict]:
     """Return listings with score >= effective threshold and dismissed = 0, ordered by score DESC.
@@ -242,6 +247,7 @@ def get_feed(
         min_score:   If provided, overrides threshold as the score floor.
         remote_only: If True, restricts to listings whose location contains "remote".
         search:      If provided, filters by title or company containing the search string.
+        job_type:    If provided, restricts to listings whose job_type matches (case-insensitive).
         db_path:     Path to the SQLite database file.
     """
     effective = min_score if min_score is not None else threshold
@@ -257,6 +263,10 @@ def get_feed(
         term = f"%{search.lower()}%"
         params.extend([term, term])
 
+    if job_type:
+        conditions.append("LOWER(job_type) = LOWER(?)")
+        params.append(job_type)
+
     where_clause = " AND ".join(conditions)
 
     conn = get_connection(db_path)
@@ -266,6 +276,28 @@ def get_feed(
             params,
         ).fetchall()
         return [_deserialise_row(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_job_types(db_path: str = "jobs.db") -> list[str]:
+    """Return a sorted list of distinct non-null job_type values present in the listings table.
+
+    Used to populate the filter dropdown dynamically so it only shows types
+    that actually exist in the database.
+
+    Args:
+        db_path: Path to the SQLite database file.
+
+    Returns:
+        Sorted list of unique job_type strings, excluding NULL values.
+    """
+    conn = get_connection(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT DISTINCT job_type FROM listings WHERE job_type IS NOT NULL ORDER BY job_type ASC"
+        ).fetchall()
+        return [row["job_type"] for row in rows]
     finally:
         conn.close()
 

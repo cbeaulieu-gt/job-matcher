@@ -60,6 +60,17 @@
         <option value="9" {% if min_score == 9.0 %}selected{% endif %}>9+</option>
       </select>
 
+      {% if job_types %}
+      <select name="job_type" class="filter-select">
+        <option value="">Role: all</option>
+        {% for jt in job_types %}
+          <option value="{{ jt }}" {% if job_type == jt %}selected{% endif %}>
+            {{ jt | title }}
+          </option>
+        {% endfor %}
+      </select>
+      {% endif %}
+
       <label class="filter-toggle">
         <input type="checkbox" name="remote_only" value="1"
                {% if remote_only %}checked{% endif %}
@@ -68,7 +79,7 @@
       </label>
 
       <button type="submit" class="btn filter-btn">Filter</button>
-      {% if search or min_score or remote_only %}
+      {% if search or min_score or remote_only or job_type %}
         <a href="/" class="filter-clear">Clear</a>
       {% endif %}
     </form>

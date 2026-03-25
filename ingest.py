@@ -555,6 +555,7 @@ def run(config_path: str = "config.json", profile_path: str = "profile.json") ->
     """
     config = load_config(config_path)
     profile = load_profile(profile_path)
+    job_type = config["search"].get("what", "").strip()
 
     db.init_db()
 
@@ -646,6 +647,7 @@ def run(config_path: str = "config.json", profile_path: str = "profile.json") ->
             listing["fetched_at"] = datetime.now(timezone.utc).isoformat()
             listing["bookmarked"] = 0
             listing["dismissed"] = 0
+            listing["job_type"] = job_type or None
 
             try:
                 db.insert_listing(listing)

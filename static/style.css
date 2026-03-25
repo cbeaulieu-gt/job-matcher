@@ -940,6 +940,21 @@ body {
   border-color: var(--border-mid);
 }
 
+/* Job type identity badge — neutral/muted, sits after remote/onsite */
+.badge-jobtype {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 20px;
+  border: 1px solid var(--border-subtle);
+  white-space: nowrap;
+  background: var(--bg-raised);
+  color: var(--text-muted);
+}
+
 /* ------------------------------------------------------------
    Stats page — disclaimer
    ------------------------------------------------------------ */

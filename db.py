@@ -73,6 +73,10 @@ def init_db(db_path: str = "jobs.db") -> None:
             )
         """)
 
+        # NOTE: Poor-man's migration — ALTER TABLE raises OperationalError if the column
+        # already exists, which we suppress. This means a genuine DB error (e.g. disk full)
+        # during ALTER would also be silently swallowed. Acceptable for a single-user local
+        # tool; a proper migration table would be needed at larger scale.
         # Migrate existing databases — SQLite does not support
         # ALTER TABLE ... ADD COLUMN IF NOT EXISTS, so we catch the
         # OperationalError that is raised when the column already exists.

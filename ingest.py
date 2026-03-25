@@ -377,6 +377,9 @@ def scrape_description(url: str, fallback: str = "") -> tuple[str, bool]:
         ``(description_text, scraped_ok)`` where ``scraped_ok`` is True on
         success and False when the fallback was used.
     """
+    # NOTE: No inter-request delay or robots.txt check. This is acceptable for
+    # personal use at low volume (~50-250 listings/run), but would need rate
+    # limiting and robots.txt compliance for any higher-volume or production use.
     try:
         response = requests.get(
             url,
@@ -444,7 +447,7 @@ def score_listing(
     description: str,
     profile: dict,
     model: str,
-    api_key: str,
+    client: anthropic.Anthropic,
 ) -> dict | None:
     """Score a job description against a candidate profile using Claude.
 
@@ -456,7 +459,7 @@ def score_listing(
         description: Full (or snippet) job description text.
         profile: Candidate profile dict loaded from profile.json.
         model: Anthropic model ID (e.g. ``claude-haiku-4-5-20251001``).
-        api_key: Anthropic API key.
+        client: An already-instantiated ``anthropic.Anthropic`` client.
 
     Returns:
         Dict with keys ``score``, ``matched_skills``, ``missing_skills``,
@@ -466,8 +469,6 @@ def score_listing(
         profile_json=json.dumps(profile, indent=2),
         description=description,
     )
-
-    client = anthropic.Anthropic(api_key=api_key)
 
     for attempt in range(2):
         if attempt > 0:
@@ -567,6 +568,7 @@ def run(config_path: str = "config.json", profile_path: str = "profile.json") ->
 
     anthropic_api_key: str = config["anthropic_api_key"]
     scoring_model: str = config["scoring"]["model"]
+    anthropic_client = anthropic.Anthropic(api_key=anthropic_api_key)
 
     # Counters.
     fetched = 0
@@ -615,7 +617,7 @@ def run(config_path: str = "config.json", profile_path: str = "profile.json") ->
                 description=description,
                 profile=profile,
                 model=scoring_model,
-                api_key=anthropic_api_key,
+                client=anthropic_client,
             )
 
             if score_result is None:
@@ -656,8 +658,8 @@ def run(config_path: str = "config.json", profile_path: str = "profile.json") ->
 
     total_tokens = total_tokens_input + total_tokens_output
     run_cost = (
-        total_tokens_input / 1_000_000 * 0.80
-        + total_tokens_output / 1_000_000 * 4.00
+        total_tokens_input / 1_000_000 * db._HAIKU_INPUT_COST_PER_MTOK
+        + total_tokens_output / 1_000_000 * db._HAIKU_OUTPUT_COST_PER_MTOK
     )
     print(
         f"Run complete: {fetched} fetched | {prefiltered} pre-filtered | "
@@ -687,6 +689,7 @@ def rescore(config_path: str = "config.json", profile_path: str = "profile.json"
 
     api_key: str = config["anthropic_api_key"]
     model: str = config["scoring"]["model"]
+    anthropic_client = anthropic.Anthropic(api_key=api_key)
 
     listings = db.get_all_scored()
     if not listings:
@@ -701,7 +704,7 @@ def rescore(config_path: str = "config.json", profile_path: str = "profile.json"
 
     for listing in listings:
         title = listing.get("title", "(no title)")
-        result = score_listing(listing["description"], profile, model, api_key)
+        result = score_listing(listing["description"], profile, model, anthropic_client)
 
         if result is not None:
             db.update_score(listing["adzuna_id"], result)
@@ -715,8 +718,8 @@ def rescore(config_path: str = "config.json", profile_path: str = "profile.json"
 
     total_tokens = tokens_input + tokens_output
     cost = (
-        tokens_input / 1_000_000 * 0.80
-        + tokens_output / 1_000_000 * 4.00
+        tokens_input / 1_000_000 * db._HAIKU_INPUT_COST_PER_MTOK
+        + tokens_output / 1_000_000 * db._HAIKU_OUTPUT_COST_PER_MTOK
     )
     print(
         f"Rescore complete: {total} listings | {rescored} rescored ({failed} failed) | "

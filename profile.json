@@ -24,7 +24,8 @@
     "no QA or test engineer roles",
     "no pure DevOps or sysadmin roles with no software development scope",
     "no junior or associate level positions",
-    "no roles requiring active C++ as the primary language"
+    "no roles requiring active C++ as the primary language",
+    "no architect or technical lead positions with no individual contributor scope"
   ],
   "seniority": "Senior / Staff",
   "preferred_industries": [
@@ -35,5 +36,10 @@
     "semiconductor or hardware-adjacent software",
     "fintech"
   ],
-  "location_preference": "remote, or on-site / hybrid in South Florida (Miami, Fort Lauderdale, Broward County)"
+  "location_preference": "remote, or on-site / hybrid in South Florida (Miami, Fort Lauderdale, Broward County)",
+  "scoring_notes": [
+    "Senior-level roles are strongly preferred. If two roles are otherwise equal, a Senior role should score 1-2 points higher than a Mid-level role.",
+    "Mid-level roles are acceptable and should not be excluded, but must be noted in concerns with a message like 'Mid-level role — may be a step down in seniority'.",
+    "A Mid-level role with excellent technical fit (8+ skill matches, strong industry alignment) can still score 7-8. A Senior role with weaker fit should not automatically outscore it."
+  ]
 }

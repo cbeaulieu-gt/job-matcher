@@ -97,7 +97,10 @@ def feed():
     threshold = CONFIG["scoring"]["threshold"]
 
     min_score_raw = request.args.get("min_score")
-    min_score = float(min_score_raw) if min_score_raw else None
+    try:
+        min_score = float(min_score_raw) if min_score_raw else None
+    except ValueError:
+        min_score = None
     remote_only = request.args.get("remote_only") == "1"
     search = request.args.get("search", "").strip() or None
     job_type = request.args.get("job_type", "").strip() or None
@@ -210,4 +213,5 @@ def dismiss(listing_id: int):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    debug = os.environ.get("FLASK_DEBUG", "0") == "1"
+    app.run(debug=debug, port=5000)

@@ -35,6 +35,29 @@
 - [x] Write `README.md` — setup steps, config instructions, how to run ingest + server, cron example
 - [ ] Manual end-to-end test with real Adzuna API credentials
 
+## Portfolio Hardening
+
+### Critical fixes
+- [x] `app.py`: wrap `float(min_score_raw)` in try/except — currently crashes 500 on bad input
+- [x] `ingest.py`: remove duplicate pricing constants — import from `db.py` instead
+- [x] `stats.html`: add missing "applied" nav tab (regression vs index.html)
+- [x] `app.py`: make `debug=True` conditional on an env var, not hardcoded
+
+### Code quality
+- [x] `ingest.py`: move `anthropic.Anthropic()` client construction out of per-call loop — instantiate once in `run()` and `rescore()`, pass into `score_listing()`
+- [x] `db.py`: add comment on ALTER TABLE migration approach acknowledging the limitation
+- [x] `ingest.py`: add brief comment on scrape rate-limiting absence and why it's acceptable
+
+### Tests
+- [x] Add `tests/test_prefilter.py` — unit tests for `prefilter()` include/exclude/salary/contract logic
+- [x] Add `tests/test_db.py` — tests for `init_db`, `insert_listing`, `get_feed` filters, `set_bookmarked`, `set_dismissed` using an in-memory or temp DB
+- [x] Add `tests/test_ingest.py` — tests for `scrape_description` fallback logic, `score_listing` JSON fence stripping, `salary_fmt` filter
+- [x] Add `pytest` to `requirements.txt`
+
+### Documentation
+- [x] `README.md`: add `--rescore` usage to the Running section
+- [x] `README.md`: update summary line example to include token/cost fields
+
 ## Feature: Rescore Existing Listings
 
 - [x] Add `get_all_scored(db_path)` to `db.py` — fetch all listings with `seen = 1`

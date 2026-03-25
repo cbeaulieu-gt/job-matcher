@@ -79,6 +79,16 @@ The pipeline runs in five stages:
 4. **Scrape** — follows each listing's redirect URL to retrieve the full job description; falls back to the Adzuna snippet if scraping fails
 5. **Score** — sends each description plus your profile to Claude Haiku and stores the structured result
 
+### Re-scoring existing listings
+
+To re-evaluate all previously scored listings against an updated `profile.json` without fetching new listings:
+
+```bash
+python ingest.py --rescore
+```
+
+Scores, matched/missing skills, concerns, and verdicts are overwritten in place. Dismissed, bookmarked, and applied status is preserved.
+
 Log output is prefixed with the action taken for each listing:
 
 ```
@@ -91,7 +101,7 @@ WARNING ingest: SCRAPE FALLBACK  Software Architect
 At the end of each run a summary line is printed:
 
 ```
-Run complete: 120 fetched | 74 pre-filtered | 12 dupes skipped | 34 scored (0 failed) | 2 scrape fallbacks
+Run complete: 120 fetched | 74 pre-filtered | 12 dupes skipped | 34 scored (0 failed) | 2 scrape fallbacks | ~42,000 tok | ~$0.0034
 ```
 
 The database file `jobs.db` is created automatically on the first run.

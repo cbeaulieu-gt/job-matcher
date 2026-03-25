@@ -35,6 +35,12 @@
 - [x] Write `README.md` — setup steps, config instructions, how to run ingest + server, cron example
 - [ ] Manual end-to-end test with real Adzuna API credentials
 
+## Feature: max_days_old Filter
+
+- [x] Add `search.max_days_old` to `config.example.json`
+- [x] Wire `max_days_old` param through `AdzunaClient.fetch_page()`
+- [x] Update `config.json` with `max_days_old: 14`
+
 ## Feature: Search Distance Parameter
 
 - [x] Add `search.distance` (km) to `config.example.json`

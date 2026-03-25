@@ -165,6 +165,10 @@ class AdzunaClient:
         if distance:
             params["distance"] = distance
 
+        max_days_old = self._search.get("max_days_old", 0)
+        if max_days_old:
+            params["max_days_old"] = max_days_old
+
         backoff_delays = [2, 4, 8]
         response: requests.Response | None = None
 

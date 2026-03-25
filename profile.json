@@ -1,0 +1,30 @@
+{
+  "primary_skills": [
+    "Python, 7yr, active",
+    "Go, 3yr, active",
+    "SQL, 8yr, active",
+    "PostgreSQL, 5yr, active",
+    "Docker, 4yr, active",
+    "Kubernetes, 2yr, active",
+    "AWS, 4yr, active",
+    "REST API design, 6yr, active",
+    "gRPC, 2yr, active",
+    "Redis, 3yr, active"
+  ],
+  "anti_preferences": [
+    "no .NET or C#",
+    "no pure frontend (React/Vue/Angular-only roles)",
+    "no QA or testing engineer roles",
+    "no Java enterprise stacks",
+    "no on-call-heavy SRE with no development scope"
+  ],
+  "seniority": "Senior / Staff",
+  "preferred_industries": [
+    "fintech",
+    "developer tooling",
+    "infrastructure and platform engineering",
+    "data engineering",
+    "B2B SaaS"
+  ],
+  "location_preference": "remote or Miami, FL"
+}

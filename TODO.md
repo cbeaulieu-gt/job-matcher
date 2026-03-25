@@ -2,11 +2,11 @@
 
 ## Phase 1: Foundation
 
-- [ ] Create `requirements.txt` with `flask`, `requests`, `beautifulsoup4`, `anthropic`
-- [ ] Create `config.example.json` with all keys, placeholder values, and comments
-- [ ] Create `profile.json` with example skills profile structure
-- [ ] Create `.gitignore` (exclude `config.json`, `jobs.db`, `__pycache__`, `.env`)
-- [ ] Implement `db.py` — schema init, all query helpers (`init_db`, `listing_exists`, `insert_listing`, `update_score`, `get_feed`, `get_bookmarks`, `set_bookmarked`, `set_dismissed`)
+- [x] Create `requirements.txt` with `flask`, `requests`, `beautifulsoup4`, `anthropic`
+- [x] Create `config.example.json` with all keys, placeholder values, and comments
+- [x] Create `profile.json` with example skills profile structure
+- [x] Create `.gitignore` (exclude `config.json`, `jobs.db`, `__pycache__`, `.env`)
+- [x] Implement `db.py` — schema init, all query helpers (`init_db`, `listing_exists`, `insert_listing`, `update_score`, `get_feed`, `get_bookmarks`, `set_bookmarked`, `set_dismissed`)
 
 ## Phase 2: Ingestion Pipeline
 

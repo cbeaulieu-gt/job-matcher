@@ -161,6 +161,10 @@ class AdzunaClient:
         if salary_min:
             params["salary_min"] = salary_min
 
+        distance = self._search.get("distance", 0)
+        if distance:
+            params["distance"] = distance
+
         backoff_delays = [2, 4, 8]
         response: requests.Response | None = None
 

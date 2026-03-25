@@ -4,10 +4,11 @@
   "adzuna_app_key": "",
   "anthropic_api_key": "",
   "search": {
-    "_comment": "country must be a valid Adzuna country code (us, gb, au, etc.). salary_min is in the local currency unit (USD for us). results_per_page max is 50 for Adzuna. max_pages caps how many pages are fetched per run.",
+    "_comment": "country must be a valid Adzuna country code (us, gb, au, etc.). salary_min is in the local currency unit (USD for us). results_per_page max is 50 for Adzuna. max_pages caps how many pages are fetched per run. distance is in km; omit or set to 0 for Adzuna default radius.",
     "country": "us",
     "what": "software engineer",
-    "where": "miami",
+    "where": "coconut creek",
+    "distance": 32,
     "salary_min": 120000,
     "results_per_page": 50,
     "max_pages": 5

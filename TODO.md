@@ -35,6 +35,12 @@
 - [x] Write `README.md` — setup steps, config instructions, how to run ingest + server, cron example
 - [ ] Manual end-to-end test with real Adzuna API credentials
 
+## Feature: Search Distance Parameter
+
+- [x] Add `search.distance` (km) to `config.example.json`
+- [x] Wire `distance` param through `AdzunaClient.fetch_page()` when present
+- [x] Update `config.json` to Coconut Creek, 32km (~20 miles)
+
 ## Feature: Pre-filter Rejection Reasons
 
 - [x] Change `prefilter()` to return the rejection reason string instead of bare `False`

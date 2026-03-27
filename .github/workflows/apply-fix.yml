@@ -1,0 +1,51 @@
+name: Apply Claude Fix
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to apply fix to'
+        required: true
+      fix_diff:
+        description: 'Unified diff to apply'
+        required: true
+      fix_description:
+        description: 'One-line description of the fix'
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  apply-fix:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT }}
+          ref: refs/pull/${{ inputs.pr_number }}/head
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "Claude Auto-Fix"
+          git config user.email "claude-autofix@users.noreply.github.com"
+
+      - name: Apply fix
+        run: |
+          echo "${{ inputs.fix_diff }}" | git apply --index -
+          git commit -m "Claude auto-fix: ${{ inputs.fix_description }}
+
+          Applied automatically via apply-fix.yml workflow.
+          PR: #${{ inputs.pr_number }}"
+
+      - name: Push fix
+        run: |
+          # Get the PR head branch name
+          BRANCH=$(gh api repos/${{ github.repository }}/pulls/${{ inputs.pr_number }} --jq '.head.ref')
+          git push origin HEAD:$BRANCH
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}

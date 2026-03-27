@@ -317,3 +317,12 @@ The self-hosted runner must be registered on the server before automated deploym
 ### Secrets and config
 
 `config.json`, `keys.json`, and `profile.json` are gitignored and are never touched by the workflow. API keys live only in `keys.json` on the server — the deployment workflow does not use or require any GitHub Actions secrets for application credentials.
+
+### Required secrets
+
+Add these in **Settings → Secrets and variables → Actions** for the CI failure diagnosis workflows to work:
+
+| Secret | Purpose |
+|---|---|
+| `ANTHROPIC_API_KEY` | Anthropic API key used by Claude to diagnose CI failures |
+| `GH_PAT` | GitHub Personal Access Token with `repo` scope — needed to post PR comments and push auto-fix commits |

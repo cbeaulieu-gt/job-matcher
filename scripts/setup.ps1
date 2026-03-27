@@ -328,3 +328,32 @@ Write-Host "  4. Force ingest now:    $pythonExe ingest.py --hours 25"
 Write-Host ''
 Write-Host 'To remove everything cleanly, run: .\scripts\teardown.ps1' -ForegroundColor Yellow
 Write-Host ''
+
+# ===========================================================================
+# GITHUB ACTIONS SELF-HOSTED RUNNER SETUP (one-time, manual)
+# ===========================================================================
+# Complete these steps on this server after running this setup script,
+# to enable automatic deployment via GitHub Actions push-to-main.
+#
+# 1. Go to: https://github.com/cbeaulieu-gt/job-matcher-ui/settings/actions/runners
+#    Click "New self-hosted runner" -> select Windows -> follow the download
+#    and configure instructions.
+#
+# 2. When prompted for runner labels during configuration, add: self-hosted
+#    (the default). No additional labels are required.
+#
+# 3. Install the runner as a Windows service so it survives reboots:
+#       .\svc.ps1 install
+#       .\svc.ps1 start
+#
+# 4. Verify the runner service account (usually "SYSTEM" or a local admin)
+#    has permission to run `nssm restart JobMatcher`. Test with:
+#       nssm restart JobMatcher
+#    If it fails due to permissions, configure the runner service to run as
+#    a local administrator account via services.msc.
+#
+# 5. Confirm outbound HTTPS to github.com is not blocked by firewall/proxy.
+#
+# Once registered, pushing to main will automatically:
+#   git pull -> pip install -r requirements.txt -> nssm restart JobMatcher
+# ===========================================================================

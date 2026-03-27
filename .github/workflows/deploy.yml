@@ -1,0 +1,44 @@
+name: Deploy
+
+# Trigger: runs only after the CI workflow completes successfully on main.
+# Using workflow_run instead of a direct push trigger ensures that tests and
+# linting must pass before any deployment step executes.
+on:
+  workflow_run:
+    workflows: ["CI"]
+    branches: [main]
+    types: [completed]
+
+# Secrets strategy: API keys are stored in config.json on the server and are
+# never managed by this workflow. The self-hosted runner has direct filesystem
+# access to the deploy directory, so no GitHub Actions secrets are needed for
+# application credentials. Keep config.json and profile.json in DEPLOY_DIR —
+# they are gitignored and will not be overwritten by git pull.
+
+jobs:
+  deploy:
+    name: Deploy to homelab server
+    runs-on: self-hosted
+
+    # Only proceed when the triggering CI run actually passed.
+    if: github.event.workflow_run.conclusion == 'success'
+
+    env:
+      DEPLOY_DIR: 'I:\Web Development\job_matcher'
+      SERVICE_NAME: JobMatcher
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Pull latest code
+        run: git -C "$env:DEPLOY_DIR" pull origin main
+
+      - name: Install dependencies
+        run: >
+          & (Join-Path $env:DEPLOY_DIR 'venv\Scripts\pip.exe') install -r
+          (Join-Path $env:DEPLOY_DIR 'requirements.txt')
+
+      - name: Restart service
+        run: nssm restart $env:SERVICE_NAME

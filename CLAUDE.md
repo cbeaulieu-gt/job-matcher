@@ -65,12 +65,6 @@ Model and threshold are set in `config.json` under `scoring`. Token counts and e
 - `scripts/setup.ps1` — Registers gunicorn as an NSSM Windows service and creates a Task Scheduler job for daily ingest.
 - `scripts/status.ps1` / `scripts/teardown.ps1` — Ops helpers.
 
-**Docker Compose (portable, not used on homelab server — Docker unsupported there):**
-```powershell
-docker compose up -d --build
-```
-Runs `web` (gunicorn) and `scheduler` (daily `ingest.py --hours 25`) services with a bind-mounted data directory.
-
 ## Key design decisions
 
 | Decision | Why |

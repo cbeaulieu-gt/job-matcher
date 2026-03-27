@@ -20,6 +20,6 @@
 - [x] Update `get_usage_stats()` to use dynamic pricing (or store provider/model per listing)
 - [x] Update cost calculation in `ingest.py` `run()` and `rescore()` to use dynamic pricing
 - [x] Add `provider` key to `config.json` `scoring` block (default: `"anthropic"`)
-- [x] Add `OPENAI_API_KEY` and `GOOGLE_API_KEY` to `config.example.json` and `.env.example`
+- [x] Add `OPENAI_API_KEY` and `GOOGLE_API_KEY` to `config.example.json`
 - [x] Update `requirements.txt` with `openai` and `google-generativeai` (or `google-genai`)
 - [x] Write tests for each provider adapter

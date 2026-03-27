@@ -161,68 +161,7 @@ The web server and ingestion script are fully decoupled — `app.py` does not ne
 
 ---
 
-## Docker deployment (homelab / always-on server)
-
-If you're running the app on a server that stays on 24/7, Docker Compose is the recommended way to host both the web UI and the scheduled ingestion job together.
-
-### Prerequisites
-
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows / macOS) or Docker Engine (Linux)
-- `config.json` and `profile.json` present in the project root (copy from the `.example` files and fill in your values — see [Setup](#setup) above)
-- `.env` file with your API keys (copy from `.env.example` and fill in your values)
-
-### API keys — `.env` vs `config.json`
-
-API keys (`ADZUNA_APP_ID`, `ADZUNA_APP_KEY`, `ANTHROPIC_API_KEY`) can be supplied in either place:
-
-- **Recommended for Docker**: put them in `.env` — they are injected as environment variables and override any values in `config.json`. This keeps secrets out of the config file entirely.
-- **Alternative**: leave them in `config.json` as usual. The scheduler container reads `config.json` via a read-only bind mount.
-
-Both methods work; environment variables take precedence if both are set.
-
-### Build and start
-
-```powershell
-docker compose up -d --build
-```
-
-The web UI will be available at `http://localhost:5000` (or `http://<server-ip>:5000` on your network). The `scheduler` service runs `ingest.py --hours 25` once on startup, then repeats every 24 hours automatically.
-
-### View logs
-
-```powershell
-# Follow all service logs
-docker compose logs -f
-
-# Follow scheduler logs only
-docker compose logs scheduler -f
-```
-
-### Run ingest manually
-
-```powershell
-docker compose exec web python ingest.py
-```
-
-### Stop
-
-```powershell
-docker compose down
-```
-
-### Data persistence
-
-`./data/` on the host maps to `/app/data/` inside both containers. The SQLite database is stored at `./data/jobs.db` and survives container rebuilds and image upgrades.
-
-To back up the database, copy the file to a safe location:
-
-```powershell
-Copy-Item .\data\jobs.db .\data\jobs.db.bak
-```
-
----
-
-## Automating ingestion manually (without Docker)
+## Automating ingestion manually
 
 **cron (macOS / Linux)**
 
@@ -273,9 +212,9 @@ Changes to `profile.json` take effect on the next ingestion run. Previously scor
 
 ---
 
-## Native deployment (Windows Server, no Docker)
+## Native deployment (Windows Server)
 
-Use this approach if you want the web UI running as a Windows service and ingestion triggered by Task Scheduler, with no Docker dependency.
+Use this approach if you want the web UI running as a Windows service and ingestion triggered by Task Scheduler.
 
 ### Prerequisites
 
@@ -350,10 +289,6 @@ New-Item -ItemType Directory -Force -Path "C:\path\to\data"
 ```
 
 The SQLite database (`jobs.db`) is created there automatically on the first run.
-
-### Note on Docker artifacts
-
-The `Dockerfile`, `docker-compose.yml`, and `.env.example` remain in the repo for portability. The native deployment uses system environment variables instead of `.env`.
 
 ---
 

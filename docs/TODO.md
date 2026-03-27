@@ -144,34 +144,6 @@
 - [x] Print per-run cost estimate in ingest summary line
 - [x] Add `/stats` route to `app.py` and `stats` nav tab showing cumulative usage and cost
 
-## Docker Deployment
-
-### Phase 1 — Containerize (Web Service)
-- [x] Create `Dockerfile` — python:3.11-slim base, install requirements, add gunicorn, expose port 5000
-- [x] Add `gunicorn` to `requirements.txt`
-- [x] Create `docker-compose.yml` with `web` service running gunicorn, bind mount to host data path
-- [x] Verify app starts and serves correctly inside container
-
-### Phase 2 — Persistent Database
-- [x] `db.py`: read `DB_PATH` from environment variable, fall back to `./jobs.db`
-- [x] `app.py`: pass env-configured `DB_PATH` through to all `db.*` calls
-- [x] `ingest.py`: read `DB_PATH` from environment variable, pass to `db.*` calls
-- [x] `docker-compose.yml`: set `DB_PATH=/app/data/jobs.db`; bind mount host data directory to `/app/data/`
-
-### Phase 3 — Scheduled Ingest
-- [x] `ingest.py`: add `--hours N` CLI flag; overrides `max_days_old` with `ceil(N/24)` days, post-filters by `created_at` timestamp
-- [x] Add `scheduler` service to `docker-compose.yml` — runs daily ingest via shell loop
-- [x] `config.example.json`: add optional `scheduled_hours` key
-
-### Phase 4 — Secrets & Config
-- [x] `ingest.py`: read `ADZUNA_APP_ID`, `ADZUNA_APP_KEY`, `ANTHROPIC_API_KEY` from env vars if present, override config.json values
-- [x] Create `.env.example` documenting all supported environment variables
-- [x] `docker-compose.yml`: add `env_file: .env` support
-
-### Phase 5 — Documentation
-- [x] `README.md`: add Docker deployment section (prerequisites, setup, ops commands, backup)
-- [x] Update `DESIGN.md` to reflect containerized architecture
-
 ## Native Deployment (#9)
 
 ### Web service (gunicorn via NSSM)
@@ -214,4 +186,4 @@
 - [ ] Implement OpenAI adapter (GPT-4o-mini / GPT-4o)
 - [ ] Implement Gemini adapter (gemini-1.5-flash / gemini-1.5-pro)
 - [ ] Instantiate correct client in `run()` / `rescore()` based on config provider value
-- [ ] Add provider-specific API key fields to `config.example.json` and `.env.example`
+- [ ] Add provider-specific API key fields to `config.example.json`

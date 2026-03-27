@@ -14,6 +14,8 @@ import db
 
 app = Flask(__name__)
 
+DB_PATH: str = os.environ.get("DB_PATH", "jobs.db")
+
 
 # ---------------------------------------------------------------------------
 # Config
@@ -44,7 +46,7 @@ def load_config(path: str = "config.json") -> dict:
 
 
 CONFIG = load_config()
-db.init_db()
+db.init_db(db_path=DB_PATH)
 
 
 # ---------------------------------------------------------------------------
@@ -111,8 +113,9 @@ def feed():
         remote_only=remote_only,
         search=search,
         job_type=job_type,
+        db_path=DB_PATH,
     )
-    job_types = db.get_job_types()
+    job_types = db.get_job_types(db_path=DB_PATH)
     return render_template(
         "index.html",
         listings=listings,
@@ -129,7 +132,7 @@ def feed():
 @app.route("/bookmarks")
 def bookmarks():
     """Bookmarked listings only."""
-    listings = db.get_bookmarks()
+    listings = db.get_bookmarks(db_path=DB_PATH)
     return render_template(
         "index.html",
         listings=listings,
@@ -146,15 +149,15 @@ def toggle_bookmark(listing_id: int):
     into the DOM in place of the existing action row, so the star icon
     updates without a full page reload.
     """
-    listing = db.get_listing_by_id(listing_id)
+    listing = db.get_listing_by_id(listing_id, db_path=DB_PATH)
     if listing is None:
         return make_response("", 404)
 
     new_value = 0 if listing["bookmarked"] else 1
-    db.set_bookmarked(listing_id, new_value)
+    db.set_bookmarked(listing_id, new_value, db_path=DB_PATH)
 
     # Re-fetch to get the authoritative updated state.
-    listing = db.get_listing_by_id(listing_id)
+    listing = db.get_listing_by_id(listing_id, db_path=DB_PATH)
     return render_template("_actions.html", listing=listing)
 
 
@@ -166,22 +169,22 @@ def toggle_apply(listing_id: int):
     re-rendered action button group as an HTMX partial. Same read-modify-write
     pattern as toggle_bookmark — only the action row is swapped in the DOM.
     """
-    listing = db.get_listing_by_id(listing_id)
+    listing = db.get_listing_by_id(listing_id, db_path=DB_PATH)
     if listing is None:
         return make_response("", 404)
 
     new_value = 0 if listing["applied"] else 1
-    db.set_applied(listing_id, new_value)
+    db.set_applied(listing_id, new_value, db_path=DB_PATH)
 
     # Re-fetch to get the authoritative updated state.
-    listing = db.get_listing_by_id(listing_id)
+    listing = db.get_listing_by_id(listing_id, db_path=DB_PATH)
     return render_template("_actions.html", listing=listing)
 
 
 @app.route("/applied")
 def applied():
     """Applied listings — all listings marked as applied, most recent first."""
-    listings = db.get_applied()
+    listings = db.get_applied(db_path=DB_PATH)
     return render_template(
         "index.html",
         listings=listings,
@@ -192,7 +195,7 @@ def applied():
 @app.route("/stats")
 def stats():
     """API usage and cost statistics."""
-    data = db.get_usage_stats()
+    data = db.get_usage_stats(db_path=DB_PATH)
     return render_template("stats.html", stats=data, view="stats")
 
 
@@ -204,7 +207,7 @@ def dismiss(listing_id: int):
     on the card element, replacing it with the empty string — this removes
     the card from the DOM without a page reload.
     """
-    db.set_dismissed(listing_id, 1)
+    db.set_dismissed(listing_id, 1, db_path=DB_PATH)
     return make_response("", 200)
 
 

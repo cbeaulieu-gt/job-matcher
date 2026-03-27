@@ -33,6 +33,26 @@ The ingestion pipeline and web server are **fully decoupled**. `ingest.py` is a 
 script that can be run manually or via cron whether or not the Flask server is running.
 They communicate only through the shared SQLite file.
 
+### Deployment Model
+
+The application is designed to run as a pair of Docker Compose services on a single host:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                   docker-compose.yml                    │
+│                                                         │
+│  web service          scheduler service                 │
+│  (gunicorn app:app)   (shell loop → ingest.py --hours 25│
+│                        every 86400 s)                   │
+│         │                      │                        │
+│         └──────────┬───────────┘                        │
+│                    │ shared bind mount                   │
+│           /app/data/jobs.db  (host: ./data/jobs.db)     │
+└─────────────────────────────────────────────────────────┘
+```
+
+`DB_PATH` is configured via environment variable so both services write to the same SQLite file on the shared volume. API keys are injected via environment variables or a `.env` file — not baked into the image.
+
 ---
 
 ## 2. Component Design
@@ -307,6 +327,9 @@ job_aggregator/
 ├── profile.example.json   # Safe template for profile.json
 ├── config.json            # API keys and search config (gitignored — copy from config.example.json)
 ├── config.example.json    # Safe template for config.json
+├── Dockerfile             # Container image definition
+├── docker-compose.yml     # Web + scheduler service definitions
+├── .env.example           # Template for Docker environment variables
 ├── requirements.txt       # Python dependencies (pinned)
 ├── templates/
 │   ├── index.html         # Main page template (feed, bookmarks, applied views)
@@ -336,4 +359,4 @@ See `REQUIREMENTS.MD`. Notably excluded:
 - Multiple job sources beyond Adzuna
 - Resume parsing to generate `profile.json`
 - Email digest or notifications
-- Any cloud deployment path
+- Cloud/hosted deployment (designed for self-hosted homelab use)

@@ -10,21 +10,27 @@ Rows returned from read helpers are plain dicts, not sqlite3.Row objects.
 """
 
 import json
+import os
 import sqlite3
 
+_DEFAULT_DB_PATH: str = os.environ.get("DB_PATH", "jobs.db")
+
 # ---------------------------------------------------------------------------
-# Pricing constants — Haiku pricing per million tokens (update if rates change)
+# Pricing fallback constants — Haiku pricing used when the caller does not
+# supply per-model rates.  Kept here only for backward compatibility with
+# code paths that call get_usage_stats() without pricing arguments.
+# The authoritative pricing table lives in providers/anthropic_provider.py.
 # ---------------------------------------------------------------------------
 
-_HAIKU_INPUT_COST_PER_MTOK = 0.80   # USD per million input tokens
-_HAIKU_OUTPUT_COST_PER_MTOK = 4.00  # USD per million output tokens
+_FALLBACK_INPUT_COST_PER_MTOK  = 0.80   # USD per million input tokens (Haiku)
+_FALLBACK_OUTPUT_COST_PER_MTOK = 4.00   # USD per million output tokens (Haiku)
 
 
 # ---------------------------------------------------------------------------
 # Connection
 # ---------------------------------------------------------------------------
 
-def get_connection(db_path: str = "jobs.db") -> sqlite3.Connection:
+def get_connection(db_path: str = _DEFAULT_DB_PATH) -> sqlite3.Connection:
     """Return an open sqlite3 connection with row_factory set to sqlite3.Row.
 
     The caller is responsible for closing the connection (or using it as a
@@ -39,7 +45,7 @@ def get_connection(db_path: str = "jobs.db") -> sqlite3.Connection:
 # Schema
 # ---------------------------------------------------------------------------
 
-def init_db(db_path: str = "jobs.db") -> None:
+def init_db(db_path: str = _DEFAULT_DB_PATH) -> None:
     """Create the listings table if it does not already exist.
 
     Safe to call on every startup — uses CREATE TABLE IF NOT EXISTS.
@@ -102,7 +108,7 @@ def init_db(db_path: str = "jobs.db") -> None:
 # Write helpers
 # ---------------------------------------------------------------------------
 
-def listing_exists(adzuna_id: str, db_path: str = "jobs.db") -> bool:
+def listing_exists(adzuna_id: str, db_path: str = _DEFAULT_DB_PATH) -> bool:
     """Return True if a row with the given adzuna_id already exists."""
     conn = get_connection(db_path)
     try:
@@ -114,7 +120,7 @@ def listing_exists(adzuna_id: str, db_path: str = "jobs.db") -> bool:
         conn.close()
 
 
-def insert_listing(listing: dict, db_path: str = "jobs.db") -> None:
+def insert_listing(listing: dict, db_path: str = _DEFAULT_DB_PATH) -> None:
     """Insert a new listing row.
 
     `listing` must contain all columns except `id`. The JSON array columns
@@ -173,7 +179,7 @@ def insert_listing(listing: dict, db_path: str = "jobs.db") -> None:
         conn.close()
 
 
-def update_score(adzuna_id: str, score_data: dict, db_path: str = "jobs.db") -> None:
+def update_score(adzuna_id: str, score_data: dict, db_path: str = _DEFAULT_DB_PATH) -> None:
     """Write Haiku scoring results back to an existing row and mark it seen.
 
     `score_data` must contain: score, matched_skills, missing_skills,
@@ -240,7 +246,7 @@ def get_feed(
     remote_only: bool = False,
     search: str | None = None,
     job_type: str | None = None,
-    db_path: str = "jobs.db",
+    db_path: str = _DEFAULT_DB_PATH,
 ) -> list[dict]:
     """Return listings with score >= effective threshold and dismissed = 0, ordered by score DESC.
 
@@ -284,7 +290,7 @@ def get_feed(
         conn.close()
 
 
-def get_job_types(db_path: str = "jobs.db") -> list[str]:
+def get_job_types(db_path: str = _DEFAULT_DB_PATH) -> list[str]:
     """Return a sorted list of distinct non-null job_type values present in the listings table.
 
     Used to populate the filter dropdown dynamically so it only shows types
@@ -306,7 +312,7 @@ def get_job_types(db_path: str = "jobs.db") -> list[str]:
         conn.close()
 
 
-def get_bookmarks(db_path: str = "jobs.db") -> list[dict]:
+def get_bookmarks(db_path: str = _DEFAULT_DB_PATH) -> list[dict]:
     """Return all bookmarked listings ordered by score DESC."""
     conn = get_connection(db_path)
     try:
@@ -322,7 +328,7 @@ def get_bookmarks(db_path: str = "jobs.db") -> list[dict]:
         conn.close()
 
 
-def get_all_scored(db_path: str = "jobs.db") -> list[dict]:
+def get_all_scored(db_path: str = _DEFAULT_DB_PATH) -> list[dict]:
     """Return all listings that have been scored (seen = 1), ordered by fetched_at DESC."""
     conn = get_connection(db_path)
     try:
@@ -334,7 +340,7 @@ def get_all_scored(db_path: str = "jobs.db") -> list[dict]:
         conn.close()
 
 
-def get_listing_by_id(listing_id: int, db_path: str = "jobs.db") -> dict | None:
+def get_listing_by_id(listing_id: int, db_path: str = _DEFAULT_DB_PATH) -> dict | None:
     """Return a single listing by internal id, or None if not found.
 
     JSON array columns are deserialised to Python lists, consistent with the
@@ -352,19 +358,31 @@ def get_listing_by_id(listing_id: int, db_path: str = "jobs.db") -> dict | None:
         conn.close()
 
 
-def get_usage_stats(db_path: str = "jobs.db") -> dict:
+def get_usage_stats(
+    db_path: str = _DEFAULT_DB_PATH,
+    input_cost_per_mtok: float = _FALLBACK_INPUT_COST_PER_MTOK,
+    output_cost_per_mtok: float = _FALLBACK_OUTPUT_COST_PER_MTOK,
+) -> dict:
     """Return aggregated API usage and cost statistics.
 
     Queries the listings table to produce totals and a per-day breakdown.
     All token columns are nullable — NULL values are treated as 0 via
     SQLite's COALESCE so the arithmetic is always well-defined.
 
+    Args:
+        db_path:              Path to the SQLite database file.
+        input_cost_per_mtok:  USD cost per million input tokens.  Defaults to
+                              Haiku pricing for backward compatibility with
+                              callers that do not supply per-model rates.
+        output_cost_per_mtok: USD cost per million output tokens.  Defaults to
+                              Haiku pricing for the same reason.
+
     Returns:
         Dict with keys:
             total_scored        -- count of listings with score IS NOT NULL
             total_tokens_input  -- sum of tokens_input across all rows
             total_tokens_output -- sum of tokens_output across all rows
-            estimated_cost_usd  -- float, calculated from Haiku list pricing
+            estimated_cost_usd  -- float, calculated using supplied pricing
             by_date             -- list of per-day dicts, most recent first;
                                    each dict has: date, scored, tokens_input,
                                    tokens_output, cost_usd
@@ -385,8 +403,8 @@ def get_usage_stats(db_path: str = "jobs.db") -> dict:
         total_tokens_input: int = totals_row["total_tokens_input"]
         total_tokens_output: int = totals_row["total_tokens_output"]
         estimated_cost_usd: float = (
-            total_tokens_input / 1_000_000 * _HAIKU_INPUT_COST_PER_MTOK
-            + total_tokens_output / 1_000_000 * _HAIKU_OUTPUT_COST_PER_MTOK
+            total_tokens_input  / 1_000_000 * input_cost_per_mtok
+            + total_tokens_output / 1_000_000 * output_cost_per_mtok
         )
 
         day_rows = conn.execute(
@@ -413,8 +431,8 @@ def get_usage_stats(db_path: str = "jobs.db") -> dict:
                     "tokens_input": tok_in,
                     "tokens_output": tok_out,
                     "cost_usd": (
-                        tok_in / 1_000_000 * _HAIKU_INPUT_COST_PER_MTOK
-                        + tok_out / 1_000_000 * _HAIKU_OUTPUT_COST_PER_MTOK
+                        tok_in  / 1_000_000 * input_cost_per_mtok
+                        + tok_out / 1_000_000 * output_cost_per_mtok
                     ),
                 }
             )
@@ -434,7 +452,7 @@ def get_usage_stats(db_path: str = "jobs.db") -> dict:
 # Toggle helpers
 # ---------------------------------------------------------------------------
 
-def set_bookmarked(listing_id: int, value: int, db_path: str = "jobs.db") -> None:
+def set_bookmarked(listing_id: int, value: int, db_path: str = _DEFAULT_DB_PATH) -> None:
     """Set bookmarked to 1 (save) or 0 (unsave) for the given internal id."""
     conn = get_connection(db_path)
     try:
@@ -447,7 +465,7 @@ def set_bookmarked(listing_id: int, value: int, db_path: str = "jobs.db") -> Non
         conn.close()
 
 
-def set_dismissed(listing_id: int, value: int, db_path: str = "jobs.db") -> None:
+def set_dismissed(listing_id: int, value: int, db_path: str = _DEFAULT_DB_PATH) -> None:
     """Set dismissed to 1 (hide) or 0 (restore) for the given internal id."""
     conn = get_connection(db_path)
     try:
@@ -460,7 +478,7 @@ def set_dismissed(listing_id: int, value: int, db_path: str = "jobs.db") -> None
         conn.close()
 
 
-def set_applied(listing_id: int, value: int, db_path: str = "jobs.db") -> None:
+def set_applied(listing_id: int, value: int, db_path: str = _DEFAULT_DB_PATH) -> None:
     """Set applied to 1 (mark as applied) or 0 (unmark) for the given internal id."""
     conn = get_connection(db_path)
     try:
@@ -473,7 +491,7 @@ def set_applied(listing_id: int, value: int, db_path: str = "jobs.db") -> None:
         conn.close()
 
 
-def get_applied(db_path: str = "jobs.db") -> list[dict]:
+def get_applied(db_path: str = _DEFAULT_DB_PATH) -> list[dict]:
     """Return all listings where applied = 1, ordered by fetched_at DESC."""
     conn = get_connection(db_path)
     try:

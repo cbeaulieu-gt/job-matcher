@@ -354,3 +354,32 @@ The SQLite database (`jobs.db`) is created there automatically on the first run.
 ### Note on Docker artifacts
 
 The `Dockerfile`, `docker-compose.yml`, and `.env.example` remain in the repo for portability. The native deployment uses system environment variables instead of `.env`.
+
+---
+
+## Automated deployment (self-hosted runner)
+
+Pushing to `main` triggers an automatic deployment on the homelab server via a self-hosted GitHub Actions runner.
+
+### Deployment flow
+
+```
+git push origin main
+        │
+        ▼
+GitHub Actions CI runs (tests + linting)
+        │ passes
+        ▼
+deploy.yml triggers on the self-hosted runner
+        │
+        ▼
+git pull → pip install → nssm restart JobMatcher
+```
+
+### One-time runner setup
+
+The self-hosted runner must be registered on the server before automated deployments will work. After running `scripts/setup.ps1`, follow the GitHub Actions runner setup steps documented at the bottom of that script. The steps cover downloading the runner, configuring it with the `self-hosted` label, and installing it as a Windows service so it persists across reboots.
+
+### Secrets and config
+
+`config.json` and `profile.json` are gitignored and are never touched by the workflow. API keys live only in `config.json` on the server — the deployment workflow does not use or require any GitHub Actions secrets for application credentials.

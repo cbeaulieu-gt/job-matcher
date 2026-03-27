@@ -1,0 +1,165 @@
+name: CI Failure Diagnosis
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'failure'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get PR number
+        id: pr
+        run: |
+          PR=$(gh api repos/${{ github.repository }}/pulls \
+            --jq ".[] | select(.head.sha == \"${{ github.event.workflow_run.head_sha }}\") | .number" \
+            | head -1)
+          echo "number=$PR" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+
+      - name: Skip if no PR found
+        if: steps.pr.outputs.number == ''
+        run: |
+          echo "No PR found for commit ${{ github.event.workflow_run.head_sha }}, skipping."
+          exit 0
+
+      - name: Fetch failed job logs
+        id: logs
+        run: |
+          LOGS=$(gh api repos/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}/jobs \
+            --jq '[.jobs[] | select(.conclusion == "failure") | {name: .name, steps: [.steps[] | select(.conclusion == "failure") | .name]}]')
+          LOG_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}"
+
+          # Download the actual log text (first 8000 chars to stay within prompt limits)
+          RAW=$(gh api repos/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}/logs 2>/dev/null | head -c 8000 || echo "Log download failed")
+
+          echo "log_url=$LOG_URL" >> $GITHUB_OUTPUT
+          # Write to file to avoid GITHUB_OUTPUT size limits
+          echo "$RAW" > /tmp/ci_logs.txt
+          echo "$LOGS" > /tmp/failed_jobs.json
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+
+      - name: Fetch PR diff
+        run: |
+          gh api repos/${{ github.repository }}/pulls/${{ steps.pr.outputs.number }}/files \
+            --jq '[.[] | {filename: .filename, patch: .patch}]' \
+            | head -c 6000 > /tmp/pr_diff.json
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+
+      - name: Call Claude for diagnosis
+        id: claude
+        run: |
+          LOGS=$(cat /tmp/ci_logs.txt | head -c 4000)
+          DIFF=$(cat /tmp/pr_diff.json)
+          CLAUDE_MD=$(cat CLAUDE.md 2>/dev/null | head -c 2000 || echo "No CLAUDE.md found")
+
+          PROMPT="You are a CI debugging assistant. A GitHub Actions CI run has failed on a pull request. Analyse the failure and suggest a minimal fix.
+
+PROJECT CONTEXT (CLAUDE.md):
+$CLAUDE_MD
+
+FAILED CI LOGS:
+$LOGS
+
+PR DIFF (changed files):
+$DIFF
+
+Respond with a JSON object with exactly these keys:
+- \"summary\": one sentence describing what failed
+- \"root_cause\": 2-3 sentences explaining why it failed
+- \"fix_description\": one sentence describing the fix
+- \"fix_diff\": a unified diff string showing the minimal code change needed (empty string if no code change needed)
+- \"confidence\": \"high\", \"medium\", or \"low\"
+
+Respond with raw JSON only, no markdown fences."
+
+          RESPONSE=$(curl -s https://api.anthropic.com/v1/messages \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            -d "{
+              \"model\": \"claude-haiku-4-5-20251001\",
+              \"max_tokens\": 1024,
+              \"messages\": [{\"role\": \"user\", \"content\": $(echo "$PROMPT" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')}]
+            }")
+
+          echo "$RESPONSE" > /tmp/claude_response.json
+
+          SUMMARY=$(echo "$RESPONSE" | python3 -c "
+import json, sys
+r = json.load(sys.stdin)
+text = r['content'][0]['text']
+data = json.loads(text)
+print(data.get('summary', 'CI failure detected'))
+" 2>/dev/null || echo "CI failure detected")
+
+          echo "summary=$SUMMARY" >> $GITHUB_OUTPUT
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      - name: Post diagnosis comment
+        run: |
+          python3 << 'PYEOF'
+          import json, os, subprocess
+
+          with open('/tmp/claude_response.json') as f:
+              response = json.load(f)
+
+          text = response['content'][0]['text']
+          data = json.loads(text)
+
+          summary = data.get('summary', 'CI failure detected')
+          root_cause = data.get('root_cause', 'Unable to determine root cause.')
+          fix_description = data.get('fix_description', '')
+          fix_diff = data.get('fix_diff', '')
+          confidence = data.get('confidence', 'low')
+          log_url = os.environ['LOG_URL']
+          pr_number = os.environ['PR_NUMBER']
+          repo = os.environ['REPO']
+
+          fix_section = ''
+          if fix_diff:
+              fix_section = f"""
+**Suggested fix:** {fix_description}
+```diff
+{fix_diff}
+```
+"""
+          else:
+              fix_section = f"\n**Suggested fix:** {fix_description}\n" if fix_description else ''
+
+          body = f"""## Claude CI Diagnosis
+
+**Summary:** {summary}
+
+**Root cause:** {root_cause}
+{fix_section}
+**Confidence:** {confidence} | [View full logs]({log_url})
+
+---
+_This diagnosis was generated automatically by Claude. Review before applying any suggested fix._
+
+_To apply the suggested fix automatically, trigger the [apply-fix workflow](../../actions/workflows/apply-fix.yml) with this PR number and the diff above._"""
+
+          cmd = ['gh', 'api', f'repos/{repo}/issues/{pr_number}/comments',
+                 '-f', f'body={body}']
+          subprocess.run(cmd, check=True, env={**os.environ})
+          PYEOF
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          LOG_URL: ${{ steps.logs.outputs.log_url }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          REPO: ${{ github.repository }}

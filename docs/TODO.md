@@ -188,6 +188,13 @@
 - [x] Instantiate correct client in `run()` / `rescore()` based on config provider value
 - [x] Add provider-specific API key fields to `config.example.json`
 
+## Feature: Claude CI Auto-Diagnosis (#25)
+
+- [ ] Add `ANTHROPIC_API_KEY` and `GH_PAT` to GitHub Actions secrets (manual step)
+- [x] Create `.github/workflows/ci-failure.yml` — triggers on CI workflow_run failure, fetches logs, calls Claude, posts PR comment
+- [x] Create `.github/workflows/apply-fix.yml` — manual workflow_dispatch trigger to apply suggested fix to PR branch
+- [x] Document secrets and new workflows in `README.md`
+
 ## Milestone: Dynamic Provider Key Management (#28–#36)
 
 - [x] **#28** — Create `keys.example.json`; strip API key fields from `config.example.json`; add `keys.json` to `.gitignore`

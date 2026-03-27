@@ -61,13 +61,12 @@ Copy-Item profile.example.json profile.json
 
 **5. Fill in `config.json`**
 
-Open `config.json` and set the following. All three top-level API keys are required — the script will exit immediately if any are missing or empty.
+Open `config.json` and set the following. Both Adzuna keys are required — the script will exit immediately if either is missing or empty. LLM provider keys (Anthropic etc.) are configured separately via `keys.json` and the `/settings` UI.
 
 | Key | Required | Notes |
 |---|---|---|
 | `adzuna_app_id` | Yes | From your Adzuna developer dashboard |
 | `adzuna_app_key` | Yes | From your Adzuna developer dashboard |
-| `anthropic_api_key` | Yes | `sk-ant-...` key from Anthropic console |
 | `search.country` | Yes | Adzuna country code: `us`, `gb`, `au`, etc. |
 | `search.what` | Yes | Keyword query sent to Adzuna, e.g. `"software engineer"` |
 | `search.where` | No | Location filter, e.g. `"miami"`. Omit or leave empty for nationwide. |
@@ -224,16 +223,17 @@ Use this approach if you want the web UI running as a Windows service and ingest
 
 ### Environment variables
 
-Set API keys and the database path as machine-level environment variables so both the service and the scheduled task pick them up automatically:
+Set Adzuna credentials and the database path as machine-level environment variables so both the service and the scheduled task pick them up automatically:
 
 ```powershell
 [System.Environment]::SetEnvironmentVariable("DB_PATH", "C:\path\to\data\jobs.db", "Machine")
-[System.Environment]::SetEnvironmentVariable("ANTHROPIC_API_KEY", "your_key", "Machine")
 [System.Environment]::SetEnvironmentVariable("ADZUNA_APP_ID", "your_id", "Machine")
 [System.Environment]::SetEnvironmentVariable("ADZUNA_APP_KEY", "your_key", "Machine")
 ```
 
 Restart your terminal after setting machine-level variables for them to take effect.
+
+LLM provider API keys are managed separately through `keys.json` and the `/settings` UI — do not set them as environment variables.
 
 ### Web service (NSSM)
 
@@ -289,6 +289,10 @@ New-Item -ItemType Directory -Force -Path "C:\path\to\data"
 ```
 
 The SQLite database (`jobs.db`) is created there automatically on the first run.
+
+### API keys (LLM providers)
+
+LLM provider keys (Anthropic, OpenAI, Gemini, etc.) are stored in `keys.json` at the project root and managed through the `/settings` UI — they are not set as environment variables. `keys.json` is gitignored and never committed. After running `scripts/setup.ps1`, navigate to `http://localhost:5000/settings` to enter your API keys.
 
 ---
 

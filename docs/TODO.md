@@ -190,12 +190,12 @@
 
 ## Milestone: Dynamic Provider Key Management (#28–#36)
 
-- [ ] **#28** — Create `keys.example.json`; strip API key fields from `config.example.json`; add `keys.json` to `.gitignore`
-- [ ] **#29** — Add `build_provider_chain()` to `providers/__init__.py`; add `TestBuildProviderChain` tests
-- [ ] **#30** — Add `model_used TEXT` column to `listings` table via migration in `db.py`
-- [ ] **#31** — Add `load_keys()` to `ingest.py` with env-var fallback; update `load_config()` to use it
-- [ ] **#32** — Wire provider chain into `run()`/`rescore()`; per-listing fallback loop; cost breakdown by provider
-- [ ] **#33** — Flask `/settings` GET+POST routes; `settings.html` template (keys-only, masked display)
-- [ ] **#34** — `model_used` badge on listing cards; add settings nav tab to all templates
-- [ ] **#35** — Update `setup.ps1` (key file ACLs, remove LLM key prompts); deployment docs
+- [x] **#28** — Create `keys.example.json`; strip API key fields from `config.example.json`; add `keys.json` to `.gitignore`
+- [x] **#29** — Add `build_provider_chain()` to `providers/__init__.py`; add `TestBuildProviderChain` tests
+- [x] **#30** — Add `model_used TEXT` column to `listings` table via migration in `db.py`
+- [x] **#31** — Add `load_keys()` to `ingest.py` with env-var fallback; update `load_config()` to use it
+- [x] **#32** — Wire provider chain into `run()`/`rescore()`; per-listing fallback loop; cost breakdown by provider
+- [x] **#33** — Flask `/settings` GET+POST routes; `settings.html` template (keys-only, masked display)
+- [x] **#34** — `model_used` badge on listing cards; add settings nav tab to all templates
+- [x] **#35** — Update `setup.ps1` (key file ACLs, remove LLM key prompts); deployment docs
 - [ ] **#36** — Final `CLAUDE.md` and `README.md` documentation pass

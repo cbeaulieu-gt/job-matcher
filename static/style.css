@@ -955,6 +955,21 @@ body {
   color: var(--text-muted);
 }
 
+/* Model used badge — monospace, dimmer than badge-jobtype, no uppercase */
+.model-badge {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 0.60rem;
+  letter-spacing: 0.03em;
+  padding: 2px 7px;
+  border-radius: 20px;
+  border: 1px solid var(--border-subtle);
+  white-space: nowrap;
+  background: transparent;
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
 /* ------------------------------------------------------------
    Stats page — disclaimer
    ------------------------------------------------------------ */

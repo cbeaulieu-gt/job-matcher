@@ -1,0 +1,64 @@
+"""
+providers/base.py — Abstract base class for LLM scoring providers.
+
+All concrete providers must implement ``complete()``, ``input_cost_per_mtok``,
+and ``output_cost_per_mtok``.  The ``complete()`` method receives a fully
+rendered prompt string and must return a dict whose keys match the JSON
+contract expected by ``score_listing()``.
+"""
+
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+
+
+class LLMProvider(ABC):
+    """Interface that every LLM backend must satisfy.
+
+    Concrete sub-classes encapsulate provider-specific SDK calls, retry
+    logic, token-count extraction, and pricing constants so that
+    ``score_listing()`` in ``ingest.py`` remains provider-agnostic.
+    """
+
+    @abstractmethod
+    def complete(self, prompt: str) -> dict:
+        """Send *prompt* to the LLM and return a parsed scoring result.
+
+        Implementors must:
+        * Attempt the API call up to 2 times (2-second delay between attempts).
+        * Strip markdown code fences from the raw response before JSON parsing.
+        * Validate that the returned dict contains all five required keys.
+        * Raise ``RuntimeError`` if both attempts fail so that callers can
+          treat ``None`` as "definitive failure" rather than catching
+          exceptions themselves.
+
+        Args:
+            prompt: Fully rendered prompt string (profile + job description).
+
+        Returns:
+            Dict with exactly these keys:
+
+            * ``score``          — int, 0–10
+            * ``matched_skills`` — list[str]
+            * ``missing_skills`` — list[str]
+            * ``concerns``       — list[str]
+            * ``verdict``        — str (one sentence)
+            * ``tokens_input``   — int | None
+            * ``tokens_output``  — int | None
+
+        Raises:
+            RuntimeError: If all retry attempts fail.
+        """
+        ...
+
+    @property
+    @abstractmethod
+    def input_cost_per_mtok(self) -> float:
+        """USD cost per million input tokens for the configured model."""
+        ...
+
+    @property
+    @abstractmethod
+    def output_cost_per_mtok(self) -> float:
+        """USD cost per million output tokens for the configured model."""
+        ...

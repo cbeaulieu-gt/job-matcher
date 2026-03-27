@@ -22,16 +22,20 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+import os
 import re
 import time
 from datetime import datetime, timezone
 from typing import Iterator
 
-import anthropic
+_DB_PATH: str = os.environ.get("DB_PATH", "jobs.db")
+
 import requests
 from bs4 import BeautifulSoup
 
 import db
+from providers import make_provider, LLMProvider
 
 # ---------------------------------------------------------------------------
 # Logger
@@ -44,9 +48,16 @@ logger = logging.getLogger("ingest")
 # Config and profile loading
 # ---------------------------------------------------------------------------
 
-_REQUIRED_TOP_LEVEL = ("adzuna_app_id", "adzuna_app_key", "anthropic_api_key")
+_REQUIRED_TOP_LEVEL = ("adzuna_app_id", "adzuna_app_key")
 _REQUIRED_SEARCH = ("country", "what", "results_per_page", "max_pages")
 _REQUIRED_SCORING = ("threshold", "model")
+
+# Mapping from provider name to the config key and env var that hold its API key.
+_PROVIDER_KEY_MAP: dict[str, tuple[str, str]] = {
+    "anthropic": ("anthropic_api_key", "ANTHROPIC_API_KEY"),
+    "openai":    ("openai_api_key",    "OPENAI_API_KEY"),
+    "gemini":    ("google_api_key",    "GOOGLE_API_KEY"),
+}
 
 
 def load_config(path: str = "config.json") -> dict:
@@ -62,6 +73,19 @@ def load_config(path: str = "config.json") -> dict:
         raise SystemExit(f"Config file not found: {path}")
     except json.JSONDecodeError as exc:
         raise SystemExit(f"Config file is not valid JSON: {exc}")
+
+    # Environment variables override config.json values for containerised deployments.
+    # Applied before the missing-key check so env vars can satisfy required key validation.
+    for env_var, config_key in (
+        ("ADZUNA_APP_ID",    "adzuna_app_id"),
+        ("ADZUNA_APP_KEY",   "adzuna_app_key"),
+        ("ANTHROPIC_API_KEY", "anthropic_api_key"),
+        ("OPENAI_API_KEY",   "openai_api_key"),
+        ("GOOGLE_API_KEY",   "google_api_key"),
+    ):
+        val = os.environ.get(env_var)
+        if val:
+            config[config_key] = val
 
     missing: list[str] = []
 
@@ -82,6 +106,21 @@ def load_config(path: str = "config.json") -> dict:
     if missing:
         raise SystemExit(
             "Missing or empty required config keys: " + ", ".join(missing)
+        )
+
+    # Validate that the active provider's API key is present.
+    provider_name: str = scoring.get("provider", "anthropic")
+    if provider_name in _PROVIDER_KEY_MAP:
+        config_key, env_var = _PROVIDER_KEY_MAP[provider_name]
+        if not config.get(config_key):
+            raise SystemExit(
+                f"Missing API key for provider {provider_name!r}: "
+                f"set '{config_key}' in config.json or the {env_var} environment variable."
+            )
+    else:
+        raise SystemExit(
+            f"Unknown provider {provider_name!r} in scoring.provider. "
+            "Supported values: 'anthropic', 'openai', 'gemini'."
         )
 
     return config
@@ -446,104 +485,46 @@ JSON only:\
 def score_listing(
     description: str,
     profile: dict,
-    model: str,
-    client: anthropic.Anthropic,
+    provider: LLMProvider,
 ) -> dict | None:
-    """Score a job description against a candidate profile using Claude.
+    """Score a job description against a candidate profile using an LLM provider.
 
-    Builds a structured prompt, calls the Anthropic Messages API, and parses
-    the JSON response.  Retries once on failure (API error or malformed JSON)
-    after a 2-second delay.  Returns None if both attempts fail.
+    Builds a structured prompt and delegates to ``provider.complete()``.
+    The provider is responsible for retries, JSON parsing, and token counting.
+    Returns ``None`` if the provider raises ``RuntimeError`` (both attempts
+    failed), so the listing can be stored unscored for later re-scoring.
 
     Args:
         description: Full (or snippet) job description text.
-        profile: Candidate profile dict loaded from profile.json.
-        model: Anthropic model ID (e.g. ``claude-haiku-4-5-20251001``).
-        client: An already-instantiated ``anthropic.Anthropic`` client.
+        profile:     Candidate profile dict loaded from profile.json.
+        provider:    An initialised ``LLMProvider`` instance.
 
     Returns:
         Dict with keys ``score``, ``matched_skills``, ``missing_skills``,
-        ``concerns``, ``verdict``; or None on persistent failure.
+        ``concerns``, ``verdict``, ``tokens_input``, ``tokens_output``;
+        or ``None`` on persistent failure.
     """
     prompt = _PROMPT_TEMPLATE.format(
         profile_json=json.dumps(profile, indent=2),
         description=description,
     )
 
-    for attempt in range(2):
-        if attempt > 0:
-            time.sleep(2)
-
-        try:
-            message = client.messages.create(
-                model=model,
-                max_tokens=1024,
-                messages=[{"role": "user", "content": prompt}],
-            )
-        except anthropic.APIError as exc:
-            logger.warning("Anthropic API error (attempt %d/2): %s", attempt + 1, exc)
-            continue
-
-        # Extract the text content from the first content block.
-        try:
-            raw_content = message.content[0].text
-        except (IndexError, AttributeError) as exc:
-            logger.warning(
-                "Unexpected Anthropic response structure (attempt %d/2): %s",
-                attempt + 1,
-                exc,
-            )
-            continue
-
-        # Strip markdown code fences that the model sometimes wraps around JSON
-        # despite being instructed not to (e.g. ```json ... ```).
-        stripped = raw_content.strip()
-        lines = stripped.splitlines()
-        if lines and lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        stripped = "\n".join(lines).strip()
-
-        try:
-            parsed = json.loads(stripped)
-        except json.JSONDecodeError as exc:
-            logger.warning(
-                "Anthropic returned non-JSON (attempt %d/2): %s — raw: %.200s",
-                attempt + 1,
-                exc,
-                raw_content,
-            )
-            continue
-
-        if not isinstance(parsed, dict) or not _SCORE_KEYS.issubset(parsed.keys()):
-            missing_keys = _SCORE_KEYS - set(parsed.keys())
-            logger.warning(
-                "Score response missing keys %s (attempt %d/2)",
-                missing_keys,
-                attempt + 1,
-            )
-            continue
-
-        # Attach token usage from the API response, if available.
-        try:
-            parsed["tokens_input"] = message.usage.input_tokens
-            parsed["tokens_output"] = message.usage.output_tokens
-        except AttributeError:
-            parsed["tokens_input"] = None
-            parsed["tokens_output"] = None
-
-        return parsed
-
-    logger.warning("Scoring failed after 2 attempts; listing will be stored unscored")
-    return None
+    try:
+        return provider.complete(prompt)
+    except RuntimeError:
+        logger.warning("Scoring failed after 2 attempts; listing will be stored unscored")
+        return None
 
 
 # ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
 
-def run(config_path: str = "config.json", profile_path: str = "profile.json") -> None:
+def run(
+    config_path: str = "config.json",
+    profile_path: str = "profile.json",
+    hours: int | None = None,
+) -> None:
     """Run the full ingestion pipeline.
 
     Loads config and profile, initialises the DB, pages through Adzuna
@@ -551,14 +532,20 @@ def run(config_path: str = "config.json", profile_path: str = "profile.json") ->
     listing.  Prints a summary line when complete.
 
     Args:
-        config_path: Path to config.json (default ``"config.json"``).
+        config_path:  Path to config.json (default ``"config.json"``).
         profile_path: Path to profile.json (default ``"profile.json"``).
+        hours:        If provided, only process listings whose ``created_at``
+                      timestamp is within the last N hours. Overrides
+                      ``search.max_days_old`` in config with ``ceil(hours/24)``.
     """
     config = load_config(config_path)
     profile = load_profile(profile_path)
     job_type = config["search"].get("what", "").strip()
 
-    db.init_db()
+    if hours is not None:
+        config["search"]["max_days_old"] = math.ceil(hours / 24)
+
+    db.init_db(db_path=_DB_PATH)
 
     client = AdzunaClient(
         app_id=config["adzuna_app_id"],
@@ -566,9 +553,7 @@ def run(config_path: str = "config.json", profile_path: str = "profile.json") ->
         config=config,
     )
 
-    anthropic_api_key: str = config["anthropic_api_key"]
-    scoring_model: str = config["scoring"]["model"]
-    anthropic_client = anthropic.Anthropic(api_key=anthropic_api_key)
+    provider = make_provider(config)
 
     # Counters.
     fetched = 0
@@ -581,10 +566,33 @@ def run(config_path: str = "config.json", profile_path: str = "profile.json") ->
     total_tokens_input = 0
     total_tokens_output = 0
 
+    # Cutoff used for --hours filtering.
+    hours_cutoff: datetime | None = None
+    if hours is not None:
+        from datetime import timedelta
+        hours_cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+
     for page in client.pages():
         for listing in page:
             fetched += 1
             title = listing.get("title", "(no title)")
+
+            # --- Hours filter (created_at) ---
+            if hours_cutoff is not None:
+                created_raw = listing.get("created_at", "")
+                if created_raw:
+                    try:
+                        created_dt = datetime.fromisoformat(
+                            created_raw.replace("Z", "+00:00")
+                        )
+                        if created_dt < hours_cutoff:
+                            prefiltered += 1
+                            logger.info(
+                                "FILTERED  %s — created_at older than %d hours", title, hours
+                            )
+                            continue
+                    except (ValueError, TypeError):
+                        pass  # Unparseable date — let the listing through.
 
             # --- Pre-filter ---
             reason = prefilter(listing, config)
@@ -594,7 +602,7 @@ def run(config_path: str = "config.json", profile_path: str = "profile.json") ->
                 continue
 
             # --- Dedup ---
-            if db.listing_exists(listing["adzuna_id"]):
+            if db.listing_exists(listing["adzuna_id"], db_path=_DB_PATH):
                 deduped += 1
                 logger.info("DUPE      %s", title)
                 continue
@@ -616,8 +624,7 @@ def run(config_path: str = "config.json", profile_path: str = "profile.json") ->
             score_result = score_listing(
                 description=description,
                 profile=profile,
-                model=scoring_model,
-                client=anthropic_client,
+                provider=provider,
             )
 
             if score_result is None:
@@ -652,14 +659,14 @@ def run(config_path: str = "config.json", profile_path: str = "profile.json") ->
             listing["job_type"] = job_type or None
 
             try:
-                db.insert_listing(listing)
+                db.insert_listing(listing, db_path=_DB_PATH)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("DB insert failed for %s: %s", title, exc)
 
     total_tokens = total_tokens_input + total_tokens_output
     run_cost = (
-        total_tokens_input / 1_000_000 * db._HAIKU_INPUT_COST_PER_MTOK
-        + total_tokens_output / 1_000_000 * db._HAIKU_OUTPUT_COST_PER_MTOK
+        total_tokens_input  / 1_000_000 * provider.input_cost_per_mtok
+        + total_tokens_output / 1_000_000 * provider.output_cost_per_mtok
     )
     print(
         f"Run complete: {fetched} fetched | {prefiltered} pre-filtered | "
@@ -687,11 +694,9 @@ def rescore(config_path: str = "config.json", profile_path: str = "profile.json"
     config = load_config(config_path)
     profile = load_profile(profile_path)
 
-    api_key: str = config["anthropic_api_key"]
-    model: str = config["scoring"]["model"]
-    anthropic_client = anthropic.Anthropic(api_key=api_key)
+    provider = make_provider(config)
 
-    listings = db.get_all_scored()
+    listings = db.get_all_scored(db_path=_DB_PATH)
     if not listings:
         print("No scored listings to rescore.")
         return
@@ -704,10 +709,10 @@ def rescore(config_path: str = "config.json", profile_path: str = "profile.json"
 
     for listing in listings:
         title = listing.get("title", "(no title)")
-        result = score_listing(listing["description"], profile, model, anthropic_client)
+        result = score_listing(listing["description"], profile, provider)
 
         if result is not None:
-            db.update_score(listing["adzuna_id"], result)
+            db.update_score(listing["adzuna_id"], result, db_path=_DB_PATH)
             rescored += 1
             tokens_input += result.get("tokens_input") or 0
             tokens_output += result.get("tokens_output") or 0
@@ -718,8 +723,8 @@ def rescore(config_path: str = "config.json", profile_path: str = "profile.json"
 
     total_tokens = tokens_input + tokens_output
     cost = (
-        tokens_input / 1_000_000 * db._HAIKU_INPUT_COST_PER_MTOK
-        + tokens_output / 1_000_000 * db._HAIKU_OUTPUT_COST_PER_MTOK
+        tokens_input  / 1_000_000 * provider.input_cost_per_mtok
+        + tokens_output / 1_000_000 * provider.output_cost_per_mtok
     )
     print(
         f"Rescore complete: {total} listings | {rescored} rescored ({failed} failed) | "
@@ -742,9 +747,18 @@ if __name__ == "__main__":
     )
     parser.add_argument("--config", default="config.json", help="Path to config.json")
     parser.add_argument("--profile", default="profile.json", help="Path to profile.json")
+    parser.add_argument(
+        "--hours",
+        type=int,
+        default=None,
+        help=(
+            "Only process listings fetched within the last N hours. "
+            "Overrides max_days_old in config."
+        ),
+    )
     args = parser.parse_args()
 
     if args.rescore:
         rescore(config_path=args.config, profile_path=args.profile)
     else:
-        run(config_path=args.config, profile_path=args.profile)
+        run(config_path=args.config, profile_path=args.profile, hours=args.hours)

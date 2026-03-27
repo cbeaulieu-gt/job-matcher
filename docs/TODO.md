@@ -143,3 +143,75 @@
 - [x] Add `get_usage_stats()` to `db.py` — total tokens, estimated cost, per-run breakdown
 - [x] Print per-run cost estimate in ingest summary line
 - [x] Add `/stats` route to `app.py` and `stats` nav tab showing cumulative usage and cost
+
+## Docker Deployment
+
+### Phase 1 — Containerize (Web Service)
+- [x] Create `Dockerfile` — python:3.11-slim base, install requirements, add gunicorn, expose port 5000
+- [x] Add `gunicorn` to `requirements.txt`
+- [x] Create `docker-compose.yml` with `web` service running gunicorn, bind mount to host data path
+- [x] Verify app starts and serves correctly inside container
+
+### Phase 2 — Persistent Database
+- [x] `db.py`: read `DB_PATH` from environment variable, fall back to `./jobs.db`
+- [x] `app.py`: pass env-configured `DB_PATH` through to all `db.*` calls
+- [x] `ingest.py`: read `DB_PATH` from environment variable, pass to `db.*` calls
+- [x] `docker-compose.yml`: set `DB_PATH=/app/data/jobs.db`; bind mount host data directory to `/app/data/`
+
+### Phase 3 — Scheduled Ingest
+- [x] `ingest.py`: add `--hours N` CLI flag; overrides `max_days_old` with `ceil(N/24)` days, post-filters by `created_at` timestamp
+- [x] Add `scheduler` service to `docker-compose.yml` — runs daily ingest via shell loop
+- [x] `config.example.json`: add optional `scheduled_hours` key
+
+### Phase 4 — Secrets & Config
+- [x] `ingest.py`: read `ADZUNA_APP_ID`, `ADZUNA_APP_KEY`, `ANTHROPIC_API_KEY` from env vars if present, override config.json values
+- [x] Create `.env.example` documenting all supported environment variables
+- [x] `docker-compose.yml`: add `env_file: .env` support
+
+### Phase 5 — Documentation
+- [x] `README.md`: add Docker deployment section (prerequisites, setup, ops commands, backup)
+- [x] Update `DESIGN.md` to reflect containerized architecture
+
+## Native Deployment (#9)
+
+### Web service (gunicorn via NSSM)
+- [ ] Download and install NSSM on target server
+- [ ] Register `JobMatcher` service pointing to `gunicorn app:app`
+- [ ] Set `AppDirectory`, `AppEnvironmentExtra` (`DB_PATH`, `FLASK_DEBUG`)
+- [ ] Verify service starts and survives reboot
+
+### Scheduled ingest (Windows Task Scheduler)
+- [ ] Create `JobMatcherIngest` scheduled task running `python ingest.py --hours 25` daily
+- [ ] Set `DB_PATH`, `ANTHROPIC_API_KEY`, `ADZUNA_APP_ID`, `ADZUNA_APP_KEY` as system env vars
+- [ ] Verify task runs and writes to the correct DB path
+
+### Scripts
+- [x] Create `scripts/setup.ps1` — interactive setup: prompts for API keys, sets system env vars, creates data dir, registers NSSM service, registers scheduled task
+- [x] Create `scripts/teardown.ps1` — removes NSSM service and scheduled task cleanly
+- [x] Create `scripts/status.ps1` — shows service status, last scheduled task run, DB row count, and last fetch time
+- [x] Create `scripts/deploy-remote.ps1` — copies project files to a remote server and invokes setup.ps1 via PowerShell Remoting (WinRM)
+
+### Documentation
+- [ ] Add "Native Deployment" section to `README.md` (NSSM setup, Task Scheduler, env vars, ops commands)
+
+## Feature: Component Version Display (#6)
+
+- [ ] Capture versions of key runtime components at startup (Python, Flask, anthropic, beautifulsoup4, gunicorn)
+- [ ] Expose version data via stats page or footer
+- [ ] Decide display location: stats page sidebar, footer, or dedicated info endpoint
+
+## Feature: Last Fetch Time in UI (#7)
+
+- [ ] Add `get_last_fetch_time()` helper to `db.py` — queries `MAX(fetched_at)` from listings
+- [ ] Pass last fetch time to feed template context in `app.py`
+- [ ] Display in feed header/filter bar (e.g. "Last updated 3 hours ago")
+
+## Feature: Pluggable Model Provider (#8)
+
+- [ ] Define a common scorer interface/adapter shape `{score, matched_skills, missing_skills, concerns, verdict, tokens_input, tokens_output}`
+- [ ] Add `scoring.provider` key to `config.json` / `config.example.json` (e.g. `"provider": "anthropic"`)
+- [ ] Implement Anthropic adapter (refactor existing `score_listing()`)
+- [ ] Implement OpenAI adapter (GPT-4o-mini / GPT-4o)
+- [ ] Implement Gemini adapter (gemini-1.5-flash / gemini-1.5-pro)
+- [ ] Instantiate correct client in `run()` / `rescore()` based on config provider value
+- [ ] Add provider-specific API key fields to `config.example.json` and `.env.example`

@@ -198,4 +198,4 @@
 - [x] **#33** — Flask `/settings` GET+POST routes; `settings.html` template (keys-only, masked display)
 - [x] **#34** — `model_used` badge on listing cards; add settings nav tab to all templates
 - [x] **#35** — Update `setup.ps1` (key file ACLs, remove LLM key prompts); deployment docs
-- [ ] **#36** — Final `CLAUDE.md` and `README.md` documentation pass
+- [x] **#36** — Final `CLAUDE.md` and `README.md` documentation pass

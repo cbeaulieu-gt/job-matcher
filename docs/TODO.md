@@ -249,6 +249,16 @@
 - [x] Update `_config_warnings()` banner message to point to `/settings` instead of manual `config.json` edit
 - [x] Add tests for: GET shows has/not-set status, POST saves new credentials, blank POST preserves existing, raw values never appear in response
 
+## Feature: Pluggable Job Source Provider System (#10)
+
+- [x] Define `JobSource` ABC in `job_sources/base.py` with `fetch_page()`, `total_pages()`, `normalise()` methods
+- [x] DB migration: `adzuna_id` → `source_id`, adds `source` column, updates UNIQUE constraint to `(source, source_id)` — three migration paths (fresh, legacy, partial)
+- [x] Move `AdzunaClient` to `job_sources/adzuna.py` implementing `JobSource` protocol; public `normalise()`
+- [x] Provider registry `job_sources/__init__.py` with `SOURCES` dict and `make_source()` factory
+- [x] Wire `ingest.py` to use `make_source(config)` instead of direct `AdzunaClient` construction
+- [x] Add `"job_source": "adzuna"` to `config.example.json`
+- [x] Update all tests for renamed column; add `tests/test_job_sources.py`
+
 ## Milestone: Dynamic Provider Key Management (#28–#36)
 
 - [x] **#28** — Create `keys.example.json`; strip API key fields from `config.example.json`; add `keys.json` to `.gitignore`

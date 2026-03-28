@@ -25,5 +25,6 @@
     "require_contract_time": "full_time",
     "require_contract_type": "permanent"
   },
-  "scheduled_hours": 25
+  "scheduled_hours": 25,
+  "job_source": "adzuna"
 }

@@ -625,8 +625,6 @@ class TestCrossSourceDedup:
     def test_source_id_unique_per_source(self):
         """Two listings that share the same source_id but differ in source can
         both be inserted without violating the unique index on (source, source_id)."""
-        import sqlite3 as _sqlite3
-
         with TempDB() as path:
             db.insert_listing(
                 make_listing(

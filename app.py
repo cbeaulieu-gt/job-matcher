@@ -12,7 +12,7 @@ import sys
 from datetime import datetime, timezone
 from importlib.metadata import version as pkg_version, PackageNotFoundError
 
-from flask import Flask, render_template, make_response, request
+from flask import Flask, render_template, make_response, request, jsonify
 
 import db
 
@@ -407,6 +407,97 @@ def _mask_config_keys(data: dict) -> dict:
         return copy.deepcopy(obj)
 
     return _walk(data)
+
+
+# ---------------------------------------------------------------------------
+# Ingestion trigger — module-level handle prevents concurrent runs
+# ---------------------------------------------------------------------------
+
+# Holds the running Popen handle while ingest.py is active. None when idle.
+_ingest_process: subprocess.Popen | None = None
+
+
+def _ingest_running() -> bool:
+    """Return True if an ingest subprocess is currently active.
+
+    Polls the process exit code: if poll() returns None the process is still
+    running. If it has exited, reset the handle to None so a new run can start.
+    """
+    global _ingest_process
+    if _ingest_process is None:
+        return False
+    if _ingest_process.poll() is not None:
+        # Process has finished — clear the handle.
+        _ingest_process = None
+        return False
+    return True
+
+
+def _render_ingest_idle() -> str:
+    """Return the HTML partial for the idle 'Run Ingestion' button."""
+    return render_template("_ingest_trigger.html", running=False)
+
+
+def _render_ingest_running() -> str:
+    """Return the HTML partial for the in-progress status element."""
+    return render_template("_ingest_trigger.html", running=True)
+
+
+@app.route("/ingest/trigger", methods=["POST"])
+def ingest_trigger():
+    """Spawn ingest.py as a background subprocess.
+
+    Returns 202 with the 'Running...' HTML partial when the process is started.
+    Returns 409 with a JSON error body if a run is already in progress — the
+    caller can check Content-Type to distinguish the two response shapes.
+
+    Uses sys.executable so the subprocess runs in the same virtualenv as the
+    app server, picking up all installed dependencies automatically.
+    """
+    global _ingest_process
+    if _ingest_running():
+        return jsonify({"error": "already running"}), 409
+
+    # Build command from optional UI parameters.
+    hours_raw = request.form.get("hours", "25").strip()
+    rescore = request.form.get("rescore") == "1"
+
+    try:
+        hours = int(hours_raw)
+    except (ValueError, TypeError):
+        hours = 25
+
+    cmd = [sys.executable, "ingest.py", "--hours", str(hours)]
+    if rescore:
+        cmd.append("--rescore")
+
+    _ingest_process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    resp = make_response(_render_ingest_running(), 202)
+    resp.headers["Content-Type"] = "text/html"
+    return resp
+
+
+@app.route("/ingest/status")
+def ingest_status():
+    """Poll endpoint — returns an HTML partial reflecting current ingest state.
+
+    While the process is running, returns the polling div so HTMX keeps
+    refreshing. Once it stops, returns the idle button and triggers a feed
+    refresh by setting HX-Trigger so the caller can react.
+    """
+    running = _ingest_running()
+    html = _render_ingest_running() if running else _render_ingest_idle()
+    resp = make_response(html, 200)
+    resp.headers["Content-Type"] = "text/html"
+    if not running:
+        # Signal HTMX to reload the feed once the job completes.
+        resp.headers["HX-Trigger"] = "ingestComplete"
+    return resp
 
 
 def _load_keys() -> dict:

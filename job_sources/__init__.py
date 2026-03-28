@@ -6,6 +6,7 @@ Public API
 * ``JobSource``      — abstract base class; import from here or ``job_sources.base``
 * ``AdzunaClient``   — Adzuna Jobs API backend
 * ``USAJobsClient``  — USAJobs API backend
+* ``TheMuseClient``  — The Muse API backend
 * ``SOURCES``        — registry mapping source name strings to their classes
 * ``make_source()``  — factory that reads ``config["job_source"]`` and returns
                        the right ``JobSource`` instance
@@ -25,11 +26,13 @@ from __future__ import annotations
 from .base import JobSource
 from .adzuna import AdzunaClient
 from .usajobs import USAJobsClient
+from .the_muse import TheMuseClient
 
 __all__ = [
     "JobSource",
     "AdzunaClient",
     "USAJobsClient",
+    "TheMuseClient",
     "SOURCES",
     "make_source",
 ]
@@ -41,6 +44,7 @@ __all__ = [
 SOURCES: dict[str, type[JobSource]] = {
     "adzuna": AdzunaClient,
     "usajobs": USAJobsClient,
+    "the_muse": TheMuseClient,
 }
 
 
@@ -81,5 +85,5 @@ def make_source(config: dict) -> JobSource:
             config=config,
         )
 
-    # All other sources (including usajobs) accept (config,) only.
+    # All other sources accept (config,) only.
     return cls(config=config)  # type: ignore[call-arg]

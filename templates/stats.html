@@ -26,6 +26,16 @@
     </nav>
   </header>
 
+  {# ── Setup banner ────────────────────────────────────────────── #}
+  {% if config_warnings %}
+  <div class="setup-banner">
+    {% for warning in config_warnings %}
+    <p>&#9888; {{ warning|safe }}</p>
+    {% endfor %}
+    <p>LLM provider keys can be configured on the <a href="/settings">Settings page</a>.</p>
+  </div>
+  {% endif %}
+
   {# ── Summary stat boxes ──────────────────────────────────────── #}
   <div class="stats-summary">
     <div class="stat-box">

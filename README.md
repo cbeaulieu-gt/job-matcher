@@ -220,19 +220,20 @@ Use this approach if you want the web UI running as a Windows service and ingest
 
 What it does:
 
-- Prompts for your Adzuna credentials and the data directory path
-- Sets system environment variables (`DB_PATH`, `ADZUNA_APP_ID`, `ADZUNA_APP_KEY`, `FLASK_DEBUG`)
+- Prompts for the data directory path and daily ingest time (infrastructure only — no credential prompts)
+- Sets system environment variables (`DB_PATH`, `FLASK_DEBUG`)
 - Creates the data directory and a `logs/` subfolder
 - Copies `keys.example.json` → `keys.json` and restricts its ACL to the current user
+- Copies `config.example.json` → `config.json` (if absent) — edit it to add Adzuna credentials
 - Registers the `JobMatcher` Windows service (gunicorn via NSSM) set to auto-start
 - Registers the `JobMatcherIngest` daily Task Scheduler task
 
-After the script completes, start the service with `nssm start JobMatcher` and then navigate to `http://localhost:5000/settings` to enter your LLM provider API keys.
+After the script completes, navigate to `http://localhost:5000/settings` to enter your LLM provider API keys, then edit `config.json` in the project root to add your Adzuna App ID and App Key.
 
 ### Prerequisites
 
 - Python venv already set up and `pip install -r requirements.txt` run
-- `config.json` and `profile.json` present in the project root
+- `profile.json` present in the project root (`config.json` is created from the example by the script if absent)
 - [NSSM](https://nssm.cc/download) downloaded and either on `PATH` or referenced by full path
 
 ### Environment variables (reference)

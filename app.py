@@ -61,6 +61,30 @@ db.init_db(db_path=DB_PATH)
 
 
 # ---------------------------------------------------------------------------
+# Config warnings
+# ---------------------------------------------------------------------------
+
+def _config_warnings() -> list[str]:
+    """Return a list of human-readable warnings for missing/empty config."""
+    warnings = []
+    cfg = load_config()
+    adzuna_id  = cfg.get("adzuna_app_id", "").strip()
+    adzuna_key = cfg.get("adzuna_app_key", "").strip()
+    # Also check env vars (ingest.py can override via env)
+    if not adzuna_id:
+        adzuna_id = os.environ.get("ADZUNA_APP_ID", "").strip()
+    if not adzuna_key:
+        adzuna_key = os.environ.get("ADZUNA_APP_KEY", "").strip()
+    if not adzuna_id or not adzuna_key:
+        warnings.append(
+            "Adzuna credentials are not configured — ingest will not run. "
+            "Edit <code>config.json</code> in the project root to add your "
+            "<code>adzuna_app_id</code> and <code>adzuna_app_key</code>."
+        )
+    return warnings
+
+
+# ---------------------------------------------------------------------------
 # Template filter
 # ---------------------------------------------------------------------------
 
@@ -137,6 +161,7 @@ def feed():
         search=search,
         job_type=job_type,
         job_types=job_types,
+        config_warnings=_config_warnings(),
     )
 
 
@@ -148,6 +173,7 @@ def bookmarks():
         "index.html",
         listings=listings,
         view="bookmarks",
+        config_warnings=_config_warnings(),
     )
 
 
@@ -200,6 +226,7 @@ def applied():
         "index.html",
         listings=listings,
         view="applied",
+        config_warnings=_config_warnings(),
     )
 
 
@@ -207,7 +234,7 @@ def applied():
 def stats():
     """API usage and cost statistics."""
     data = db.get_usage_stats(db_path=DB_PATH)
-    return render_template("stats.html", stats=data, view="stats")
+    return render_template("stats.html", stats=data, view="stats", config_warnings=_config_warnings())
 
 
 @app.route("/dismiss/<int:listing_id>", methods=["POST"])

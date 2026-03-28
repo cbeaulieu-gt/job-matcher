@@ -1103,3 +1103,23 @@ body {
   margin-bottom: 20px;
   max-width: 600px;
 }
+
+/* ------------------------------------------------------------
+   Setup banner
+   ------------------------------------------------------------ */
+.setup-banner {
+    background: #fff3cd;
+    border: 1px solid #ffc107;
+    border-radius: 4px;
+    padding: 0.75rem 1rem;
+    margin-bottom: 1rem;
+    font-size: 0.9rem;
+    color: #856404;
+}
+.setup-banner p {
+    margin: 0.25rem 0;
+}
+.setup-banner a {
+    color: #533f03;
+    font-weight: 600;
+}

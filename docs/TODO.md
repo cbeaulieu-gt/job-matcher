@@ -226,6 +226,10 @@
 - [ ] Update `setup.ps1` footer and inline comments to reflect new flow: run script → open browser → finish config
 - [ ] Update `README.md` native deployment section to match new flow
 
+## Feature: Claude PR review workflow (#61)
+
+- [x] Create `.github/workflows/claude-pr-review.yml` — triggers on PR opened/synchronize/reopened, posts automatic review comment via `direct_prompt`
+
 ## Feature: Claude GitHub App workflow (#59)
 
 - [x] Create `.github/workflows/claude.yml` using `anthropics/claude-code-action@v1`, triggered on `issue_comment` (created)

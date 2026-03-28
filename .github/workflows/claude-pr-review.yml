@@ -15,7 +15,7 @@ jobs:
 
       - uses: anthropics/claude-code-action@beta
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           direct_prompt: |
             Review this pull request. Post a comment with:
             1. A plain-language summary of what changed.

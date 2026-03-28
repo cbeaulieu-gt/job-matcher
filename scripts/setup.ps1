@@ -3,17 +3,15 @@
 .SYNOPSIS
     Interactive setup script for the Job Matcher native deployment.
 .DESCRIPTION
-    Registers the JobMatcher gunicorn service via NSSM and a daily ingest
-    scheduled task. Must be run as Administrator.
+    Provisions the JobMatcher infrastructure: registers the gunicorn service
+    via NSSM, creates a daily Task Scheduler ingest task, copies config/keys
+    example files on first run, and hardens file ACLs. Must be run as
+    Administrator.
 
-    Prompts for Adzuna credentials and data directory, sets system environment
-    variables (Machine scope), copies keys.json from the example template,
-    hardens its ACL to the current user, installs the NSSM service, and
-    registers the Windows Task Scheduler task.
-
-    LLM provider API keys (Anthropic, OpenAI, Gemini, etc.) are managed
-    through the /settings UI and stored in keys.json — they are NOT set as
-    environment variables by this script.
+    This script does NOT prompt for Adzuna credentials or LLM API keys.
+    After setup completes, open http://localhost:5000/settings to enter LLM
+    provider keys, then edit config.json in the project root to add your
+    Adzuna App ID and App Key before running ingest.
 .EXAMPLE
     .\setup.ps1
 .NOTES
@@ -128,7 +126,7 @@ if (-not $nssm) {
 Write-Ok "nssm found at: $($nssm.Source)"
 
 # ---------------------------------------------------------------------------
-# Step 3 - Prompt for configuration
+# Step 3 - Prompt for infrastructure configuration
 # ---------------------------------------------------------------------------
 Write-Host ''
 Write-Step 'Configuration prompts (press Enter to accept defaults)...'
@@ -137,18 +135,6 @@ Write-Host ''
 $dataDir = Read-Host -Prompt 'Data directory [C:\ProgramData\JobMatcher\data]'
 if ([string]::IsNullOrWhiteSpace($dataDir)) {
     $dataDir = 'C:\ProgramData\JobMatcher\data'
-}
-
-$adzunaAppId = Read-Host -Prompt 'Adzuna App ID'
-if ([string]::IsNullOrWhiteSpace($adzunaAppId)) {
-    Write-Error 'Adzuna App ID is required.'
-    exit 1
-}
-
-$adzunaAppKey = Read-Host -Prompt 'Adzuna App Key'
-if ([string]::IsNullOrWhiteSpace($adzunaAppKey)) {
-    Write-Error 'Adzuna App Key is required.'
-    exit 1
 }
 
 $ingestTime = Read-Host -Prompt 'Daily ingest time (24h HH:MM) [06:00]'
@@ -196,7 +182,27 @@ else {
 }
 
 # ---------------------------------------------------------------------------
-# Step 6 - Harden keys.json ACL
+# Step 6 - Set up config.json
+# ---------------------------------------------------------------------------
+Write-Host ''
+Write-Step 'Setting up config.json...'
+
+$configPath        = Join-Path -Path $ProjectRoot -ChildPath 'config.json'
+$configExamplePath = Join-Path -Path $ProjectRoot -ChildPath 'config.example.json'
+
+if (-not (Test-Path -Path $configPath -PathType Leaf)) {
+    if (Test-Path -Path $configExamplePath -PathType Leaf) {
+        Copy-Item -Path $configExamplePath -Destination $configPath
+        Write-Ok 'config.json created from example — edit it at http://localhost:5000/settings or directly in the project root'
+    } else {
+        Write-Host '  config.example.json not found — skipping config.json creation.' -ForegroundColor Yellow
+    }
+} else {
+    Write-Ok 'config.json already present — skipping'
+}
+
+# ---------------------------------------------------------------------------
+# Step 7 - Harden keys.json ACL
 # ---------------------------------------------------------------------------
 Write-Host ''
 Write-Step 'Hardening keys.json permissions...'
@@ -219,7 +225,7 @@ else {
 }
 
 # ---------------------------------------------------------------------------
-# Step 7 - Set system environment variables
+# Step 8 - Set system environment variables
 # ---------------------------------------------------------------------------
 Write-Host ''
 Write-Step 'Setting system environment variables (Machine scope)...'
@@ -227,24 +233,17 @@ Write-Step 'Setting system environment variables (Machine scope)...'
 $dbPath = Join-Path -Path $dataDir -ChildPath 'jobs.db'
 
 $envVars = [ordered]@{
-    DB_PATH        = $dbPath
-    ADZUNA_APP_ID  = $adzunaAppId
-    ADZUNA_APP_KEY = $adzunaAppKey
-    FLASK_DEBUG    = '0'
+    DB_PATH     = $dbPath
+    FLASK_DEBUG = '0'
 }
 
 foreach ($key in $envVars.Keys) {
     [Environment]::SetEnvironmentVariable($key, $envVars[$key], 'Machine')
-    if ($key -eq 'ADZUNA_APP_KEY') {
-        Write-Ok "Set $key = $($envVars[$key].Substring(0, [Math]::Min(4, $envVars[$key].Length)))****"
-    }
-    else {
-        Write-Ok "Set $key = $($envVars[$key])"
-    }
+    Write-Ok "Set $key = $($envVars[$key])"
 }
 
 # ---------------------------------------------------------------------------
-# Step 8 - Register NSSM service
+# Step 9 - Register NSSM service
 # ---------------------------------------------------------------------------
 Write-Host ''
 Write-Step "Registering NSSM service: $ServiceName"
@@ -293,7 +292,7 @@ catch {
 }
 
 # ---------------------------------------------------------------------------
-# Step 9 - Register scheduled task
+# Step 10 - Register scheduled task
 # ---------------------------------------------------------------------------
 Write-Host ''
 Write-Step "Registering scheduled task: $TaskName"
@@ -353,16 +352,17 @@ catch {
 }
 
 # ---------------------------------------------------------------------------
-# Step 10 - Footer
+# Step 11 - Footer
 # ---------------------------------------------------------------------------
 Write-Host ''
 Write-Banner 'Setup Complete'
 Write-Host 'Next steps:' -ForegroundColor Cyan
-Write-Host "  1. Configure API keys:  http://localhost:5000/settings"
-Write-Host "  2. Open the feed:       http://localhost:5000"
-Write-Host "  3. Check status:        .\scripts\status.ps1"
-Write-Host "  4. View web logs:       $logsDir\web.log"
-Write-Host "  5. Force ingest now:    $pythonExe ingest.py --hours 25"
+Write-Host "  1. Open the app:        http://localhost:5000"
+Write-Host "  2. Configure LLM keys:  http://localhost:5000/settings"
+Write-Host "  3. Edit config.json:    $ProjectRoot\config.json  (Adzuna credentials, search params)"
+Write-Host "  4. Check status:        .\scripts\status.ps1"
+Write-Host "  5. View web logs:       $logsDir\web.log"
+Write-Host "  6. Force ingest now:    $pythonExe ingest.py --hours 25"
 Write-Host ''
 Write-Host 'To remove everything cleanly, run: .\scripts\teardown.ps1' -ForegroundColor Yellow
 Write-Host ''

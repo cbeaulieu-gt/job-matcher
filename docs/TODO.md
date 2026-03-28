@@ -220,6 +220,10 @@
 - [ ] Update `setup.ps1` footer and inline comments to reflect new flow: run script → open browser → finish config
 - [ ] Update `README.md` native deployment section to match new flow
 
+## Feature: Claude GitHub App workflow (#59)
+
+- [x] Create `.github/workflows/claude.yml` using `anthropics/claude-code-action@v1`, triggered on `issue_comment` (created)
+
 ## Feature: Claude CI Auto-Diagnosis (#25)
 
 - [ ] Add `ANTHROPIC_API_KEY` and `GH_PAT` to GitHub Actions secrets (manual step)

@@ -192,6 +192,20 @@
     </p>
   </div>
 
+  {# ── Validate API Keys ────────────────────────────────────────── #}
+  <div class="validate-section">
+    <button
+      class="btn btn-validate"
+      hx-post="/api/validate-keys"
+      hx-target="#validation-results"
+      hx-swap="innerHTML"
+      hx-indicator="#validate-spinner">
+      Validate Keys
+    </button>
+    <span id="validate-spinner" class="htmx-indicator validate-spinner">checking&hellip;</span>
+    <div id="validation-results"></div>
+  </div>
+
 </div>
 </body>
 </html>

@@ -613,3 +613,439 @@ class TestLoadKeys:
         result["providers"]["anthropic"]["api_key"] = "mutated"
         after = json.dumps(app_module._KEYS_DEFAULTS, sort_keys=True)
         assert original == after
+
+
+# ---------------------------------------------------------------------------
+# POST /api/validate-keys — endpoint tests
+# ---------------------------------------------------------------------------
+
+class TestValidateKeys:
+    """Tests for the POST /api/validate-keys endpoint.
+
+    All LLM calls are monkeypatched so no real network traffic is made.
+    The endpoint must return HTML (not JSON) with one row per provider.
+    """
+
+    def _write_keys(self, path, anthropic_key="sk-ant", openai_key="sk-oai", gemini_key="gm-key"):
+        data = {
+            "providers": {
+                "anthropic": {"api_key": anthropic_key, "model": "claude-haiku-4-5-20251001"},
+                "openai":    {"api_key": openai_key,    "model": "gpt-4o-mini"},
+                "gemini":    {"api_key": gemini_key,    "model": "gemini-1.5-flash"},
+            },
+            "preferred_provider": "anthropic",
+        }
+        with open(path, "w") as f:
+            json.dump(data, f)
+
+    # ------------------------------------------------------------------
+    # Endpoint basics
+    # ------------------------------------------------------------------
+
+    def test_returns_200(self, client, tmp_keys_path, monkeypatch):
+        self._write_keys(tmp_keys_path)
+        monkeypatch.setattr(app_module, "_validate_anthropic", lambda k, m: "valid")
+        monkeypatch.setattr(app_module, "_validate_openai",    lambda k, m: "valid")
+        monkeypatch.setattr(app_module, "_validate_gemini",    lambda k, m: "valid")
+        resp = client.post("/api/validate-keys")
+        assert resp.status_code == 200
+
+    def test_returns_html_not_json(self, client, tmp_keys_path, monkeypatch):
+        """HTMX expects HTML — the endpoint must not return a JSON object."""
+        self._write_keys(tmp_keys_path)
+        monkeypatch.setattr(app_module, "_validate_anthropic", lambda k, m: "valid")
+        monkeypatch.setattr(app_module, "_validate_openai",    lambda k, m: "valid")
+        monkeypatch.setattr(app_module, "_validate_gemini",    lambda k, m: "valid")
+        resp = client.post("/api/validate-keys")
+        body = resp.data.decode()
+        # Must contain HTML markup, not a raw JSON object.
+        assert "<" in body
+        assert body.strip()[0] != "{"
+
+    def test_shows_provider_names(self, client, tmp_keys_path, monkeypatch):
+        self._write_keys(tmp_keys_path)
+        monkeypatch.setattr(app_module, "_validate_anthropic", lambda k, m: "valid")
+        monkeypatch.setattr(app_module, "_validate_openai",    lambda k, m: "valid")
+        monkeypatch.setattr(app_module, "_validate_gemini",    lambda k, m: "valid")
+        resp = client.post("/api/validate-keys")
+        body = resp.data.decode()
+        assert "Anthropic" in body
+        assert "OpenAI" in body
+        assert "Gemini" in body
+
+    # ------------------------------------------------------------------
+    # State rendering — valid
+    # ------------------------------------------------------------------
+
+    def test_valid_state_shown_for_all_providers(self, client, tmp_keys_path, monkeypatch):
+        self._write_keys(tmp_keys_path)
+        monkeypatch.setattr(app_module, "_validate_anthropic", lambda k, m: "valid")
+        monkeypatch.setattr(app_module, "_validate_openai",    lambda k, m: "valid")
+        monkeypatch.setattr(app_module, "_validate_gemini",    lambda k, m: "valid")
+        resp = client.post("/api/validate-keys")
+        body = resp.data.decode()
+        assert "validation-valid" in body
+        assert body.count("validation-valid") == 3
+
+    # ------------------------------------------------------------------
+    # State rendering — invalid key
+    # ------------------------------------------------------------------
+
+    def test_invalid_key_state_shown(self, client, tmp_keys_path, monkeypatch):
+        self._write_keys(tmp_keys_path)
+        monkeypatch.setattr(app_module, "_validate_anthropic", lambda k, m: "invalid_key")
+        monkeypatch.setattr(app_module, "_validate_openai",    lambda k, m: "valid")
+        monkeypatch.setattr(app_module, "_validate_gemini",    lambda k, m: "valid")
+        resp = client.post("/api/validate-keys")
+        body = resp.data.decode()
+        assert "validation-invalid" in body
+        assert "Invalid key" in body
+
+    # ------------------------------------------------------------------
+    # State rendering — unknown model
+    # ------------------------------------------------------------------
+
+    def test_unknown_model_state_shown(self, client, tmp_keys_path, monkeypatch):
+        self._write_keys(tmp_keys_path)
+        monkeypatch.setattr(app_module, "_validate_anthropic", lambda k, m: "valid")
+        monkeypatch.setattr(app_module, "_validate_openai",    lambda k, m: "unknown_model")
+        monkeypatch.setattr(app_module, "_validate_gemini",    lambda k, m: "valid")
+        resp = client.post("/api/validate-keys")
+        body = resp.data.decode()
+        assert "validation-warning" in body
+        assert "Unknown model" in body
+
+    # ------------------------------------------------------------------
+    # State rendering — unreachable
+    # ------------------------------------------------------------------
+
+    def test_unreachable_state_shown(self, client, tmp_keys_path, monkeypatch):
+        self._write_keys(tmp_keys_path)
+        monkeypatch.setattr(app_module, "_validate_anthropic", lambda k, m: "valid")
+        monkeypatch.setattr(app_module, "_validate_openai",    lambda k, m: "valid")
+        monkeypatch.setattr(app_module, "_validate_gemini",    lambda k, m: "unreachable")
+        resp = client.post("/api/validate-keys")
+        body = resp.data.decode()
+        assert "validation-warning" in body
+        assert "Unreachable" in body
+
+    # ------------------------------------------------------------------
+    # State rendering — not configured
+    # ------------------------------------------------------------------
+
+    def test_not_configured_when_key_absent(self, client, tmp_keys_path, monkeypatch):
+        """Providers with no key set must show 'not_configured' without calling the validator."""
+        self._write_keys(tmp_keys_path, anthropic_key="", openai_key="", gemini_key="")
+        # Validators should never be called — patch to fail loudly if they are.
+        monkeypatch.setattr(app_module, "_validate_anthropic", lambda k, m: (_ for _ in ()).throw(AssertionError("should not be called")))
+        monkeypatch.setattr(app_module, "_validate_openai",    lambda k, m: (_ for _ in ()).throw(AssertionError("should not be called")))
+        monkeypatch.setattr(app_module, "_validate_gemini",    lambda k, m: (_ for _ in ()).throw(AssertionError("should not be called")))
+        resp = client.post("/api/validate-keys")
+        body = resp.data.decode()
+        assert "validation-muted" in body
+        assert body.count("validation-muted") == 3
+
+    def test_not_configured_shown_when_no_keys_file(self, client, tmp_keys_path, monkeypatch):
+        """When keys.json is absent all providers must show not_configured."""
+        # tmp_keys_path fixture points _KEYS_PATH to a non-existent file.
+        assert not os.path.exists(tmp_keys_path)
+        monkeypatch.setattr(app_module, "_validate_anthropic", lambda k, m: "valid")
+        monkeypatch.setattr(app_module, "_validate_openai",    lambda k, m: "valid")
+        monkeypatch.setattr(app_module, "_validate_gemini",    lambda k, m: "valid")
+        resp = client.post("/api/validate-keys")
+        body = resp.data.decode()
+        assert "validation-muted" in body
+        assert body.count("validation-muted") == 3
+
+    # ------------------------------------------------------------------
+    # Isolation — failure in one provider must not block others
+    # ------------------------------------------------------------------
+
+    def test_one_provider_failure_does_not_block_others(self, client, tmp_keys_path, monkeypatch):
+        """If a validator raises unexpectedly, the other providers still run."""
+        self._write_keys(tmp_keys_path)
+
+        def _bad_validator(key, model):
+            raise RuntimeError("network exploded")
+
+        monkeypatch.setattr(app_module, "_validate_anthropic", _bad_validator)
+        monkeypatch.setattr(app_module, "_validate_openai",    lambda k, m: "valid")
+        monkeypatch.setattr(app_module, "_validate_gemini",    lambda k, m: "valid")
+        resp = client.post("/api/validate-keys")
+        assert resp.status_code == 200
+        body = resp.data.decode()
+        # Anthropic should degrade to 'unreachable', others should still render.
+        assert "Unreachable" in body
+        assert "validation-valid" in body
+
+    # ------------------------------------------------------------------
+    # Security — no key values in response
+    # ------------------------------------------------------------------
+
+    def test_key_values_not_in_response(self, client, tmp_keys_path, monkeypatch):
+        """API key strings must never appear in the HTML partial."""
+        self._write_keys(
+            tmp_keys_path,
+            anthropic_key="sk-ant-supersecret",
+            openai_key="sk-oai-supersecret",
+            gemini_key="gm-supersecret",
+        )
+        monkeypatch.setattr(app_module, "_validate_anthropic", lambda k, m: "valid")
+        monkeypatch.setattr(app_module, "_validate_openai",    lambda k, m: "valid")
+        monkeypatch.setattr(app_module, "_validate_gemini",    lambda k, m: "valid")
+        resp = client.post("/api/validate-keys")
+        body = resp.data.decode()
+        assert "sk-ant-supersecret" not in body
+        assert "sk-oai-supersecret" not in body
+        assert "gm-supersecret" not in body
+
+
+# ---------------------------------------------------------------------------
+# _validate_* helper unit tests — error type classification
+# ---------------------------------------------------------------------------
+
+class TestValidateHelpers:
+    """Unit tests for the per-provider validator helpers.
+
+    All SDK calls are monkeypatched so no real network traffic is made.
+    We verify that the right exception types map to the right state strings.
+
+    Because anthropic.AuthenticationError / openai.AuthenticationError etc.
+    require an httpx.Response to construct, we patch the exception *classes*
+    themselves on the SDK modules to lightweight stand-ins that inherit from
+    the real class via __mro__ but bypass the expensive __init__. This keeps
+    the isinstance checks in the validators working correctly.
+    """
+
+    # ------------------------------------------------------------------
+    # Anthropic
+    # ------------------------------------------------------------------
+
+    def test_anthropic_valid(self, monkeypatch):
+        import anthropic as _anthropic
+
+        class _FakeMessages:
+            def create(self, **kwargs):
+                return object()
+
+        class _FakeClient:
+            messages = _FakeMessages()
+
+        monkeypatch.setattr(_anthropic, "Anthropic", lambda api_key: _FakeClient())
+        result = app_module._validate_anthropic("sk-key", "claude-haiku-4-5-20251001")
+        assert result == "valid"
+
+    def test_anthropic_invalid_key(self, monkeypatch):
+        """AuthenticationError maps to 'invalid_key'."""
+        import anthropic as _anthropic
+
+        # Patch AuthenticationError to a plain Exception subclass so we can
+        # raise it without needing a real httpx.Response.
+        class _FakeAuthError(Exception):
+            pass
+
+        class _FakeMessages:
+            def create(self, **kwargs):
+                raise _FakeAuthError()
+
+        class _FakeClient:
+            messages = _FakeMessages()
+
+        monkeypatch.setattr(_anthropic, "Anthropic", lambda api_key: _FakeClient())
+        monkeypatch.setattr(_anthropic, "AuthenticationError", _FakeAuthError)
+        monkeypatch.setattr(_anthropic, "PermissionDeniedError", type("_NeverRaised", (Exception,), {}))
+        monkeypatch.setattr(_anthropic, "NotFoundError", type("_NeverRaised2", (Exception,), {}))
+        result = app_module._validate_anthropic("sk-bad", "claude-haiku-4-5-20251001")
+        assert result == "invalid_key"
+
+    def test_anthropic_permission_denied_maps_to_invalid_key(self, monkeypatch):
+        """PermissionDeniedError (403) also maps to 'invalid_key'."""
+        import anthropic as _anthropic
+
+        class _FakePermError(Exception):
+            pass
+
+        class _FakeMessages:
+            def create(self, **kwargs):
+                raise _FakePermError()
+
+        class _FakeClient:
+            messages = _FakeMessages()
+
+        monkeypatch.setattr(_anthropic, "Anthropic", lambda api_key: _FakeClient())
+        monkeypatch.setattr(_anthropic, "AuthenticationError", type("_NeverRaised", (Exception,), {}))
+        monkeypatch.setattr(_anthropic, "PermissionDeniedError", _FakePermError)
+        monkeypatch.setattr(_anthropic, "NotFoundError", type("_NeverRaised2", (Exception,), {}))
+        result = app_module._validate_anthropic("sk-bad", "claude-haiku-4-5-20251001")
+        assert result == "invalid_key"
+
+    def test_anthropic_unknown_model(self, monkeypatch):
+        import anthropic as _anthropic
+
+        class _FakeNotFoundError(Exception):
+            pass
+
+        class _FakeMessages:
+            def create(self, **kwargs):
+                raise _FakeNotFoundError()
+
+        class _FakeClient:
+            messages = _FakeMessages()
+
+        monkeypatch.setattr(_anthropic, "Anthropic", lambda api_key: _FakeClient())
+        monkeypatch.setattr(_anthropic, "AuthenticationError", type("_NeverRaised", (Exception,), {}))
+        monkeypatch.setattr(_anthropic, "PermissionDeniedError", type("_NeverRaised2", (Exception,), {}))
+        monkeypatch.setattr(_anthropic, "NotFoundError", _FakeNotFoundError)
+        result = app_module._validate_anthropic("sk-key", "claude-unknown-xyz")
+        assert result == "unknown_model"
+
+    def test_anthropic_unreachable(self, monkeypatch):
+        import anthropic as _anthropic
+
+        class _FakeMessages:
+            def create(self, **kwargs):
+                raise ConnectionError("timeout")
+
+        class _FakeClient:
+            messages = _FakeMessages()
+
+        monkeypatch.setattr(_anthropic, "Anthropic", lambda api_key: _FakeClient())
+        # Real SDK error classes left in place — ConnectionError won't match them.
+        result = app_module._validate_anthropic("sk-key", "claude-haiku-4-5-20251001")
+        assert result == "unreachable"
+
+    # ------------------------------------------------------------------
+    # OpenAI
+    # ------------------------------------------------------------------
+
+    def test_openai_valid(self, monkeypatch):
+        import openai as _openai
+
+        class _FakeCompletions:
+            def create(self, **kwargs):
+                return object()
+
+        class _FakeChat:
+            completions = _FakeCompletions()
+
+        class _FakeClient:
+            chat = _FakeChat()
+
+        monkeypatch.setattr(_openai, "OpenAI", lambda api_key: _FakeClient())
+        result = app_module._validate_openai("sk-oai", "gpt-4o-mini")
+        assert result == "valid"
+
+    def test_openai_invalid_key(self, monkeypatch):
+        import openai as _openai
+
+        class _FakeAuthError(Exception):
+            pass
+
+        class _FakeCompletions:
+            def create(self, **kwargs):
+                raise _FakeAuthError()
+
+        class _FakeChat:
+            completions = _FakeCompletions()
+
+        class _FakeClient:
+            chat = _FakeChat()
+
+        monkeypatch.setattr(_openai, "OpenAI", lambda api_key: _FakeClient())
+        monkeypatch.setattr(_openai, "AuthenticationError", _FakeAuthError)
+        monkeypatch.setattr(_openai, "PermissionDeniedError", type("_NeverRaised", (Exception,), {}))
+        monkeypatch.setattr(_openai, "NotFoundError", type("_NeverRaised2", (Exception,), {}))
+        result = app_module._validate_openai("sk-bad", "gpt-4o-mini")
+        assert result == "invalid_key"
+
+    def test_openai_unknown_model(self, monkeypatch):
+        import openai as _openai
+
+        class _FakeNotFoundError(Exception):
+            pass
+
+        class _FakeCompletions:
+            def create(self, **kwargs):
+                raise _FakeNotFoundError()
+
+        class _FakeChat:
+            completions = _FakeCompletions()
+
+        class _FakeClient:
+            chat = _FakeChat()
+
+        monkeypatch.setattr(_openai, "OpenAI", lambda api_key: _FakeClient())
+        monkeypatch.setattr(_openai, "AuthenticationError", type("_NeverRaised", (Exception,), {}))
+        monkeypatch.setattr(_openai, "PermissionDeniedError", type("_NeverRaised2", (Exception,), {}))
+        monkeypatch.setattr(_openai, "NotFoundError", _FakeNotFoundError)
+        result = app_module._validate_openai("sk-oai", "gpt-unknown-xyz")
+        assert result == "unknown_model"
+
+    def test_openai_unreachable(self, monkeypatch):
+        import openai as _openai
+
+        class _FakeCompletions:
+            def create(self, **kwargs):
+                raise ConnectionError("timeout")
+
+        class _FakeChat:
+            completions = _FakeCompletions()
+
+        class _FakeClient:
+            chat = _FakeChat()
+
+        monkeypatch.setattr(_openai, "OpenAI", lambda api_key: _FakeClient())
+        result = app_module._validate_openai("sk-oai", "gpt-4o-mini")
+        assert result == "unreachable"
+
+    # ------------------------------------------------------------------
+    # Gemini
+    # ------------------------------------------------------------------
+
+    def test_gemini_valid(self, monkeypatch):
+        import google.generativeai as _genai
+
+        class _FakeModel:
+            def generate_content(self, content, generation_config=None):
+                return object()
+
+        monkeypatch.setattr(_genai, "configure", lambda api_key: None)
+        monkeypatch.setattr(_genai, "GenerativeModel", lambda model: _FakeModel())
+        result = app_module._validate_gemini("gm-key", "gemini-1.5-flash")
+        assert result == "valid"
+
+    def test_gemini_invalid_key(self, monkeypatch):
+        import google.generativeai as _genai
+
+        class _FakeModel:
+            def generate_content(self, content, generation_config=None):
+                raise Exception("API_KEY_INVALID — invalid api key provided")
+
+        monkeypatch.setattr(_genai, "configure", lambda api_key: None)
+        monkeypatch.setattr(_genai, "GenerativeModel", lambda model: _FakeModel())
+        result = app_module._validate_gemini("gm-bad", "gemini-1.5-flash")
+        assert result == "invalid_key"
+
+    def test_gemini_unreachable(self, monkeypatch):
+        import google.generativeai as _genai
+
+        class _FakeModel:
+            def generate_content(self, content, generation_config=None):
+                raise ConnectionError("network timeout")
+
+        monkeypatch.setattr(_genai, "configure", lambda api_key: None)
+        monkeypatch.setattr(_genai, "GenerativeModel", lambda model: _FakeModel())
+        result = app_module._validate_gemini("gm-key", "gemini-1.5-flash")
+        assert result == "unreachable"
+
+    def test_gemini_not_found(self, monkeypatch):
+        import google.generativeai as _genai
+
+        class _FakeModel:
+            def generate_content(self, content, generation_config=None):
+                raise Exception("404 models/gemini-bogus is not found")
+
+        monkeypatch.setattr(_genai, "configure", lambda api_key: None)
+        monkeypatch.setattr(_genai, "GenerativeModel", lambda model: _FakeModel())
+        result = app_module._validate_gemini("gm-key", "gemini-bogus")
+        assert result == "unknown_model"

@@ -19,7 +19,7 @@ import db
 # ---------------------------------------------------------------------------
 
 def make_listing(
-    adzuna_id: str = "test-001",
+    source_id: str = "test-001",
     title: str = "Software Engineer",
     company: str = "Acme Corp",
     location: str = "New York, NY",
@@ -44,18 +44,12 @@ def make_listing(
     job_type: str | None = None,
     model_used: str | None = None,
     source: str = "adzuna",
-    source_id: str | None = None,
     posted_at: str | None = None,
 ) -> dict:
-    """Return a complete listing dict suitable for db.insert_listing().
-
-    source_id defaults to adzuna_id when not supplied so that all existing
-    call sites continue to work without modification.
-    """
+    """Return a complete listing dict suitable for db.insert_listing()."""
     return {
-        "adzuna_id": adzuna_id,
         "source": source,
-        "source_id": source_id if source_id is not None else adzuna_id,
+        "source_id": source_id,
         "title": title,
         "company": company,
         "location": location,
@@ -139,7 +133,7 @@ class TestListingExists:
 
     def test_returns_true_after_insert(self):
         with TempDB() as path:
-            listing = make_listing(adzuna_id="exists-001")
+            listing = make_listing(source_id="exists-001")
             db.insert_listing(listing, db_path=path)
             conn = db.get_connection(path)
             try:
@@ -150,7 +144,7 @@ class TestListingExists:
     def test_returns_false_for_different_id(self):
         """Existence check is specific to the queried (source, source_id) pair."""
         with TempDB() as path:
-            db.insert_listing(make_listing(adzuna_id="abc"), db_path=path)
+            db.insert_listing(make_listing(source_id="abc"), db_path=path)
             conn = db.get_connection(path)
             try:
                 assert db.listing_exists(conn, "adzuna", "xyz") is False
@@ -166,43 +160,43 @@ class TestInsertAndFeed:
     def test_inserted_listing_appears_in_feed(self):
         """An inserted listing appears in get_feed() at the correct threshold."""
         with TempDB() as path:
-            db.insert_listing(make_listing(adzuna_id="feed-001", score=8.0), db_path=path)
+            db.insert_listing(make_listing(source_id="feed-001", score=8.0), db_path=path)
             results = db.get_feed(threshold=7.0, db_path=path)
-            ids = [r["adzuna_id"] for r in results]
+            ids = [r["source_id"] for r in results]
             assert "feed-001" in ids
 
     def test_listing_below_threshold_excluded(self):
         """Listings whose score is below the threshold do not appear in the feed."""
         with TempDB() as path:
-            db.insert_listing(make_listing(adzuna_id="low-score", score=4.0), db_path=path)
+            db.insert_listing(make_listing(source_id="low-score", score=4.0), db_path=path)
             results = db.get_feed(threshold=7.0, db_path=path)
-            ids = [r["adzuna_id"] for r in results]
+            ids = [r["source_id"] for r in results]
             assert "low-score" not in ids
 
     def test_dismissed_listing_excluded_from_feed(self):
         """Dismissed listings (dismissed=1) do not appear in get_feed()."""
         with TempDB() as path:
-            listing = make_listing(adzuna_id="dismissed-001", score=9.0, dismissed=1)
+            listing = make_listing(source_id="dismissed-001", score=9.0, dismissed=1)
             db.insert_listing(listing, db_path=path)
             results = db.get_feed(threshold=7.0, db_path=path)
-            ids = [r["adzuna_id"] for r in results]
+            ids = [r["source_id"] for r in results]
             assert "dismissed-001" not in ids
 
     def test_applied_listing_excluded_from_feed(self):
         """Applied listings (applied=1) do not appear in get_feed()."""
         with TempDB() as path:
-            listing = make_listing(adzuna_id="applied-001", score=9.0, applied=1)
+            listing = make_listing(source_id="applied-001", score=9.0, applied=1)
             db.insert_listing(listing, db_path=path)
             results = db.get_feed(threshold=7.0, db_path=path)
-            ids = [r["adzuna_id"] for r in results]
+            ids = [r["source_id"] for r in results]
             assert "applied-001" not in ids
 
     def test_feed_ordered_by_score_descending(self):
         """Feed results are sorted highest score first."""
         with TempDB() as path:
-            db.insert_listing(make_listing(adzuna_id="score-7", score=7.0), db_path=path)
-            db.insert_listing(make_listing(adzuna_id="score-9", score=9.0), db_path=path)
-            db.insert_listing(make_listing(adzuna_id="score-8", score=8.0), db_path=path)
+            db.insert_listing(make_listing(source_id="score-7", score=7.0), db_path=path)
+            db.insert_listing(make_listing(source_id="score-9", score=9.0), db_path=path)
+            db.insert_listing(make_listing(source_id="score-8", score=8.0), db_path=path)
             results = db.get_feed(threshold=7.0, db_path=path)
             scores = [r["score"] for r in results]
             assert scores == sorted(scores, reverse=True)
@@ -216,43 +210,43 @@ class TestFeedFilters:
     def test_search_filter_by_title(self):
         """get_feed(search=...) returns only listings whose title contains the term."""
         with TempDB() as path:
-            db.insert_listing(make_listing(adzuna_id="py-001", title="Python Developer", score=8.0), db_path=path)
-            db.insert_listing(make_listing(adzuna_id="java-001", title="Java Developer", score=8.0), db_path=path)
+            db.insert_listing(make_listing(source_id="py-001", title="Python Developer", score=8.0), db_path=path)
+            db.insert_listing(make_listing(source_id="java-001", title="Java Developer", score=8.0), db_path=path)
             results = db.get_feed(threshold=7.0, search="python", db_path=path)
-            ids = [r["adzuna_id"] for r in results]
+            ids = [r["source_id"] for r in results]
             assert "py-001" in ids
             assert "java-001" not in ids
 
     def test_search_filter_case_insensitive(self):
         """Search filter is case-insensitive."""
         with TempDB() as path:
-            db.insert_listing(make_listing(adzuna_id="ci-001", title="PYTHON DEVELOPER", score=8.0), db_path=path)
+            db.insert_listing(make_listing(source_id="ci-001", title="PYTHON DEVELOPER", score=8.0), db_path=path)
             results = db.get_feed(threshold=7.0, search="python", db_path=path)
-            assert any(r["adzuna_id"] == "ci-001" for r in results)
+            assert any(r["source_id"] == "ci-001" for r in results)
 
     def test_search_filter_by_company(self):
         """Search filter also matches on company name."""
         with TempDB() as path:
             db.insert_listing(
-                make_listing(adzuna_id="co-001", title="Engineer", company="Acme Corp", score=8.0),
+                make_listing(source_id="co-001", title="Engineer", company="Acme Corp", score=8.0),
                 db_path=path,
             )
             results = db.get_feed(threshold=7.0, search="acme", db_path=path)
-            assert any(r["adzuna_id"] == "co-001" for r in results)
+            assert any(r["source_id"] == "co-001" for r in results)
 
     def test_remote_only_filter(self):
         """remote_only=True returns only listings whose location contains 'remote'."""
         with TempDB() as path:
             db.insert_listing(
-                make_listing(adzuna_id="remote-001", location="Remote, US", score=8.0),
+                make_listing(source_id="remote-001", location="Remote, US", score=8.0),
                 db_path=path,
             )
             db.insert_listing(
-                make_listing(adzuna_id="office-001", location="New York, NY", score=8.0),
+                make_listing(source_id="office-001", location="New York, NY", score=8.0),
                 db_path=path,
             )
             results = db.get_feed(threshold=7.0, remote_only=True, db_path=path)
-            ids = [r["adzuna_id"] for r in results]
+            ids = [r["source_id"] for r in results]
             assert "remote-001" in ids
             assert "office-001" not in ids
 
@@ -260,11 +254,11 @@ class TestFeedFilters:
         """remote_only filter matches 'REMOTE' in location regardless of case."""
         with TempDB() as path:
             db.insert_listing(
-                make_listing(adzuna_id="remote-upper", location="REMOTE ONLY", score=8.0),
+                make_listing(source_id="remote-upper", location="REMOTE ONLY", score=8.0),
                 db_path=path,
             )
             results = db.get_feed(threshold=7.0, remote_only=True, db_path=path)
-            assert any(r["adzuna_id"] == "remote-upper" for r in results)
+            assert any(r["source_id"] == "remote-upper" for r in results)
 
 
 # ---------------------------------------------------------------------------
@@ -275,26 +269,26 @@ class TestBookmarks:
     def test_bookmarked_listing_appears_in_get_bookmarks(self):
         """set_bookmarked(id, 1) causes the listing to appear in get_bookmarks()."""
         with TempDB() as path:
-            db.insert_listing(make_listing(adzuna_id="bm-001", score=8.0), db_path=path)
+            db.insert_listing(make_listing(source_id="bm-001", score=8.0), db_path=path)
             conn = db.get_connection(path)
             try:
-                row = conn.execute("SELECT id FROM listings WHERE adzuna_id = 'bm-001'").fetchone()
+                row = conn.execute("SELECT id FROM listings WHERE source_id = 'bm-001'").fetchone()
                 listing_id = row["id"]
             finally:
                 conn.close()
 
             db.set_bookmarked(listing_id, 1, db_path=path)
             bookmarks = db.get_bookmarks(db_path=path)
-            ids = [r["adzuna_id"] for r in bookmarks]
+            ids = [r["source_id"] for r in bookmarks]
             assert "bm-001" in ids
 
     def test_unbookmark_removes_from_bookmarks(self):
         """set_bookmarked(id, 0) removes a previously bookmarked listing."""
         with TempDB() as path:
-            db.insert_listing(make_listing(adzuna_id="bm-002", score=8.0), db_path=path)
+            db.insert_listing(make_listing(source_id="bm-002", score=8.0), db_path=path)
             conn = db.get_connection(path)
             try:
-                row = conn.execute("SELECT id FROM listings WHERE adzuna_id = 'bm-002'").fetchone()
+                row = conn.execute("SELECT id FROM listings WHERE source_id = 'bm-002'").fetchone()
                 listing_id = row["id"]
             finally:
                 conn.close()
@@ -302,15 +296,15 @@ class TestBookmarks:
             db.set_bookmarked(listing_id, 1, db_path=path)
             db.set_bookmarked(listing_id, 0, db_path=path)
             bookmarks = db.get_bookmarks(db_path=path)
-            ids = [r["adzuna_id"] for r in bookmarks]
+            ids = [r["source_id"] for r in bookmarks]
             assert "bm-002" not in ids
 
     def test_non_bookmarked_listing_absent_from_bookmarks(self):
         """A listing that has never been bookmarked does not appear in get_bookmarks()."""
         with TempDB() as path:
-            db.insert_listing(make_listing(adzuna_id="bm-003", score=8.0, bookmarked=0), db_path=path)
+            db.insert_listing(make_listing(source_id="bm-003", score=8.0, bookmarked=0), db_path=path)
             bookmarks = db.get_bookmarks(db_path=path)
-            ids = [r["adzuna_id"] for r in bookmarks]
+            ids = [r["source_id"] for r in bookmarks]
             assert "bm-003" not in ids
 
 
@@ -322,17 +316,17 @@ class TestDismissed:
     def test_dismissed_listing_disappears_from_feed(self):
         """After set_dismissed(id, 1) the listing no longer appears in get_feed()."""
         with TempDB() as path:
-            db.insert_listing(make_listing(adzuna_id="dm-001", score=9.0), db_path=path)
+            db.insert_listing(make_listing(source_id="dm-001", score=9.0), db_path=path)
             conn = db.get_connection(path)
             try:
-                row = conn.execute("SELECT id FROM listings WHERE adzuna_id = 'dm-001'").fetchone()
+                row = conn.execute("SELECT id FROM listings WHERE source_id = 'dm-001'").fetchone()
                 listing_id = row["id"]
             finally:
                 conn.close()
 
             db.set_dismissed(listing_id, 1, db_path=path)
             feed = db.get_feed(threshold=7.0, db_path=path)
-            ids = [r["adzuna_id"] for r in feed]
+            ids = [r["source_id"] for r in feed]
             assert "dm-001" not in ids
 
 
@@ -344,34 +338,34 @@ class TestApplied:
     def test_applied_listing_appears_in_get_applied(self):
         """set_applied(id, 1) causes the listing to appear in get_applied()."""
         with TempDB() as path:
-            db.insert_listing(make_listing(adzuna_id="ap-001", score=8.0), db_path=path)
+            db.insert_listing(make_listing(source_id="ap-001", score=8.0), db_path=path)
             conn = db.get_connection(path)
             try:
-                row = conn.execute("SELECT id FROM listings WHERE adzuna_id = 'ap-001'").fetchone()
+                row = conn.execute("SELECT id FROM listings WHERE source_id = 'ap-001'").fetchone()
                 listing_id = row["id"]
             finally:
                 conn.close()
 
             db.set_applied(listing_id, 1, db_path=path)
             applied = db.get_applied(db_path=path)
-            ids = [r["adzuna_id"] for r in applied]
+            ids = [r["source_id"] for r in applied]
             assert "ap-001" in ids
 
     def test_unapplied_listing_absent_from_get_applied(self):
         """A listing with applied=0 does not appear in get_applied()."""
         with TempDB() as path:
-            db.insert_listing(make_listing(adzuna_id="ap-002", score=8.0, applied=0), db_path=path)
+            db.insert_listing(make_listing(source_id="ap-002", score=8.0, applied=0), db_path=path)
             applied = db.get_applied(db_path=path)
-            ids = [r["adzuna_id"] for r in applied]
+            ids = [r["source_id"] for r in applied]
             assert "ap-002" not in ids
 
     def test_unapply_removes_from_applied(self):
         """set_applied(id, 0) removes a listing from get_applied()."""
         with TempDB() as path:
-            db.insert_listing(make_listing(adzuna_id="ap-003", score=8.0), db_path=path)
+            db.insert_listing(make_listing(source_id="ap-003", score=8.0), db_path=path)
             conn = db.get_connection(path)
             try:
-                row = conn.execute("SELECT id FROM listings WHERE adzuna_id = 'ap-003'").fetchone()
+                row = conn.execute("SELECT id FROM listings WHERE source_id = 'ap-003'").fetchone()
                 listing_id = row["id"]
             finally:
                 conn.close()
@@ -379,7 +373,7 @@ class TestApplied:
             db.set_applied(listing_id, 1, db_path=path)
             db.set_applied(listing_id, 0, db_path=path)
             applied = db.get_applied(db_path=path)
-            ids = [r["adzuna_id"] for r in applied]
+            ids = [r["source_id"] for r in applied]
             assert "ap-003" not in ids
 
 
@@ -393,32 +387,32 @@ class TestJsonColumns:
         with TempDB() as path:
             skills = ["Python", "FastAPI", "PostgreSQL"]
             db.insert_listing(
-                make_listing(adzuna_id="json-001", matched_skills=skills),
+                make_listing(source_id="json-001", matched_skills=skills),
                 db_path=path,
             )
             feed = db.get_feed(threshold=7.0, db_path=path)
-            row = next(r for r in feed if r["adzuna_id"] == "json-001")
+            row = next(r for r in feed if r["source_id"] == "json-001")
             assert row["matched_skills"] == skills
 
     def test_empty_list_round_trips(self):
         """An empty list for concerns is stored and retrieved as an empty list."""
         with TempDB() as path:
             db.insert_listing(
-                make_listing(adzuna_id="json-002", concerns=[]),
+                make_listing(source_id="json-002", concerns=[]),
                 db_path=path,
             )
             feed = db.get_feed(threshold=7.0, db_path=path)
-            row = next(r for r in feed if r["adzuna_id"] == "json-002")
+            row = next(r for r in feed if r["source_id"] == "json-002")
             assert row["concerns"] == []
 
     def test_none_skills_retrieved_as_empty_list(self):
         """When matched_skills is None on insert it is retrieved as an empty list."""
         with TempDB() as path:
-            listing = make_listing(adzuna_id="json-003")
+            listing = make_listing(source_id="json-003")
             listing["matched_skills"] = None
             db.insert_listing(listing, db_path=path)
             feed = db.get_feed(threshold=7.0, db_path=path)
-            row = next(r for r in feed if r["adzuna_id"] == "json-003")
+            row = next(r for r in feed if r["source_id"] == "json-003")
             assert row["matched_skills"] == []
 
 
@@ -431,13 +425,13 @@ class TestModelUsed:
         """model_used set in the listing dict is persisted and readable."""
         with TempDB() as path:
             db.insert_listing(
-                make_listing(adzuna_id="mu-001", score=8.0, model_used="claude-haiku-4-5"),
+                make_listing(source_id="mu-001", score=8.0, model_used="claude-haiku-4-5"),
                 db_path=path,
             )
             conn = db.get_connection(path)
             try:
                 row = conn.execute(
-                    "SELECT model_used FROM listings WHERE adzuna_id = 'mu-001'"
+                    "SELECT model_used FROM listings WHERE source_id = 'mu-001'"
                 ).fetchone()
                 assert row["model_used"] == "claude-haiku-4-5"
             finally:
@@ -447,11 +441,11 @@ class TestModelUsed:
         """If model_used is not supplied to insert_listing(), it is stored as NULL."""
         with TempDB() as path:
             # make_listing() passes model_used=None by default.
-            db.insert_listing(make_listing(adzuna_id="mu-002", score=8.0), db_path=path)
+            db.insert_listing(make_listing(source_id="mu-002", score=8.0), db_path=path)
             conn = db.get_connection(path)
             try:
                 row = conn.execute(
-                    "SELECT model_used FROM listings WHERE adzuna_id = 'mu-002'"
+                    "SELECT model_used FROM listings WHERE source_id = 'mu-002'"
                 ).fetchone()
                 assert row["model_used"] is None
             finally:
@@ -460,7 +454,7 @@ class TestModelUsed:
     def test_update_score_writes_model_used(self):
         """update_score() persists model_used from score_data."""
         with TempDB() as path:
-            db.insert_listing(make_listing(adzuna_id="mu-003", score=None, seen=0), db_path=path)
+            db.insert_listing(make_listing(source_id="mu-003", score=None, seen=0), db_path=path)
             db.update_score(
                 "adzuna",
                 "mu-003",
@@ -479,7 +473,7 @@ class TestModelUsed:
             conn = db.get_connection(path)
             try:
                 row = conn.execute(
-                    "SELECT model_used, seen FROM listings WHERE adzuna_id = 'mu-003'"
+                    "SELECT model_used, seen FROM listings WHERE source_id = 'mu-003'"
                 ).fetchone()
                 assert row["model_used"] == "claude-haiku-4-5"
                 assert row["seen"] == 1
@@ -489,7 +483,7 @@ class TestModelUsed:
     def test_update_score_model_used_none_when_absent(self):
         """update_score() stores NULL for model_used when not present in score_data."""
         with TempDB() as path:
-            db.insert_listing(make_listing(adzuna_id="mu-004", score=None, seen=0), db_path=path)
+            db.insert_listing(make_listing(source_id="mu-004", score=None, seen=0), db_path=path)
             db.update_score(
                 "adzuna",
                 "mu-004",
@@ -508,7 +502,7 @@ class TestModelUsed:
             conn = db.get_connection(path)
             try:
                 row = conn.execute(
-                    "SELECT model_used FROM listings WHERE adzuna_id = 'mu-004'"
+                    "SELECT model_used FROM listings WHERE source_id = 'mu-004'"
                 ).fetchone()
                 assert row["model_used"] is None
             finally:
@@ -525,14 +519,20 @@ class TestModelUsed:
             finally:
                 conn.close()
 
-    def test_migration_on_existing_db_without_column(self):
-        """init_db() adds model_used to a database that was created without it."""
+    def test_migration_on_existing_db_without_model_used(self):
+        """init_db() on a legacy adzuna_id-based table adds model_used via migration.
+
+        Simulates a pre-migration database that has ``adzuna_id`` but no
+        ``model_used`` column, then verifies that init_db() migrates the
+        schema to include ``model_used`` (via the Path B table-copy migration).
+        """
+        import sqlite3 as _sqlite3
         with TempDB() as path:
-            # Manually drop the column by recreating the table without it, then
-            # run init_db() again to trigger the migration path.
+            # Drop the freshly created table and replace it with a minimal
+            # legacy schema that has adzuna_id and no model_used.
             conn = db.get_connection(path)
             try:
-                conn.execute("ALTER TABLE listings RENAME TO listings_old")
+                conn.execute("DROP TABLE listings")
                 conn.execute("""
                     CREATE TABLE listings (
                         id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -544,14 +544,13 @@ class TestModelUsed:
                 """)
                 conn.execute(
                     "INSERT INTO listings (adzuna_id, title, score, seen) "
-                    "SELECT adzuna_id, title, score, seen FROM listings_old"
+                    "VALUES ('legacy-mu-001', 'Old Job', 8.0, 1)"
                 )
-                conn.execute("DROP TABLE listings_old")
                 conn.commit()
             finally:
                 conn.close()
 
-            # Now run init_db() — the migration loop should add model_used.
+            # Run init_db() — Path B migration copies to canonical schema.
             db.init_db(path)
 
             conn = db.get_connection(path)
@@ -559,6 +558,9 @@ class TestModelUsed:
                 cols = conn.execute("PRAGMA table_info(listings)").fetchall()
                 col_names = [c["name"] for c in cols]
                 assert "model_used" in col_names
+                assert "source_id" in col_names
+                # adzuna_id must no longer appear after the migration.
+                assert "adzuna_id" not in col_names
             finally:
                 conn.close()
 
@@ -573,7 +575,7 @@ class TestCrossSourceDedup:
         and False when the source differs (same source_id, different source is not a dupe)."""
         with TempDB() as path:
             db.insert_listing(
-                make_listing(adzuna_id="cs-001", source="adzuna", source_id="cs-001"),
+                make_listing(source_id="cs-001", source="adzuna"),
                 db_path=path,
             )
             conn = db.get_connection(path)
@@ -590,7 +592,7 @@ class TestCrossSourceDedup:
         with TempDB() as path:
             db.insert_listing(
                 make_listing(
-                    adzuna_id="url-001",
+                    source_id="url-001",
                     redirect_url="https://example.com/job/unique-url",
                 ),
                 db_path=path,
@@ -608,9 +610,8 @@ class TestCrossSourceDedup:
         with TempDB() as path:
             db.insert_listing(
                 make_listing(
-                    adzuna_id="xsd-001",
-                    source="adzuna",
                     source_id="xsd-001",
+                    source="adzuna",
                     redirect_url="https://example.com/job/shared-url",
                 ),
                 db_path=path,
@@ -630,9 +631,8 @@ class TestCrossSourceDedup:
         with TempDB() as path:
             db.insert_listing(
                 make_listing(
-                    adzuna_id="dup-id-001",
-                    source="adzuna",
                     source_id="job-42",
+                    source="adzuna",
                     redirect_url="https://adzuna.com/job/42",
                 ),
                 db_path=path,
@@ -640,9 +640,8 @@ class TestCrossSourceDedup:
             # Different source, same source_id — should succeed without raising.
             db.insert_listing(
                 make_listing(
-                    adzuna_id="dup-id-002",
-                    source="remotive",
                     source_id="job-42",
+                    source="remotive",
                     redirect_url="https://remotive.com/job/42",
                 ),
                 db_path=path,
@@ -662,15 +661,14 @@ class TestCrossSourceDedup:
 
 class TestMigrationBackfill:
     def test_backfill_sets_source_and_source_id_for_existing_rows(self):
-        """init_db() backfills source='adzuna' and source_id=adzuna_id for rows
-        that were inserted before the multi-source migration columns existed."""
+        """init_db() migrates a legacy adzuna_id-based table: renames the column
+        to source_id and backfills source='adzuna' for all existing rows."""
         with TempDB() as path:
-            # Simulate a pre-migration database: recreate the table without
-            # source/source_id columns, insert a row, then run init_db() to
-            # trigger the migration + backfill path.
+            # Simulate a pre-migration database that has adzuna_id but no
+            # source or source_id columns (Path B in init_db).
             conn = db.get_connection(path)
             try:
-                conn.execute("ALTER TABLE listings RENAME TO listings_old")
+                conn.execute("DROP TABLE listings")
                 conn.execute("""
                     CREATE TABLE listings (
                         id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -706,18 +704,17 @@ class TestMigrationBackfill:
                     "INSERT INTO listings (adzuna_id, title, score, seen) "
                     "VALUES ('legacy-001', 'Old Job', 7.0, 1)"
                 )
-                conn.execute("DROP TABLE listings_old")
                 conn.commit()
             finally:
                 conn.close()
 
-            # Run init_db() — this adds source/source_id columns and backfills.
+            # Run init_db() — Path B migration copies adzuna_id → source_id.
             db.init_db(path)
 
             conn = db.get_connection(path)
             try:
                 row = conn.execute(
-                    "SELECT source, source_id FROM listings WHERE adzuna_id = 'legacy-001'"
+                    "SELECT source, source_id FROM listings WHERE source_id = 'legacy-001'"
                 ).fetchone()
                 assert row["source"] == "adzuna"
                 assert row["source_id"] == "legacy-001"
@@ -755,15 +752,15 @@ class TestGetLastFetchTime:
         import datetime
         with TempDB() as path:
             db.insert_listing(
-                make_listing(adzuna_id="a1", fetched_at="2026-01-10T08:00:00Z"),
+                make_listing(source_id="a1", fetched_at="2026-01-10T08:00:00Z"),
                 db_path=path,
             )
             db.insert_listing(
-                make_listing(adzuna_id="a2", source_id="a2", fetched_at="2026-03-20T14:30:00Z"),
+                make_listing(source_id="a2", fetched_at="2026-03-20T14:30:00Z"),
                 db_path=path,
             )
             db.insert_listing(
-                make_listing(adzuna_id="a3", source_id="a3", fetched_at="2026-02-05T00:00:00Z"),
+                make_listing(source_id="a3", fetched_at="2026-02-05T00:00:00Z"),
                 db_path=path,
             )
             result = db.get_last_fetch_time(db_path=path)
@@ -806,24 +803,24 @@ class TestPostedAt:
         """posted_at set on insert is present in the row returned by get_feed()."""
         with TempDB() as path:
             db.insert_listing(
-                make_listing(adzuna_id="pa-001", score=8.0, posted_at="2026-03-01T09:00:00Z"),
+                make_listing(source_id="pa-001", score=8.0, posted_at="2026-03-01T09:00:00Z"),
                 db_path=path,
             )
             feed = db.get_feed(threshold=7.0, db_path=path)
-            row = next(r for r in feed if r["adzuna_id"] == "pa-001")
+            row = next(r for r in feed if r["source_id"] == "pa-001")
             assert row["posted_at"] == "2026-03-01T09:00:00Z"
 
     def test_posted_at_null_when_not_supplied(self):
         """When posted_at is not in the listing dict, it is stored as NULL."""
         with TempDB() as path:
-            listing = make_listing(adzuna_id="pa-002", score=8.0)
+            listing = make_listing(source_id="pa-002", score=8.0)
             # Ensure the key is absent (not just None) to test the setdefault path.
             listing.pop("posted_at", None)
             db.insert_listing(listing, db_path=path)
             conn = db.get_connection(path)
             try:
                 row = conn.execute(
-                    "SELECT posted_at FROM listings WHERE adzuna_id = 'pa-002'"
+                    "SELECT posted_at FROM listings WHERE source_id = 'pa-002'"
                 ).fetchone()
                 assert row["posted_at"] is None
             finally:
@@ -833,47 +830,47 @@ class TestPostedAt:
         """get_feed(sort='date_posted') returns listings ordered by posted_at DESC."""
         with TempDB() as path:
             db.insert_listing(
-                make_listing(adzuna_id="pa-old", score=9.0, posted_at="2026-01-01T00:00:00Z"),
+                make_listing(source_id="pa-old", score=9.0, posted_at="2026-01-01T00:00:00Z"),
                 db_path=path,
             )
             db.insert_listing(
-                make_listing(adzuna_id="pa-new", score=7.0, source_id="pa-new",
+                make_listing(source_id="pa-new", score=7.0,
                              posted_at="2026-03-20T00:00:00Z"),
                 db_path=path,
             )
             db.insert_listing(
-                make_listing(adzuna_id="pa-mid", score=8.0, source_id="pa-mid",
+                make_listing(source_id="pa-mid", score=8.0,
                              posted_at="2026-02-15T00:00:00Z"),
                 db_path=path,
             )
             results = db.get_feed(threshold=7.0, sort="date_posted", db_path=path)
-            ids = [r["adzuna_id"] for r in results]
+            ids = [r["source_id"] for r in results]
             assert ids == ["pa-new", "pa-mid", "pa-old"]
 
     def test_sort_default_still_orders_by_score(self):
         """get_feed() without sort param still orders by score DESC."""
         with TempDB() as path:
             db.insert_listing(
-                make_listing(adzuna_id="sc-low", score=7.5, posted_at="2026-03-25T00:00:00Z"),
+                make_listing(source_id="sc-low", score=7.5, posted_at="2026-03-25T00:00:00Z"),
                 db_path=path,
             )
             db.insert_listing(
-                make_listing(adzuna_id="sc-high", score=9.5, source_id="sc-high",
+                make_listing(source_id="sc-high", score=9.5,
                              posted_at="2026-01-01T00:00:00Z"),
                 db_path=path,
             )
             results = db.get_feed(threshold=7.0, db_path=path)
-            ids = [r["adzuna_id"] for r in results]
+            ids = [r["source_id"] for r in results]
             # sc-high has the higher score so should appear first despite older posted_at
             assert ids[0] == "sc-high"
 
     def test_migration_adds_posted_at_to_existing_db(self):
         """init_db() adds posted_at to a database that was created without it."""
         with TempDB() as path:
-            # Simulate a pre-migration database by dropping the column via table rename.
+            # Simulate a pre-migration database (legacy adzuna_id schema, no posted_at).
             conn = db.get_connection(path)
             try:
-                conn.execute("ALTER TABLE listings RENAME TO listings_old")
+                conn.execute("DROP TABLE listings")
                 conn.execute("""
                     CREATE TABLE listings (
                         id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -885,9 +882,8 @@ class TestPostedAt:
                 """)
                 conn.execute(
                     "INSERT INTO listings (adzuna_id, title, score, seen) "
-                    "SELECT adzuna_id, title, score, seen FROM listings_old"
+                    "VALUES ('legacy-pa-001', 'Old Job', 8.0, 1)"
                 )
-                conn.execute("DROP TABLE listings_old")
                 conn.commit()
             finally:
                 conn.close()
@@ -910,16 +906,16 @@ class TestPostedAt:
         """
         with TempDB() as path:
             db.insert_listing(
-                make_listing(adzuna_id="null-pa", score=8.0, posted_at=None),
+                make_listing(source_id="null-pa", score=8.0, posted_at=None),
                 db_path=path,
             )
             db.insert_listing(
-                make_listing(adzuna_id="real-pa", score=7.5, source_id="real-pa",
+                make_listing(source_id="real-pa", score=7.5,
                              posted_at="2026-03-01T00:00:00Z"),
                 db_path=path,
             )
             results = db.get_feed(threshold=7.0, sort="date_posted", db_path=path)
-            ids = [r["adzuna_id"] for r in results]
+            ids = [r["source_id"] for r in results]
             # real-pa has a non-NULL posted_at so should sort first (DESC puts NULLs last)
             assert ids[0] == "real-pa"
             assert "null-pa" in ids

@@ -3,15 +3,16 @@ job_sources/ — Pluggable job source provider package for Job Matcher.
 
 Public API
 ----------
-* ``JobSource``      — abstract base class; import from here or ``job_sources.base``
-* ``AdzunaClient``   — Adzuna Jobs API backend
-* ``HimalayasClient`` — Himalayas Jobs API backend
-* ``USAJobsClient``  — USAJobs API backend
-* ``TheMuseClient``  — The Muse API backend
-* ``RemotiveClient`` — Remotive remote-jobs API backend
-* ``SOURCES``        — registry mapping source name strings to their classes
-* ``make_source()``  — factory that reads ``config["job_source"]`` and returns
-                       the right ``JobSource`` instance
+* ``JobSource``        — abstract base class; import from here or ``job_sources.base``
+* ``AdzunaClient``     — Adzuna Jobs API backend
+* ``HimalayasClient``  — Himalayas Jobs API backend
+* ``RemoteOKClient``   — RemoteOK jobs API backend
+* ``USAJobsClient``    — USAJobs API backend
+* ``TheMuseClient``    — The Muse API backend
+* ``RemotiveClient``   — Remotive remote-jobs API backend
+* ``SOURCES``          — registry mapping source name strings to their classes
+* ``make_source()``    — factory that reads ``config["job_source"]`` and returns
+                         the right ``JobSource`` instance
 
 Usage
 -----
@@ -28,6 +29,7 @@ from __future__ import annotations
 from .base import JobSource
 from .adzuna import AdzunaClient
 from .himalayas import HimalayasClient
+from .remoteok import RemoteOKClient
 from .usajobs import USAJobsClient
 from .the_muse import TheMuseClient
 from .remotive import RemotiveClient
@@ -36,6 +38,7 @@ __all__ = [
     "JobSource",
     "AdzunaClient",
     "HimalayasClient",
+    "RemoteOKClient",
     "USAJobsClient",
     "TheMuseClient",
     "RemotiveClient",
@@ -50,6 +53,7 @@ __all__ = [
 SOURCES: dict[str, type[JobSource]] = {
     "adzuna": AdzunaClient,
     "himalayas": HimalayasClient,
+    "remoteok": RemoteOKClient,
     "usajobs": USAJobsClient,
     "the_muse": TheMuseClient,
     "remotive": RemotiveClient,

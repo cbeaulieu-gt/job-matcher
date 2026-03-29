@@ -5,6 +5,7 @@ Public API
 ----------
 * ``JobSource``      — abstract base class; import from here or ``job_sources.base``
 * ``AdzunaClient``   — Adzuna Jobs API backend
+* ``HimalayasClient`` — Himalayas Jobs API backend
 * ``USAJobsClient``  — USAJobs API backend
 * ``TheMuseClient``  — The Muse API backend
 * ``RemotiveClient`` — Remotive remote-jobs API backend
@@ -26,6 +27,7 @@ from __future__ import annotations
 
 from .base import JobSource
 from .adzuna import AdzunaClient
+from .himalayas import HimalayasClient
 from .usajobs import USAJobsClient
 from .the_muse import TheMuseClient
 from .remotive import RemotiveClient
@@ -33,6 +35,7 @@ from .remotive import RemotiveClient
 __all__ = [
     "JobSource",
     "AdzunaClient",
+    "HimalayasClient",
     "USAJobsClient",
     "TheMuseClient",
     "RemotiveClient",
@@ -46,6 +49,7 @@ __all__ = [
 
 SOURCES: dict[str, type[JobSource]] = {
     "adzuna": AdzunaClient,
+    "himalayas": HimalayasClient,
     "usajobs": USAJobsClient,
     "the_muse": TheMuseClient,
     "remotive": RemotiveClient,

@@ -24,13 +24,14 @@
       Rescore all
     </label>
     <label class="filter-toggle ingest-opt">
-      Hours:&nbsp;<input
-        type="number"
-        name="hours"
-        value="25"
-        min="1"
-        max="720"
-        class="ingest-hours-input">
+      Period:&nbsp;<select name="hours" class="filter-select ingest-period-select">
+        <option value="25">Last 24 hours</option>
+        <option value="73">Last 3 days</option>
+        <option value="169" selected>Last 7 days</option>
+        <option value="337">Last 14 days</option>
+        <option value="721">Last 30 days</option>
+        <option value="1441">Last 60 days</option>
+      </select>
     </label>
   </form>
 </div>

@@ -1,0 +1,37 @@
+{% if running %}
+{# ── Running state — polls itself every 2 s until the job finishes ── #}
+<div id="ingest-status"
+     class="ingest-status-running"
+     hx-get="/ingest/status"
+     hx-trigger="every 2s"
+     hx-target="#ingest-status"
+     hx-swap="outerHTML">
+  <span class="ingest-spinner" aria-hidden="true"></span>
+  Running&hellip;
+</div>
+{% else %}
+{# ── Idle state — form with optional --hours / --rescore controls ── #}
+<div id="ingest-status" class="ingest-trigger-wrap">
+  <form class="ingest-form"
+        hx-post="/ingest/trigger"
+        hx-target="#ingest-status"
+        hx-swap="outerHTML">
+    <button type="submit" class="btn btn-ingest">
+      Run Ingestion
+    </button>
+    <label class="filter-toggle ingest-opt">
+      <input type="checkbox" name="rescore" value="1">
+      Rescore all
+    </label>
+    <label class="filter-toggle ingest-opt">
+      Hours:&nbsp;<input
+        type="number"
+        name="hours"
+        value="25"
+        min="1"
+        max="720"
+        class="ingest-hours-input">
+    </label>
+  </form>
+</div>
+{% endif %}

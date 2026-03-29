@@ -110,6 +110,7 @@ def init_db(db_path: str = _DEFAULT_DB_PATH) -> None:
                     tokens_output       INTEGER,
                     applied             INTEGER DEFAULT 0,
                     job_type            TEXT,
+                    posted_at           TEXT,
                     UNIQUE(source, source_id)
                 )
             """)
@@ -152,6 +153,7 @@ def init_db(db_path: str = _DEFAULT_DB_PATH) -> None:
                     tokens_output       INTEGER,
                     applied             INTEGER DEFAULT 0,
                     job_type            TEXT,
+                    posted_at           TEXT,
                     UNIQUE(source, source_id)
                 )
             """)
@@ -176,7 +178,8 @@ def init_db(db_path: str = _DEFAULT_DB_PATH) -> None:
                     created_at, fetched_at,
                     score, matched_skills, missing_skills, concerns, verdict,
                     bookmarked, dismissed, seen,
-                    model_used, tokens_input, tokens_output, applied, job_type
+                    model_used, tokens_input, tokens_output, applied, job_type,
+                    posted_at
                 )
                 SELECT
                     COALESCE({_col('source')}, 'adzuna'),
@@ -196,7 +199,8 @@ def init_db(db_path: str = _DEFAULT_DB_PATH) -> None:
                     {_col('model_used')},
                     {_col('tokens_input')}, {_col('tokens_output')},
                     COALESCE({_col('applied')}, 0),
-                    {_col('job_type')}
+                    {_col('job_type')},
+                    {_col('posted_at')}
                 FROM listings_legacy
             """)
 
@@ -245,6 +249,7 @@ def init_db(db_path: str = _DEFAULT_DB_PATH) -> None:
                     tokens_output       INTEGER,
                     applied             INTEGER DEFAULT 0,
                     job_type            TEXT,
+                    posted_at           TEXT,
                     UNIQUE(source, source_id)
                 )
             """)
@@ -266,7 +271,8 @@ def init_db(db_path: str = _DEFAULT_DB_PATH) -> None:
                     created_at, fetched_at,
                     score, matched_skills, missing_skills, concerns, verdict,
                     bookmarked, dismissed, seen,
-                    model_used, tokens_input, tokens_output, applied, job_type
+                    model_used, tokens_input, tokens_output, applied, job_type,
+                    posted_at
                 )
                 SELECT
                     COALESCE(source, 'adzuna'),
@@ -286,7 +292,8 @@ def init_db(db_path: str = _DEFAULT_DB_PATH) -> None:
                     {_col('model_used')},
                     {_col('tokens_input')}, {_col('tokens_output')},
                     COALESCE({_col('applied')}, 0),
-                    {_col('job_type')}
+                    {_col('job_type')},
+                    {_col('posted_at')}
                 FROM listings_legacy
             """)
 
@@ -308,6 +315,7 @@ def init_db(db_path: str = _DEFAULT_DB_PATH) -> None:
                 ("applied",       "INTEGER DEFAULT 0"),
                 ("job_type",      "TEXT"),
                 ("model_used",    "TEXT"),
+                ("posted_at",     "TEXT"),
             ):
                 try:
                     conn.execute(
@@ -387,6 +395,7 @@ def insert_listing(listing: dict, db_path: str = _DEFAULT_DB_PATH) -> None:
     row.setdefault("model_used", None)
     row.setdefault("source", "adzuna")
     row.setdefault("source_id", None)
+    row.setdefault("posted_at", None)
 
     conn = get_connection(db_path)
     try:
@@ -404,7 +413,8 @@ def insert_listing(listing: dict, db_path: str = _DEFAULT_DB_PATH) -> None:
                 tokens_input, tokens_output,
                 applied,
                 job_type,
-                model_used
+                model_used,
+                posted_at
             ) VALUES (
                 :source, :source_id,
                 :title, :company, :location,
@@ -417,7 +427,8 @@ def insert_listing(listing: dict, db_path: str = _DEFAULT_DB_PATH) -> None:
                 :tokens_input, :tokens_output,
                 :applied,
                 :job_type,
-                :model_used
+                :model_used,
+                :posted_at
             )
             """,
             row,
@@ -510,9 +521,13 @@ def get_feed(
     remote_only: bool = False,
     search: str | None = None,
     job_type: str | None = None,
+    sort: str | None = None,
     db_path: str = _DEFAULT_DB_PATH,
 ) -> list[dict]:
-    """Return listings with score >= effective threshold and dismissed = 0, ordered by score DESC.
+    """Return listings with score >= effective threshold and dismissed = 0.
+
+    Default ordering is by score DESC. Pass ``sort='date_posted'`` to order by
+    ``posted_at DESC`` instead (newest listings first).
 
     Listings whose score is NULL are excluded (they have not been scored yet).
 
@@ -522,6 +537,8 @@ def get_feed(
         remote_only: If True, restricts to listings whose location contains "remote".
         search:      If provided, filters by title or company containing the search string.
         job_type:    If provided, restricts to listings whose job_type matches (case-insensitive).
+        sort:        Optional sort key. ``'date_posted'`` orders by posted_at DESC;
+                     any other value (or None) falls back to score DESC.
         db_path:     Path to the SQLite database file.
     """
     effective = min_score if min_score is not None else threshold
@@ -543,10 +560,15 @@ def get_feed(
 
     where_clause = " AND ".join(conditions)
 
+    if sort == "date_posted":
+        order_clause = "posted_at DESC"
+    else:
+        order_clause = "score DESC"
+
     conn = get_connection(db_path)
     try:
         rows = conn.execute(
-            f"SELECT * FROM listings WHERE {where_clause} ORDER BY score DESC",
+            f"SELECT * FROM listings WHERE {where_clause} ORDER BY {order_clause}",
             params,
         ).fetchall()
         return [_deserialise_row(r) for r in rows]

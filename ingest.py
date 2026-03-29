@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+from logging.handlers import RotatingFileHandler
 import math
 import os
 import re
@@ -36,10 +37,25 @@ from providers import build_provider_chain, LLMProvider
 _DB_PATH: str = os.environ.get("DB_PATH", "jobs.db")
 
 # ---------------------------------------------------------------------------
-# Logger
+# Logging — console + rotating file (derived from DB_PATH location)
 # ---------------------------------------------------------------------------
+_db_abs   = os.path.abspath(os.environ.get("DB_PATH", "jobs.db"))
+_LOG_DIR  = os.path.join(os.path.dirname(_db_abs), "logs")
+_LOG_FILE = os.path.join(_LOG_DIR, "ingest.log")
+os.makedirs(_LOG_DIR, exist_ok=True)
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+_console_fmt = logging.Formatter("%(levelname)s %(name)s: %(message)s")
+_file_fmt    = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+_console_handler = logging.StreamHandler()
+_console_handler.setFormatter(_console_fmt)
+
+_file_handler = RotatingFileHandler(
+    _LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+)
+_file_handler.setFormatter(_file_fmt)
+
+logging.basicConfig(level=logging.INFO, handlers=[_console_handler, _file_handler])
 logger = logging.getLogger("ingest")
 
 # ---------------------------------------------------------------------------

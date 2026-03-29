@@ -46,79 +46,283 @@ def get_connection(db_path: str = _DEFAULT_DB_PATH) -> sqlite3.Connection:
 # ---------------------------------------------------------------------------
 
 def init_db(db_path: str = _DEFAULT_DB_PATH) -> None:
-    """Create the listings table if it does not already exist.
+    """Create or migrate the listings table.
 
-    Safe to call on every startup — uses CREATE TABLE IF NOT EXISTS.
+    Fresh databases get the current schema with ``source_id`` (no ``adzuna_id``
+    legacy column).  Existing databases are migrated via a table-copy so that
+    the ``adzuna_id`` column is effectively renamed to ``source_id`` and the
+    ``UNIQUE(source, source_id)`` constraint replaces the old per-column
+    ``UNIQUE`` on ``adzuna_id``.
+
+    Migration strategy
+    ------------------
+    SQLite ``ALTER TABLE RENAME COLUMN`` was added in 3.25.0 (2018).  We use
+    the portable table-copy approach instead so the migration works on any
+    SQLite version:
+
+    1. If the table does not exist at all → create it with the current schema.
+    2. If it exists with ``adzuna_id`` (legacy) → copy into a new table that
+       uses ``source_id``, backfilling ``source='adzuna'`` for NULL rows, then
+       drop the old table and rename.
+    3. If it already has ``source_id`` (migrated or fresh) → apply any missing
+       ``ADD COLUMN`` migrations for columns added after the initial migration,
+       then ensure the unique index exists.
+
+    All paths are idempotent — safe to call on every startup.
     """
     conn = get_connection(db_path)
     try:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS listings (
-                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-                adzuna_id           TEXT UNIQUE NOT NULL,
-                title               TEXT,
-                company             TEXT,
-                location            TEXT,
-                salary_min          INTEGER,
-                salary_max          INTEGER,
-                salary_is_predicted INTEGER,
-                contract_type       TEXT,
-                contract_time       TEXT,
-                description         TEXT,
-                redirect_url        TEXT,
-                created_at          TEXT,
-                fetched_at          TEXT,
-                score               REAL,
-                matched_skills      TEXT,
-                missing_skills      TEXT,
-                concerns            TEXT,
-                verdict             TEXT,
-                bookmarked          INTEGER DEFAULT 0,
-                dismissed           INTEGER DEFAULT 0,
-                seen                INTEGER DEFAULT 0,
-                model_used          TEXT
-            )
-        """)
+        # Inspect current schema to choose the migration path.
+        cols_info = conn.execute("PRAGMA table_info(listings)").fetchall()
+        existing_cols = {row["name"] for row in cols_info}
 
-        # NOTE: Poor-man's migration — ALTER TABLE raises OperationalError if the column
-        # already exists, which we suppress. This means a genuine DB error (e.g. disk full)
-        # during ALTER would also be silently swallowed. Acceptable for a single-user local
-        # tool; a proper migration table would be needed at larger scale.
-        # Migrate existing databases — SQLite does not support
-        # ALTER TABLE ... ADD COLUMN IF NOT EXISTS, so we catch the
-        # OperationalError that is raised when the column already exists.
-        for column, typedef in (
-            ("tokens_input", "INTEGER"),
-            ("tokens_output", "INTEGER"),
-            ("applied", "INTEGER DEFAULT 0"),
-            ("job_type", "TEXT"),
-            ("model_used", "TEXT"),
-            ("source", "TEXT"),
-            ("source_id", "TEXT"),
-            ("posted_at", "TEXT"),
-        ):
-            try:
-                conn.execute(
-                    f"ALTER TABLE listings ADD COLUMN {column} {typedef}"
+        if not existing_cols:
+            # ------------------------------------------------------------
+            # Path A: fresh database — create canonical schema directly.
+            # ------------------------------------------------------------
+            conn.execute("""
+                CREATE TABLE listings (
+                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source              TEXT NOT NULL DEFAULT 'adzuna',
+                    source_id           TEXT NOT NULL,
+                    title               TEXT,
+                    company             TEXT,
+                    location            TEXT,
+                    salary_min          REAL,
+                    salary_max          REAL,
+                    salary_is_predicted INTEGER,
+                    contract_type       TEXT,
+                    contract_time       TEXT,
+                    description         TEXT,
+                    redirect_url        TEXT,
+                    created_at          TEXT,
+                    fetched_at          TEXT,
+                    score               REAL,
+                    matched_skills      TEXT,
+                    missing_skills      TEXT,
+                    concerns            TEXT,
+                    verdict             TEXT,
+                    bookmarked          INTEGER DEFAULT 0,
+                    dismissed           INTEGER DEFAULT 0,
+                    seen                INTEGER DEFAULT 0,
+                    model_used          TEXT,
+                    tokens_input        INTEGER,
+                    tokens_output       INTEGER,
+                    applied             INTEGER DEFAULT 0,
+                    job_type            TEXT,
+                    posted_at           TEXT,
+                    UNIQUE(source, source_id)
                 )
-            except sqlite3.OperationalError:
-                pass  # Column already present; nothing to do.
+            """)
 
-        # Backfill source and source_id for rows that were inserted before the
-        # multi-source migration.  The WHERE clause makes this idempotent —
-        # rows already backfilled are skipped on subsequent init_db() calls.
-        conn.execute(
-            "UPDATE listings SET source = 'adzuna', source_id = adzuna_id "
-            "WHERE source IS NULL"
-        )
+        elif "adzuna_id" in existing_cols and "source_id" not in existing_cols:
+            # ------------------------------------------------------------
+            # Path B: legacy database — table has adzuna_id but not source_id.
+            # Use table-copy migration to rename the column and add the new
+            # composite unique constraint.
+            # ------------------------------------------------------------
+            conn.execute("ALTER TABLE listings RENAME TO listings_legacy")
 
-        # Unique index on (source, source_id) replaces the adzuna_id-only
-        # uniqueness guarantee for cross-source dedup.  IF NOT EXISTS makes
-        # this safe to run on every startup.
-        conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS uq_source_source_id "
-            "ON listings(source, source_id)"
-        )
+            conn.execute("""
+                CREATE TABLE listings (
+                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source              TEXT NOT NULL DEFAULT 'adzuna',
+                    source_id           TEXT NOT NULL,
+                    title               TEXT,
+                    company             TEXT,
+                    location            TEXT,
+                    salary_min          REAL,
+                    salary_max          REAL,
+                    salary_is_predicted INTEGER,
+                    contract_type       TEXT,
+                    contract_time       TEXT,
+                    description         TEXT,
+                    redirect_url        TEXT,
+                    created_at          TEXT,
+                    fetched_at          TEXT,
+                    score               REAL,
+                    matched_skills      TEXT,
+                    missing_skills      TEXT,
+                    concerns            TEXT,
+                    verdict             TEXT,
+                    bookmarked          INTEGER DEFAULT 0,
+                    dismissed           INTEGER DEFAULT 0,
+                    seen                INTEGER DEFAULT 0,
+                    model_used          TEXT,
+                    tokens_input        INTEGER,
+                    tokens_output       INTEGER,
+                    applied             INTEGER DEFAULT 0,
+                    job_type            TEXT,
+                    posted_at           TEXT,
+                    UNIQUE(source, source_id)
+                )
+            """)
+
+            # Determine which optional columns exist in the legacy table so
+            # we can safely SELECT them (columns added later may be absent).
+            legacy_cols = {
+                row["name"] for row in
+                conn.execute("PRAGMA table_info(listings_legacy)").fetchall()
+            }
+
+            def _col(name: str, default: str = "NULL") -> str:
+                """Return the column expression for the INSERT … SELECT."""
+                return name if name in legacy_cols else default
+
+            conn.execute(f"""
+                INSERT INTO listings (
+                    source, source_id, title, company, location,
+                    salary_min, salary_max, salary_is_predicted,
+                    contract_type, contract_time,
+                    description, redirect_url,
+                    created_at, fetched_at,
+                    score, matched_skills, missing_skills, concerns, verdict,
+                    bookmarked, dismissed, seen,
+                    model_used, tokens_input, tokens_output, applied, job_type,
+                    posted_at
+                )
+                SELECT
+                    COALESCE({_col('source')}, 'adzuna'),
+                    {_col('adzuna_id', "''")},
+                    {_col('title')}, {_col('company')}, {_col('location')},
+                    {_col('salary_min')}, {_col('salary_max')},
+                    {_col('salary_is_predicted')},
+                    {_col('contract_type')}, {_col('contract_time')},
+                    {_col('description')}, {_col('redirect_url')},
+                    {_col('created_at')}, {_col('fetched_at')},
+                    {_col('score')},
+                    {_col('matched_skills')}, {_col('missing_skills')},
+                    {_col('concerns')}, {_col('verdict')},
+                    COALESCE({_col('bookmarked')}, 0),
+                    COALESCE({_col('dismissed')}, 0),
+                    COALESCE({_col('seen')}, 0),
+                    {_col('model_used')},
+                    {_col('tokens_input')}, {_col('tokens_output')},
+                    COALESCE({_col('applied')}, 0),
+                    {_col('job_type')},
+                    {_col('posted_at')}
+                FROM listings_legacy
+            """)
+
+            conn.execute("DROP TABLE listings_legacy")
+
+        elif "adzuna_id" in existing_cols and "source_id" in existing_cols:
+            # ------------------------------------------------------------
+            # Path C: partially migrated database — both columns exist.
+            # Backfill source_id from adzuna_id where still NULL, then
+            # do a full table-copy to drop adzuna_id cleanly.
+            # ------------------------------------------------------------
+            conn.execute(
+                "UPDATE listings SET source = 'adzuna', source_id = adzuna_id "
+                "WHERE source IS NULL OR source_id IS NULL"
+            )
+
+            conn.execute("ALTER TABLE listings RENAME TO listings_legacy")
+
+            conn.execute("""
+                CREATE TABLE listings (
+                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source              TEXT NOT NULL DEFAULT 'adzuna',
+                    source_id           TEXT NOT NULL,
+                    title               TEXT,
+                    company             TEXT,
+                    location            TEXT,
+                    salary_min          REAL,
+                    salary_max          REAL,
+                    salary_is_predicted INTEGER,
+                    contract_type       TEXT,
+                    contract_time       TEXT,
+                    description         TEXT,
+                    redirect_url        TEXT,
+                    created_at          TEXT,
+                    fetched_at          TEXT,
+                    score               REAL,
+                    matched_skills      TEXT,
+                    missing_skills      TEXT,
+                    concerns            TEXT,
+                    verdict             TEXT,
+                    bookmarked          INTEGER DEFAULT 0,
+                    dismissed           INTEGER DEFAULT 0,
+                    seen                INTEGER DEFAULT 0,
+                    model_used          TEXT,
+                    tokens_input        INTEGER,
+                    tokens_output       INTEGER,
+                    applied             INTEGER DEFAULT 0,
+                    job_type            TEXT,
+                    posted_at           TEXT,
+                    UNIQUE(source, source_id)
+                )
+            """)
+
+            legacy_cols = {
+                row["name"] for row in
+                conn.execute("PRAGMA table_info(listings_legacy)").fetchall()
+            }
+
+            def _col(name: str, default: str = "NULL") -> str:  # type: ignore[misc]
+                return name if name in legacy_cols else default
+
+            conn.execute(f"""
+                INSERT INTO listings (
+                    source, source_id, title, company, location,
+                    salary_min, salary_max, salary_is_predicted,
+                    contract_type, contract_time,
+                    description, redirect_url,
+                    created_at, fetched_at,
+                    score, matched_skills, missing_skills, concerns, verdict,
+                    bookmarked, dismissed, seen,
+                    model_used, tokens_input, tokens_output, applied, job_type,
+                    posted_at
+                )
+                SELECT
+                    COALESCE(source, 'adzuna'),
+                    source_id,
+                    {_col('title')}, {_col('company')}, {_col('location')},
+                    {_col('salary_min')}, {_col('salary_max')},
+                    {_col('salary_is_predicted')},
+                    {_col('contract_type')}, {_col('contract_time')},
+                    {_col('description')}, {_col('redirect_url')},
+                    {_col('created_at')}, {_col('fetched_at')},
+                    {_col('score')},
+                    {_col('matched_skills')}, {_col('missing_skills')},
+                    {_col('concerns')}, {_col('verdict')},
+                    COALESCE({_col('bookmarked')}, 0),
+                    COALESCE({_col('dismissed')}, 0),
+                    COALESCE({_col('seen')}, 0),
+                    {_col('model_used')},
+                    {_col('tokens_input')}, {_col('tokens_output')},
+                    COALESCE({_col('applied')}, 0),
+                    {_col('job_type')},
+                    {_col('posted_at')}
+                FROM listings_legacy
+            """)
+
+            conn.execute("DROP TABLE listings_legacy")
+
+        else:
+            # ------------------------------------------------------------
+            # Path D: already-migrated database with source_id (no adzuna_id).
+            # Apply any ADD COLUMN migrations for columns added after the
+            # initial migration landed.
+            # NOTE: ALTER TABLE raises OperationalError if the column already
+            # exists; we suppress it to keep this idempotent.  A genuine DB
+            # error (e.g. disk full) during ALTER would also be swallowed —
+            # acceptable for a single-user local tool.
+            # ------------------------------------------------------------
+            for column, typedef in (
+                ("tokens_input",  "INTEGER"),
+                ("tokens_output", "INTEGER"),
+                ("applied",       "INTEGER DEFAULT 0"),
+                ("job_type",      "TEXT"),
+                ("model_used",    "TEXT"),
+                ("posted_at",     "TEXT"),
+            ):
+                try:
+                    conn.execute(
+                        f"ALTER TABLE listings ADD COLUMN {column} {typedef}"
+                    )
+                except sqlite3.OperationalError:
+                    pass  # Column already present; nothing to do.
 
         conn.commit()
     finally:
@@ -189,7 +393,7 @@ def insert_listing(listing: dict, db_path: str = _DEFAULT_DB_PATH) -> None:
     row.setdefault("applied", 0)
     row.setdefault("job_type", None)
     row.setdefault("model_used", None)
-    row.setdefault("source", None)
+    row.setdefault("source", "adzuna")
     row.setdefault("source_id", None)
     row.setdefault("posted_at", None)
 
@@ -198,7 +402,8 @@ def insert_listing(listing: dict, db_path: str = _DEFAULT_DB_PATH) -> None:
         conn.execute(
             """
             INSERT INTO listings (
-                adzuna_id, title, company, location,
+                source, source_id,
+                title, company, location,
                 salary_min, salary_max, salary_is_predicted,
                 contract_type, contract_time,
                 description, redirect_url,
@@ -209,11 +414,10 @@ def insert_listing(listing: dict, db_path: str = _DEFAULT_DB_PATH) -> None:
                 applied,
                 job_type,
                 model_used,
-                source,
-                source_id,
                 posted_at
             ) VALUES (
-                :adzuna_id, :title, :company, :location,
+                :source, :source_id,
+                :title, :company, :location,
                 :salary_min, :salary_max, :salary_is_predicted,
                 :contract_type, :contract_time,
                 :description, :redirect_url,
@@ -224,8 +428,6 @@ def insert_listing(listing: dict, db_path: str = _DEFAULT_DB_PATH) -> None:
                 :applied,
                 :job_type,
                 :model_used,
-                :source,
-                :source_id,
                 :posted_at
             )
             """,

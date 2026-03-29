@@ -25,14 +25,12 @@ import logging
 import math
 import os
 import re
-import time
 from datetime import datetime, timezone
-from typing import Iterator
-
 import requests
 from bs4 import BeautifulSoup
 
 import db
+from job_sources import make_source, AdzunaClient  # noqa: F401 — AdzunaClient re-exported for backward compat
 from providers import build_provider_chain, LLMProvider
 
 _DB_PATH: str = os.environ.get("DB_PATH", "jobs.db")
@@ -201,178 +199,10 @@ def load_profile(path: str = "profile.json") -> dict:
 # ---------------------------------------------------------------------------
 # Adzuna API client
 # ---------------------------------------------------------------------------
-
-_ADZUNA_BASE = "https://api.adzuna.com/v1/api/jobs/{country}/search/{page}"
-
-
-class AdzunaClient:
-    """Wraps the Adzuna Jobs REST API.
-
-    Handles pagination, rate-limit retry, and result normalisation.
-    """
-
-    def __init__(self, app_id: str, app_key: str, config: dict) -> None:
-        """Store credentials and the search section of config.
-
-        Args:
-            app_id: Adzuna application ID.
-            app_key: Adzuna application key.
-            config: Full config dict; the ``search`` sub-dict is used for
-                query parameters.
-        """
-        self._app_id = app_id
-        self._app_key = app_key
-        self._search = config["search"]
-
-    def fetch_page(self, page: int) -> list[dict]:
-        """Fetch a single page of Adzuna results.
-
-        On HTTP 429 retries up to three times with exponential back-off
-        (2 s, 4 s, 8 s).  Any other non-200 response is logged and returns
-        an empty list.  Missing ``results`` key in the response also returns
-        an empty list.
-
-        Args:
-            page: 1-based page number.
-
-        Returns:
-            List of normalised listing dicts.
-        """
-        country = self._search["country"]
-        url = _ADZUNA_BASE.format(country=country, page=page)
-
-        params: dict[str, str | int] = {
-            "app_id": self._app_id,
-            "app_key": self._app_key,
-            "what": self._search["what"],
-            "results_per_page": self._search["results_per_page"],
-            "content-type": "application/json",
-        }
-
-        # Optional params — only add if present and non-empty/non-zero.
-        where = self._search.get("where", "")
-        if where:
-            params["where"] = where
-
-        salary_min = self._search.get("salary_min", 0)
-        if salary_min:
-            params["salary_min"] = salary_min
-
-        distance = self._search.get("distance", 0)
-        if distance:
-            params["distance"] = distance
-
-        max_days_old = self._search.get("max_days_old", 0)
-        if max_days_old:
-            params["max_days_old"] = max_days_old
-
-        backoff_delays = [2, 4, 8]
-        response: requests.Response | None = None
-
-        for attempt, delay in enumerate([0] + backoff_delays):
-            if delay:
-                logger.warning(
-                    "Rate-limited by Adzuna (429); retrying in %d s (attempt %d/3)",
-                    delay,
-                    attempt,
-                )
-                time.sleep(delay)
-
-            try:
-                response = requests.get(url, params=params, timeout=15)
-            except requests.RequestException as exc:
-                logger.warning("Adzuna request failed: %s", exc)
-                return []
-
-            if response.status_code == 200:
-                break
-            if response.status_code == 429:
-                if attempt < len(backoff_delays):
-                    continue
-                # Exhausted retries.
-                logger.warning(
-                    "Adzuna rate limit not resolved after %d retries; page %d skipped",
-                    len(backoff_delays),
-                    page,
-                )
-                return []
-            else:
-                logger.warning(
-                    "Adzuna returned HTTP %d for page %d; skipping",
-                    response.status_code,
-                    page,
-                )
-                return []
-
-        if response is None:
-            return []
-
-        try:
-            data = response.json()
-        except ValueError as exc:
-            logger.warning("Adzuna response is not valid JSON: %s", exc)
-            return []
-
-        raw_results: list[dict] = data.get("results", [])
-        if not raw_results:
-            return []
-
-        return [self._normalise(r) for r in raw_results]
-
-    @staticmethod
-    def _normalise(raw: dict) -> dict:
-        """Map an Adzuna result dict to the canonical listing shape.
-
-        Args:
-            raw: A single entry from the Adzuna ``results`` array.
-
-        Returns:
-            Dict with keys matching the ``listings`` table columns.
-        """
-        company_obj = raw.get("company") or {}
-        location_obj = raw.get("location") or {}
-
-        salary_is_predicted_raw = raw.get("salary_is_predicted", 0)
-        # Adzuna returns this as "1"/"0" or bool; coerce to int.
-        try:
-            salary_is_predicted = int(salary_is_predicted_raw)
-        except (TypeError, ValueError):
-            salary_is_predicted = 0
-
-        return {
-            "adzuna_id": raw.get("id", ""),
-            "source": "adzuna",
-            "source_id": str(raw.get("id", "")),
-            "title": raw.get("title", ""),
-            "company": company_obj.get("display_name", "") if isinstance(company_obj, dict) else "",
-            "location": location_obj.get("display_name", "") if isinstance(location_obj, dict) else "",
-            "salary_min": raw.get("salary_min"),
-            "salary_max": raw.get("salary_max"),
-            "salary_is_predicted": salary_is_predicted,
-            "contract_type": raw.get("contract_type", "") or "",
-            "contract_time": raw.get("contract_time", "") or "",
-            "description": raw.get("description", "") or "",
-            "redirect_url": raw.get("redirect_url", "") or "",
-            "created_at": raw.get("created", "") or "",
-            "posted_at": raw.get("created") or None,
-        }
-
-    def pages(self) -> Iterator[list[dict]]:
-        """Yield normalised listing lists, one per page.
-
-        Iterates from page 1 up to ``max_pages`` (inclusive). Stops early
-        if a page returns zero results.
-
-        Yields:
-            Lists of normalised listing dicts.
-        """
-        max_pages: int = self._search["max_pages"]
-        for page in range(1, max_pages + 1):
-            results = self.fetch_page(page)
-            if not results:
-                logger.info("Page %d returned 0 results; stopping early", page)
-                return
-            yield results
+# AdzunaClient has moved to job_sources/adzuna.py and now implements the
+# JobSource protocol.  It is re-exported here via the import at the top of
+# this module so any code that imported AdzunaClient from ingest continues
+# to work without modification.
 
 
 # ---------------------------------------------------------------------------
@@ -742,11 +572,7 @@ def run(
 
     db.init_db(db_path=_DB_PATH)
 
-    client = AdzunaClient(
-        app_id=config["adzuna_app_id"],
-        app_key=config["adzuna_app_key"],
-        config=config,
-    )
+    client = make_source(config)
 
     keys = load_keys(keys_path)
     chain = build_provider_chain(keys)

@@ -7,6 +7,7 @@ Public API
 * ``AdzunaClient``   — Adzuna Jobs API backend
 * ``USAJobsClient``  — USAJobs API backend
 * ``TheMuseClient``  — The Muse API backend
+* ``RemotiveClient`` — Remotive remote-jobs API backend
 * ``SOURCES``        — registry mapping source name strings to their classes
 * ``make_source()``  — factory that reads ``config["job_source"]`` and returns
                        the right ``JobSource`` instance
@@ -27,12 +28,14 @@ from .base import JobSource
 from .adzuna import AdzunaClient
 from .usajobs import USAJobsClient
 from .the_muse import TheMuseClient
+from .remotive import RemotiveClient
 
 __all__ = [
     "JobSource",
     "AdzunaClient",
     "USAJobsClient",
     "TheMuseClient",
+    "RemotiveClient",
     "SOURCES",
     "make_source",
 ]
@@ -45,6 +48,7 @@ SOURCES: dict[str, type[JobSource]] = {
     "adzuna": AdzunaClient,
     "usajobs": USAJobsClient,
     "the_muse": TheMuseClient,
+    "remotive": RemotiveClient,
 }
 
 
@@ -75,9 +79,6 @@ def make_source(config: dict) -> JobSource:
             f"Registered sources: {list(SOURCES)}."
         )
 
-    # Adzuna needs app_id / app_key pulled from the top-level config.
-    # Each source class is responsible for extracting what it needs from
-    # the full config dict — the factory just passes it through unchanged.
     if source_name == "adzuna":
         return cls(
             app_id=config["adzuna_app_id"],

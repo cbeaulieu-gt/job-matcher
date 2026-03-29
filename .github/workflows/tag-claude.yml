@@ -10,7 +10,7 @@ jobs:
   respond:
     uses: cbeaulieu-gt/github-actions/.github/workflows/claude-tag-respond.yml@v1.1.0
     permissions:
-      contents: read
+      contents: write
       issues: write
       pull-requests: write
       id-token: write

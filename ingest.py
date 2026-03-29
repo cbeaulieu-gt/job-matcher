@@ -37,26 +37,35 @@ from providers import build_provider_chain, LLMProvider
 _DB_PATH: str = os.environ.get("DB_PATH", "jobs.db")
 
 # ---------------------------------------------------------------------------
-# Logging — console + rotating file (derived from DB_PATH location)
+# Logging
 # ---------------------------------------------------------------------------
-_db_abs   = os.path.abspath(os.environ.get("DB_PATH", "jobs.db"))
-_LOG_DIR  = os.path.join(os.path.dirname(_db_abs), "logs")
-_LOG_FILE = os.path.join(_LOG_DIR, "ingest.log")
-os.makedirs(_LOG_DIR, exist_ok=True)
-
-_console_fmt = logging.Formatter("%(levelname)s %(name)s: %(message)s")
-_file_fmt    = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
-
-_console_handler = logging.StreamHandler()
-_console_handler.setFormatter(_console_fmt)
-
-_file_handler = RotatingFileHandler(
-    _LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
-)
-_file_handler.setFormatter(_file_fmt)
-
-logging.basicConfig(level=logging.INFO, handlers=[_console_handler, _file_handler])
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("ingest")
+
+
+def _configure_file_logging() -> None:
+    """Attach a RotatingFileHandler to the root logger.
+
+    Called only from the __main__ entry point so that importing this module
+    during tests does not create directories or open file handles.
+
+    The log directory is derived from DB_PATH so it co-locates with the
+    database: C:\\ProgramData\\JobMatcher\\data\\logs\\ingest.log in production,
+    or ./logs/ingest.log when DB_PATH is unset (local dev).
+    """
+    db_abs   = os.path.abspath(os.environ.get("DB_PATH", "jobs.db"))
+    log_dir  = os.path.join(os.path.dirname(db_abs), "logs")
+    log_file = os.path.join(log_dir, "ingest.log")
+    os.makedirs(log_dir, exist_ok=True)
+
+    handler = RotatingFileHandler(
+        log_file, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+    )
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    )
+    logging.getLogger().addHandler(handler)
+    logger.info("Logging to file: %s", log_file)
 
 # ---------------------------------------------------------------------------
 # Config and profile loading
@@ -877,6 +886,8 @@ if __name__ == "__main__":
         ),
     )
     args = parser.parse_args()
+
+    _configure_file_logging()   # <-- ADD THIS LINE
 
     if args.rescore:
         rescore(config_path=args.config, profile_path=args.profile)

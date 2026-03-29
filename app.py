@@ -471,11 +471,14 @@ def ingest_trigger():
     if rescore:
         cmd.append("--rescore")
 
-    _ingest_process = subprocess.Popen(
-        cmd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    try:
+        _ingest_process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except (OSError, PermissionError) as e:
+        return jsonify({"error": f"Failed to start ingestion: {e}"}), 500
 
     resp = make_response(_render_ingest_running(), 202)
     resp.headers["Content-Type"] = "text/html"

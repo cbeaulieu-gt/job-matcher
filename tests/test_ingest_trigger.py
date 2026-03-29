@@ -143,6 +143,14 @@ class TestIngestTrigger:
         client.post("/ingest/trigger")
         assert spawned[0][0] == sys.executable
 
+    def test_popen_failure_returns_500(self, client, monkeypatch):
+        """If Popen raises OSError (e.g. executable not found), the route returns 500."""
+        def failing_popen(cmd, **kwargs):
+            raise OSError("python not found")
+        monkeypatch.setattr(app_module.subprocess, "Popen", failing_popen)
+        resp = client.post("/ingest/trigger")
+        assert resp.status_code == 500
+
 
 # ---------------------------------------------------------------------------
 # POST /ingest/trigger — concurrent run rejected

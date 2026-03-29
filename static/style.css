@@ -1262,3 +1262,101 @@ body {
   0%, 100% { opacity: 1;   transform: scale(1); }
   50%       { opacity: 0.3; transform: scale(0.7); }
 }
+
+/* ------------------------------------------------------------
+   Settings page — error notice (mirrors .save-notice)
+   ------------------------------------------------------------ */
+.save-error {
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  letter-spacing: 0.04em;
+  color: var(--score-low-text);
+  background: var(--score-low-bg);
+  border: 1px solid var(--score-low-border);
+  border-radius: var(--radius-sm);
+  padding: 7px 14px;
+  margin-bottom: 20px;
+  max-width: 600px;
+}
+
+/* ------------------------------------------------------------
+   Settings page — key validation section
+   ------------------------------------------------------------ */
+.validate-section {
+  margin-top: 24px;
+  max-width: 600px;
+}
+
+.btn-validate {
+  margin-bottom: 12px;
+}
+
+/* HTMX in-flight indicator — hidden by default, shown during request */
+.validate-spinner {
+  display: none;
+  font-family: var(--font-mono);
+  font-size: 0.70rem;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin-left: 8px;
+}
+
+.htmx-request .validate-spinner {
+  display: inline;
+}
+
+/* Result rows */
+.validation-results {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.validation-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+}
+
+.validation-provider {
+  width: 90px;
+  color: var(--text-secondary);
+  letter-spacing: 0.03em;
+  flex-shrink: 0;
+}
+
+/* State badges — reuse the pill shape from .key-status */
+.validation-badge {
+  font-family: var(--font-mono);
+  font-size: 0.70rem;
+  letter-spacing: 0.06em;
+  padding: 2px 10px;
+  border-radius: 20px;
+  border: 1px solid transparent;
+}
+
+.validation-valid {
+  color: var(--score-high-text);
+  background: var(--score-high-bg);
+  border-color: var(--score-high-border);
+}
+
+.validation-invalid {
+  color: var(--score-low-text);
+  background: var(--score-low-bg);
+  border-color: var(--score-low-border);
+}
+
+.validation-warning {
+  color: var(--score-mid-text);
+  background: var(--score-mid-bg);
+  border-color: var(--score-mid-border);
+}
+
+.validation-muted {
+  color: var(--text-muted);
+  background: var(--bg-raised);
+  border-color: var(--border-subtle);
+}

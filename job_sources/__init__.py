@@ -5,7 +5,11 @@ Public API
 ----------
 * ``JobSource``        — abstract base class; import from here or ``job_sources.base``
 * ``AdzunaClient``     — Adzuna Jobs API backend
+* ``HimalayasClient``  — Himalayas Jobs API backend
 * ``RemoteOKClient``   — RemoteOK jobs API backend
+* ``USAJobsClient``    — USAJobs API backend
+* ``TheMuseClient``    — The Muse API backend
+* ``RemotiveClient``   — Remotive remote-jobs API backend
 * ``SOURCES``          — registry mapping source name strings to their classes
 * ``make_source()``    — factory that reads ``config["job_source"]`` and returns
                          the right ``JobSource`` instance
@@ -24,12 +28,20 @@ from __future__ import annotations
 
 from .base import JobSource
 from .adzuna import AdzunaClient
+from .himalayas import HimalayasClient
 from .remoteok import RemoteOKClient
+from .usajobs import USAJobsClient
+from .the_muse import TheMuseClient
+from .remotive import RemotiveClient
 
 __all__ = [
     "JobSource",
     "AdzunaClient",
+    "HimalayasClient",
     "RemoteOKClient",
+    "USAJobsClient",
+    "TheMuseClient",
+    "RemotiveClient",
     "SOURCES",
     "make_source",
 ]
@@ -40,7 +52,11 @@ __all__ = [
 
 SOURCES: dict[str, type[JobSource]] = {
     "adzuna": AdzunaClient,
+    "himalayas": HimalayasClient,
     "remoteok": RemoteOKClient,
+    "usajobs": USAJobsClient,
+    "the_muse": TheMuseClient,
+    "remotive": RemotiveClient,
 }
 
 
@@ -71,9 +87,6 @@ def make_source(config: dict) -> JobSource:
             f"Registered sources: {list(SOURCES)}."
         )
 
-    # Adzuna needs app_id / app_key pulled from the top-level config.
-    # Each source class is responsible for extracting what it needs from
-    # the full config dict — the factory just passes it through unchanged.
     if source_name == "adzuna":
         return cls(
             app_id=config["adzuna_app_id"],
@@ -81,5 +94,5 @@ def make_source(config: dict) -> JobSource:
             config=config,
         )
 
-    # Generic fallback for future sources that accept (config,) only.
+    # All other sources accept (config,) only.
     return cls(config=config)  # type: ignore[call-arg]

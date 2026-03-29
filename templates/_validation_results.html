@@ -1,0 +1,32 @@
+{# _validation_results.html — HTMX partial returned by POST /api/validate-keys.
+   Rendered into #validation-results on the settings page.
+   Each provider gets exactly one state row. No key values are ever included. #}
+
+{% macro state_badge(state) %}
+  {% if state == "valid" %}
+    <span class="validation-badge validation-valid">&#10003; Valid</span>
+  {% elif state == "invalid_key" %}
+    <span class="validation-badge validation-invalid">&#10007; Invalid key</span>
+  {% elif state == "unknown_model" %}
+    <span class="validation-badge validation-warning">&#9888; Unknown model</span>
+  {% elif state == "unreachable" %}
+    <span class="validation-badge validation-warning">&#9888; Unreachable</span>
+  {% else %}
+    <span class="validation-badge validation-muted">&#8212; Not configured</span>
+  {% endif %}
+{% endmacro %}
+
+<div class="validation-results">
+  <div class="validation-row">
+    <span class="validation-provider">Anthropic</span>
+    {{ state_badge(results.anthropic) }}
+  </div>
+  <div class="validation-row">
+    <span class="validation-provider">OpenAI</span>
+    {{ state_badge(results.openai) }}
+  </div>
+  <div class="validation-row">
+    <span class="validation-provider">Gemini</span>
+    {{ state_badge(results.gemini) }}
+  </div>
+</div>

@@ -1160,3 +1160,105 @@ body {
     color: #533f03;
     font-weight: 600;
 }
+
+/* ------------------------------------------------------------
+   Settings page — section wrapper
+   ------------------------------------------------------------ */
+.settings-section {
+  max-width: 600px;
+  margin-bottom: 32px;
+}
+
+/* ------------------------------------------------------------
+   Ingestion trigger — idle form
+   ------------------------------------------------------------ */
+.ingest-trigger-wrap {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 16px 20px;
+}
+
+.ingest-form {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+/* Primary action button — amber accent to signal a write operation */
+.btn-ingest {
+  color: var(--text-accent);
+  border-color: #3a2e10;
+}
+
+.btn-ingest:hover {
+  background: #221c08;
+  border-color: #5a4820;
+  color: #f5b040;
+}
+
+/* Optional controls alongside the button */
+.ingest-opt {
+  color: var(--text-muted);
+}
+
+.ingest-hours-input {
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-mid);
+  border-radius: var(--radius-sm);
+  padding: 3px 8px;
+  width: 58px;
+  text-align: center;
+  outline: none;
+  transition: border-color 120ms ease;
+  /* Remove native spin buttons — keeps the terminal aesthetic */
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.ingest-hours-input::-webkit-inner-spin-button,
+.ingest-hours-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.ingest-hours-input:focus {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+/* ------------------------------------------------------------
+   Ingestion trigger — running state
+   ------------------------------------------------------------ */
+.ingest-status-running {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  letter-spacing: 0.06em;
+  color: var(--text-accent);
+  background: var(--bg-surface);
+  border: 1px solid #3a2e10;
+  border-radius: var(--radius-md);
+  padding: 10px 20px;
+}
+
+/* Pulsing dot spinner — pure CSS, no images */
+.ingest-spinner {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-accent);
+  animation: ingest-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes ingest-pulse {
+  0%, 100% { opacity: 1;   transform: scale(1); }
+  50%       { opacity: 0.3; transform: scale(0.7); }
+}

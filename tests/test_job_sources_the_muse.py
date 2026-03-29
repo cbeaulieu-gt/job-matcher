@@ -307,29 +307,31 @@ class TestTheMuseClientTotalPages:
 # ---------------------------------------------------------------------------
 
 class TestTheMuseClientFetchPage:
-    def test_fetch_page_0_returns_normalised_listings(self):
-        """fetch_page(0) returns normalised listing dicts for first page."""
+    def test_fetch_page_1_returns_normalised_listings(self):
+        """fetch_page(1) returns normalised listing dicts for first page."""
         client = _make_client()
         mock_resp = _mock_response(200, _API_PAGE_0_RESPONSE)
 
-        with patch("job_sources.the_muse.requests.get", return_value=mock_resp):
-            results = client.fetch_page(0)
+        with patch("job_sources.the_muse.requests.get", return_value=mock_resp) as mock_get:
+            results = client.fetch_page(1)
 
         assert len(results) == 1
         assert results[0]["source"] == "the_muse"
         assert results[0]["source_id"] == "987654"
+        _, kwargs = mock_get.call_args
+        assert kwargs["params"]["page"] == 0
 
     def test_fetch_page_n_passes_correct_page_param(self):
-        """fetch_page(3) passes page=3 to the API (0-indexed)."""
+        """fetch_page(3) passes page=2 to the API (3-1=2, converting 1-based to 0-based)."""
         client = _make_client()
-        page_3_response = {**_API_PAGE_0_RESPONSE, "page": 3}
-        mock_resp = _mock_response(200, page_3_response)
+        page_2_response = {**_API_PAGE_0_RESPONSE, "page": 2}
+        mock_resp = _mock_response(200, page_2_response)
 
         with patch("job_sources.the_muse.requests.get", return_value=mock_resp) as mock_get:
             client.fetch_page(3)
 
         _, kwargs = mock_get.call_args
-        assert kwargs["params"]["page"] == 3
+        assert kwargs["params"]["page"] == 2
 
     def test_fetch_page_empty_results_returns_empty_list(self):
         """fetch_page() returns [] when the API returns no results."""
@@ -337,7 +339,7 @@ class TestTheMuseClientFetchPage:
         mock_resp = _mock_response(200, {"results": [], "page_count": 5})
 
         with patch("job_sources.the_muse.requests.get", return_value=mock_resp):
-            results = client.fetch_page(0)
+            results = client.fetch_page(1)
 
         assert results == []
 
@@ -347,7 +349,7 @@ class TestTheMuseClientFetchPage:
         mock_resp = _mock_response(403, {})
 
         with patch("job_sources.the_muse.requests.get", return_value=mock_resp):
-            results = client.fetch_page(0)
+            results = client.fetch_page(1)
 
         assert results == []
 
@@ -361,7 +363,7 @@ class TestTheMuseClientFetchPage:
             "job_sources.the_muse.requests.get",
             side_effect=req.RequestException("connection refused"),
         ):
-            results = client.fetch_page(0)
+            results = client.fetch_page(1)
 
         assert results == []
 
@@ -373,7 +375,7 @@ class TestTheMuseClientFetchPage:
         mock_resp.json.side_effect = ValueError("not json")
 
         with patch("job_sources.the_muse.requests.get", return_value=mock_resp):
-            results = client.fetch_page(0)
+            results = client.fetch_page(1)
 
         assert results == []
 
@@ -385,7 +387,7 @@ class TestTheMuseClientFetchPage:
         mock_resp = _mock_response(200, response)
 
         with patch("job_sources.the_muse.requests.get", return_value=mock_resp):
-            results = client.fetch_page(0)
+            results = client.fetch_page(1)
 
         assert len(results) == 2
         assert results[1]["source_id"] == "111111"
@@ -403,7 +405,7 @@ class TestTheMuseClientAPIKey:
         mock_resp = _mock_response(200, _API_PAGE_0_RESPONSE)
 
         with patch("job_sources.the_muse.requests.get", return_value=mock_resp) as mock_get:
-            client.fetch_page(0)
+            client.fetch_page(1)
 
         _, kwargs = mock_get.call_args
         assert kwargs["params"]["api_key"] == "test-key-123"
@@ -414,7 +416,7 @@ class TestTheMuseClientAPIKey:
         mock_resp = _mock_response(200, _API_PAGE_0_RESPONSE)
 
         with patch("job_sources.the_muse.requests.get", return_value=mock_resp) as mock_get:
-            client.fetch_page(0)
+            client.fetch_page(1)
 
         _, kwargs = mock_get.call_args
         assert "api_key" not in kwargs["params"]
@@ -425,7 +427,7 @@ class TestTheMuseClientAPIKey:
         mock_resp = _mock_response(200, _API_PAGE_0_RESPONSE)
 
         with patch("job_sources.the_muse.requests.get", return_value=mock_resp) as mock_get:
-            client.fetch_page(0)
+            client.fetch_page(1)
 
         _, kwargs = mock_get.call_args
         assert kwargs["params"]["category"] == "Software Engineer"
@@ -436,7 +438,7 @@ class TestTheMuseClientAPIKey:
         mock_resp = _mock_response(200, _API_PAGE_0_RESPONSE)
 
         with patch("job_sources.the_muse.requests.get", return_value=mock_resp) as mock_get:
-            client.fetch_page(0)
+            client.fetch_page(1)
 
         _, kwargs = mock_get.call_args
         assert kwargs["params"]["category"] == "Engineering"
@@ -479,3 +481,45 @@ class TestMakeSourceTheMuse:
         config = {"job_source": "the_muse"}
         source = make_source(config)
         assert isinstance(source, JobSource)
+
+
+# ---------------------------------------------------------------------------
+# TheMuseClient.pages()
+# ---------------------------------------------------------------------------
+
+class TestTheMuseClientPages:
+    def test_pages_yields_all_pages(self):
+        """pages() yields one list per page for all pages returned by total_pages()."""
+        client = _make_client()
+        page_results = [
+            [{"source": "the_muse", "source_id": "1"}],
+            [{"source": "the_muse", "source_id": "2"}],
+            [{"source": "the_muse", "source_id": "3"}],
+        ]
+
+        with patch.object(client, "total_pages", return_value=3):
+            with patch.object(client, "fetch_page", side_effect=page_results) as mock_fetch:
+                results = list(client.pages())
+
+        assert len(results) == 3
+        assert results[0] == page_results[0]
+        assert results[1] == page_results[1]
+        assert results[2] == page_results[2]
+        mock_fetch.assert_any_call(1)
+        mock_fetch.assert_any_call(2)
+        mock_fetch.assert_any_call(3)
+
+    def test_pages_stops_early_on_empty_page(self):
+        """pages() stops iterating when a page returns an empty list."""
+        client = _make_client()
+        page_results = [
+            [{"source": "the_muse", "source_id": "1"}],
+            [],  # page 2 is empty — should stop here
+        ]
+
+        with patch.object(client, "total_pages", return_value=5):
+            with patch.object(client, "fetch_page", side_effect=page_results):
+                results = list(client.pages())
+
+        assert len(results) == 1
+        assert results[0] == page_results[0]

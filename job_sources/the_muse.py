@@ -9,6 +9,7 @@ field, and normalisation to the canonical listing schema.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
 
 import requests
 from bs4 import BeautifulSoup
@@ -127,22 +128,41 @@ class TheMuseClient(JobSource):
     def fetch_page(self, page: int) -> list[dict]:
         """Fetch a single page of raw The Muse results.
 
-        The Muse uses 0-indexed pagination, so ``page=0`` returns the first
-        page.  Each raw result is passed through ``normalise()`` before being
-        returned so that callers always receive canonical listing dicts.
+        The Muse API uses 0-indexed pagination internally, but this method
+        follows the ``JobSource`` interface convention: ``page=1`` returns
+        the first page.  Each raw result is passed through ``normalise()``
+        before being returned so that callers always receive canonical
+        listing dicts.
 
         Args:
-            page: 0-based page number.
+            page: 1-based page number.
 
         Returns:
             List of normalised listing dicts.  Returns an empty list on any
             HTTP or parsing error, or when the page contains no results.
         """
-        data = self._get_page(page)
+        api_page = page - 1
+        data = self._get_page(api_page)
         raw_results: list[dict] = data.get("results", [])
         if not raw_results:
             return []
         return [self.normalise(r) for r in raw_results]
+
+    def pages(self) -> Iterator[list[dict]]:
+        """Yield normalised listing lists, one per page.
+
+        Iterates from page 1 up to ``total_pages()`` (inclusive). Stops
+        early if a page returns zero results.
+
+        Yields:
+            Lists of normalised listing dicts.
+        """
+        for page in range(1, self.total_pages() + 1):
+            results = self.fetch_page(page)
+            if not results:
+                logger.info("Page %d returned 0 results; stopping early", page)
+                return
+            yield results
 
     def total_pages(self) -> int:
         """Return the total number of result pages for the current query.

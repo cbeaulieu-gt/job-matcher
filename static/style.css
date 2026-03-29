@@ -732,6 +732,20 @@ body {
   border-color: var(--border-strong);
 }
 
+.filter-select:has(option:not([value=""]):checked) {
+  border-color: #5a3a00;
+  background-color: #1e1500;
+  color: var(--text-accent);
+}
+.filter-input:not(:placeholder-shown) {
+  border-color: #5a3a00;
+  background-color: #1e1500;
+  color: var(--text-accent);
+}
+.filter-toggle:has(input[type="checkbox"]:checked) {
+  color: var(--text-accent);
+}
+
 .filter-toggle {
   display: inline-flex;
   align-items: center;
@@ -1145,21 +1159,20 @@ body {
    Setup banner
    ------------------------------------------------------------ */
 .setup-banner {
-    background: #fff3cd;
-    border: 1px solid #ffc107;
-    border-radius: 4px;
-    padding: 0.75rem 1rem;
-    margin-bottom: 1rem;
-    font-size: 0.9rem;
-    color: #856404;
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  letter-spacing: 0.03em;
+  color: var(--score-mid-text);
+  background: var(--score-mid-bg);
+  border: 1px solid var(--score-mid-border);
+  border-left: 3px solid var(--text-accent);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  margin-bottom: 20px;
 }
-.setup-banner p {
-    margin: 0.25rem 0;
-}
-.setup-banner a {
-    color: #533f03;
-    font-weight: 600;
-}
+.setup-banner p { margin: 0.2rem 0; line-height: 1.6; }
+.setup-banner a { color: var(--text-accent); text-decoration: underline; }
+.setup-banner a:hover { color: #f5b040; }
 
 /* ------------------------------------------------------------
    Settings page — section wrapper
@@ -1201,34 +1214,6 @@ body {
 /* Optional controls alongside the button */
 .ingest-opt {
   color: var(--text-muted);
-}
-
-.ingest-hours-input {
-  font-family: var(--font-mono);
-  font-size: 0.76rem;
-  color: var(--text-secondary);
-  background: var(--bg-raised);
-  border: 1px solid var(--border-mid);
-  border-radius: var(--radius-sm);
-  padding: 3px 8px;
-  width: 58px;
-  text-align: center;
-  outline: none;
-  transition: border-color 120ms ease;
-  /* Remove native spin buttons — keeps the terminal aesthetic */
-  appearance: textfield;
-  -moz-appearance: textfield;
-}
-
-.ingest-hours-input::-webkit-inner-spin-button,
-.ingest-hours-input::-webkit-outer-spin-button {
-  -webkit-appearance: none;
-  margin: 0;
-}
-
-.ingest-hours-input:focus {
-  border-color: var(--border-strong);
-  color: var(--text-primary);
 }
 
 /* ------------------------------------------------------------

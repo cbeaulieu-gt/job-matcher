@@ -756,13 +756,12 @@ def _validate_gemini(api_key: str, model: str) -> str:
     Google's SDK raises varied exception types depending on failure mode; we
     inspect the lowercased message string to distinguish auth vs model errors.
     """
-    import google.generativeai as _genai
+    from google import genai as _genai
     try:
-        _genai.configure(api_key=api_key)
-        genai_model = _genai.GenerativeModel(model)
-        genai_model.generate_content(
-            "hi",
-            generation_config={"max_output_tokens": 1},
+        _client = _genai.Client(api_key=api_key)
+        _client.models.generate_content(
+            model=model,
+            contents="hi",
         )
         return "valid"
     except Exception as exc:

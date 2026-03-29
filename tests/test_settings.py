@@ -1003,49 +1003,57 @@ class TestValidateHelpers:
     # ------------------------------------------------------------------
 
     def test_gemini_valid(self, monkeypatch):
-        import google.generativeai as _genai
+        from google import genai as _genai
 
-        class _FakeModel:
-            def generate_content(self, content, generation_config=None):
+        class _FakeModels:
+            def generate_content(self, model, contents):
                 return object()
 
-        monkeypatch.setattr(_genai, "configure", lambda api_key: None)
-        monkeypatch.setattr(_genai, "GenerativeModel", lambda model: _FakeModel())
+        class _FakeClient:
+            models = _FakeModels()
+
+        monkeypatch.setattr(_genai, "Client", lambda api_key: _FakeClient())
         result = app_module._validate_gemini("gm-key", "gemini-1.5-flash")
         assert result == "valid"
 
     def test_gemini_invalid_key(self, monkeypatch):
-        import google.generativeai as _genai
+        from google import genai as _genai
 
-        class _FakeModel:
-            def generate_content(self, content, generation_config=None):
+        class _FakeModels:
+            def generate_content(self, model, contents):
                 raise Exception("API_KEY_INVALID — invalid api key provided")
 
-        monkeypatch.setattr(_genai, "configure", lambda api_key: None)
-        monkeypatch.setattr(_genai, "GenerativeModel", lambda model: _FakeModel())
+        class _FakeClient:
+            models = _FakeModels()
+
+        monkeypatch.setattr(_genai, "Client", lambda api_key: _FakeClient())
         result = app_module._validate_gemini("gm-bad", "gemini-1.5-flash")
         assert result == "invalid_key"
 
     def test_gemini_unreachable(self, monkeypatch):
-        import google.generativeai as _genai
+        from google import genai as _genai
 
-        class _FakeModel:
-            def generate_content(self, content, generation_config=None):
+        class _FakeModels:
+            def generate_content(self, model, contents):
                 raise ConnectionError("network timeout")
 
-        monkeypatch.setattr(_genai, "configure", lambda api_key: None)
-        monkeypatch.setattr(_genai, "GenerativeModel", lambda model: _FakeModel())
+        class _FakeClient:
+            models = _FakeModels()
+
+        monkeypatch.setattr(_genai, "Client", lambda api_key: _FakeClient())
         result = app_module._validate_gemini("gm-key", "gemini-1.5-flash")
         assert result == "unreachable"
 
     def test_gemini_not_found(self, monkeypatch):
-        import google.generativeai as _genai
+        from google import genai as _genai
 
-        class _FakeModel:
-            def generate_content(self, content, generation_config=None):
+        class _FakeModels:
+            def generate_content(self, model, contents):
                 raise Exception("404 models/gemini-bogus is not found")
 
-        monkeypatch.setattr(_genai, "configure", lambda api_key: None)
-        monkeypatch.setattr(_genai, "GenerativeModel", lambda model: _FakeModel())
+        class _FakeClient:
+            models = _FakeModels()
+
+        monkeypatch.setattr(_genai, "Client", lambda api_key: _FakeClient())
         result = app_module._validate_gemini("gm-key", "gemini-bogus")
         assert result == "unknown_model"

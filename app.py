@@ -12,7 +12,7 @@ import sys
 from datetime import datetime, timezone
 from importlib.metadata import version as pkg_version, PackageNotFoundError
 
-from flask import Flask, render_template, make_response, request
+from flask import Flask, render_template, make_response, request, jsonify
 
 import db
 
@@ -177,6 +177,21 @@ def salary_fmt(listing: dict) -> str | None:
     return f"{prefix}{fmt_k(hi)}"
 
 
+@app.template_filter("parse_iso")
+def parse_iso(value: str | None) -> datetime | None:
+    """Parse an ISO 8601 string (with or without trailing 'Z') into a datetime.
+
+    Returns None when ``value`` is None, empty, or cannot be parsed so that
+    downstream filters (e.g. ``timeago``) can handle the None case gracefully.
+    """
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.rstrip("Z"))
+    except (ValueError, AttributeError):
+        return None
+
+
 @app.template_filter("timeago")
 def timeago(dt: datetime | None) -> str:
     """Return a human-readable relative time string for a datetime, e.g. '3 hours ago'.
@@ -245,6 +260,7 @@ def feed():
     remote_only = request.args.get("remote_only") == "1"
     search = request.args.get("search", "").strip() or None
     job_type = request.args.get("job_type", "").strip() or None
+    sort = request.args.get("sort", "").strip() or None
 
     listings = db.get_feed(
         threshold=threshold,
@@ -252,6 +268,7 @@ def feed():
         remote_only=remote_only,
         search=search,
         job_type=job_type,
+        sort=sort,
         db_path=DB_PATH,
     )
     job_types = db.get_job_types(db_path=DB_PATH)
@@ -266,6 +283,7 @@ def feed():
         search=search,
         job_type=job_type,
         job_types=job_types,
+        sort=sort,
         last_fetch_time=last_fetch_time,
         config_warnings=_config_warnings(),
     )
@@ -359,6 +377,130 @@ def dismiss(listing_id: int):
     """
     db.set_dismissed(listing_id, 1, db_path=DB_PATH)
     return make_response("", 200)
+
+
+def _mask_config_keys(data: dict) -> dict:
+    """Return a deep copy of *data* with sensitive key values replaced by '***'.
+
+    Any key whose name (lowercased) ends in ``_api_key``, ``_app_key``, or
+    ``_app_id`` is considered sensitive.  The walk is recursive so nested dicts
+    (e.g. ``search`` or ``prefilter`` sub-objects) are handled too.
+
+    The original dict is never mutated — callers always receive a fresh copy.
+    This is display-only: the masked value is never written back to disk.
+    """
+    import copy
+
+    _SENSITIVE_SUFFIXES = ("_api_key", "_app_key", "_app_id")
+
+    def _walk(obj):
+        if isinstance(obj, dict):
+            result = {}
+            for k, v in obj.items():
+                if isinstance(k, str) and k.lower().endswith(_SENSITIVE_SUFFIXES):
+                    result[k] = "***"
+                else:
+                    result[k] = _walk(v)
+            return result
+        if isinstance(obj, list):
+            return [_walk(item) for item in obj]
+        return copy.deepcopy(obj)
+
+    return _walk(data)
+
+
+# ---------------------------------------------------------------------------
+# Ingestion trigger — module-level handle prevents concurrent runs
+# ---------------------------------------------------------------------------
+
+# Holds the running Popen handle while ingest.py is active. None when idle.
+_ingest_process: subprocess.Popen | None = None
+
+
+def _ingest_running() -> bool:
+    """Return True if an ingest subprocess is currently active.
+
+    Polls the process exit code: if poll() returns None the process is still
+    running. If it has exited, reset the handle to None so a new run can start.
+    """
+    global _ingest_process
+    if _ingest_process is None:
+        return False
+    if _ingest_process.poll() is not None:
+        # Process has finished — clear the handle.
+        _ingest_process = None
+        return False
+    return True
+
+
+def _render_ingest_idle() -> str:
+    """Return the HTML partial for the idle 'Run Ingestion' button."""
+    return render_template("_ingest_trigger.html", running=False)
+
+
+def _render_ingest_running() -> str:
+    """Return the HTML partial for the in-progress status element."""
+    return render_template("_ingest_trigger.html", running=True)
+
+
+@app.route("/ingest/trigger", methods=["POST"])
+def ingest_trigger():
+    """Spawn ingest.py as a background subprocess.
+
+    Returns 202 with the 'Running...' HTML partial when the process is started.
+    Returns 409 with a JSON error body if a run is already in progress — the
+    caller can check Content-Type to distinguish the two response shapes.
+
+    Uses sys.executable so the subprocess runs in the same virtualenv as the
+    app server, picking up all installed dependencies automatically.
+    """
+    global _ingest_process
+    if _ingest_running():
+        return jsonify({"error": "already running"}), 409
+
+    # Build command from optional UI parameters.
+    hours_raw = request.form.get("hours", "25").strip()
+    rescore = request.form.get("rescore") == "1"
+
+    try:
+        hours = int(hours_raw)
+    except (ValueError, TypeError):
+        hours = 25
+
+    cmd = [sys.executable, "ingest.py", "--hours", str(hours)]
+    if rescore:
+        cmd.append("--rescore")
+
+    try:
+        _ingest_process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except (OSError, PermissionError) as e:
+        return jsonify({"error": f"Failed to start ingestion: {e}"}), 500
+
+    resp = make_response(_render_ingest_running(), 202)
+    resp.headers["Content-Type"] = "text/html"
+    return resp
+
+
+@app.route("/ingest/status")
+def ingest_status():
+    """Poll endpoint — returns an HTML partial reflecting current ingest state.
+
+    While the process is running, returns the polling div so HTMX keeps
+    refreshing. Once it stops, returns the idle button and triggers a feed
+    refresh by setting HX-Trigger so the caller can react.
+    """
+    running = _ingest_running()
+    html = _render_ingest_running() if running else _render_ingest_idle()
+    resp = make_response(html, 200)
+    resp.headers["Content-Type"] = "text/html"
+    if not running:
+        # Signal HTMX to reload the feed once the job completes.
+        resp.headers["HX-Trigger"] = "ingestComplete"
+    return resp
 
 
 def _load_keys() -> dict:
@@ -472,6 +614,202 @@ def settings():
         has_adzuna_id=has_adzuna_id,
         has_adzuna_key=has_adzuna_key,
     )
+
+
+@app.route("/settings/config", methods=["GET", "POST"])
+def settings_config():
+    """Config editor page — view and edit config.json via the browser.
+
+    GET:  Reads config.json, masks any sensitive key fields (``*_api_key``,
+          ``*_app_key``, ``*_app_id``), pretty-prints the result as JSON, and
+          renders it in a ``<textarea>`` for editing.
+
+    POST: Validates the submitted JSON. If parsing fails, returns a 400 with an
+          inline error and leaves config.json untouched. If the JSON is valid,
+          overwrites config.json and shows a success notice. Masked values
+          (``"***"``) are never written back to disk — if the submitted JSON
+          still contains ``"***"`` for a sensitive field, the original value
+          from the current config is preserved.
+    """
+    saved = False
+    error = None
+    status_code = 200
+
+    if request.method == "POST":
+        raw = request.form.get("config_json", "")
+        try:
+            submitted = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            error = f"Invalid JSON: {exc}"
+            status_code = 400
+            submitted = None
+
+        if submitted is not None:
+            # Merge: if a sensitive field still holds the masked sentinel,
+            # preserve the original value so we never overwrite with "***".
+            existing = load_config(_CONFIG_PATH)
+            _SENSITIVE_SUFFIXES = ("_api_key", "_app_key", "_app_id")
+
+            def _restore_masked(new_obj, orig_obj):
+                """Recursively replace '***' sentinel values with originals."""
+                if not isinstance(new_obj, dict):
+                    return new_obj
+                result = {}
+                for k, v in new_obj.items():
+                    if (
+                        isinstance(k, str)
+                        and k.lower().endswith(_SENSITIVE_SUFFIXES)
+                        and v == "***"
+                        and isinstance(orig_obj, dict)
+                        and k in orig_obj
+                    ):
+                        result[k] = orig_obj[k]
+                    elif isinstance(v, dict):
+                        result[k] = _restore_masked(v, orig_obj.get(k, {}) if isinstance(orig_obj, dict) else {})
+                    else:
+                        result[k] = v
+                return result
+
+            to_write = _restore_masked(submitted, existing)
+
+            try:
+                with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
+                    json.dump(to_write, f, indent=2)
+                saved = True
+            except OSError:
+                error = "Could not save config — check file permissions."
+
+    # Always re-read from disk (after write or on GET) for the textarea.
+    cfg_display = load_config(_CONFIG_PATH)
+    masked = _mask_config_keys(cfg_display)
+    config_json_str = json.dumps(masked, indent=2)
+
+    return render_template(
+        "settings_config.html",
+        view="settings",
+        config_json=config_json_str,
+        saved=saved,
+        error=error,
+    ), status_code
+
+
+# ---------------------------------------------------------------------------
+# Key validation
+# ---------------------------------------------------------------------------
+
+def _validate_anthropic(api_key: str, model: str) -> str:
+    """Send a 1-token test call to Anthropic and return a state string.
+
+    Returns one of: 'valid', 'invalid_key', 'unknown_model', 'unreachable'.
+    The api_key is never logged or included in any return value.
+    """
+    import anthropic as _anthropic
+    try:
+        client = _anthropic.Anthropic(api_key=api_key)
+        client.messages.create(
+            model=model,
+            max_tokens=1,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        return "valid"
+    except _anthropic.AuthenticationError:
+        return "invalid_key"
+    except _anthropic.PermissionDeniedError:
+        return "invalid_key"
+    except _anthropic.NotFoundError:
+        return "unknown_model"
+    except Exception:
+        return "unreachable"
+
+
+def _validate_openai(api_key: str, model: str) -> str:
+    """Send a 1-token test call to OpenAI and return a state string.
+
+    Returns one of: 'valid', 'invalid_key', 'unknown_model', 'unreachable'.
+    The api_key is never logged or included in any return value.
+    """
+    import openai as _openai
+    try:
+        client = _openai.OpenAI(api_key=api_key)
+        client.chat.completions.create(
+            model=model,
+            max_tokens=1,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        return "valid"
+    except _openai.AuthenticationError:
+        return "invalid_key"
+    except _openai.PermissionDeniedError:
+        return "invalid_key"
+    except _openai.NotFoundError:
+        return "unknown_model"
+    except Exception:
+        return "unreachable"
+
+
+def _validate_gemini(api_key: str, model: str) -> str:
+    """Send a 1-token test call to Google Gemini and return a state string.
+
+    Returns one of: 'valid', 'invalid_key', 'unknown_model', 'unreachable'.
+    The api_key is never logged or included in any return value.
+
+    Google's SDK raises varied exception types depending on failure mode; we
+    inspect the lowercased message string to distinguish auth vs model errors.
+    """
+    from google import genai as _genai
+    try:
+        _client = _genai.Client(api_key=api_key)
+        _client.models.generate_content(
+            model=model,
+            contents="hi",
+        )
+        return "valid"
+    except Exception as exc:
+        exc_str = str(exc).lower()
+        # Google signals auth failures with specific keywords in the message.
+        if any(kw in exc_str for kw in ("api_key_invalid", "invalid api key", "unauthenticated", "permission denied")):
+            return "invalid_key"
+        # Model-not-found errors include "not found" or "404" in the message.
+        if "not found" in exc_str or "404" in exc_str:
+            return "unknown_model"
+        return "unreachable"
+
+
+@app.route("/api/validate-keys", methods=["POST"])
+def validate_keys():
+    """Validate each configured LLM provider by making a minimal 1-token test call.
+
+    Returns an HTML partial (not JSON) intended for HTMX to swap into the page.
+    Each provider gets one of five states: valid, invalid_key, unknown_model,
+    unreachable, not_configured.
+
+    No API key values are logged or returned in the response.
+    """
+    keys_data = _load_keys()
+    results = {}
+
+    _validators = {
+        "anthropic": _validate_anthropic,
+        "openai":    _validate_openai,
+        "gemini":    _validate_gemini,
+    }
+
+    for provider, validator in _validators.items():
+        cfg = keys_data["providers"].get(provider, {})
+        api_key = cfg.get("api_key", "").strip()
+        model   = cfg.get("model", "").strip()
+
+        if not api_key:
+            results[provider] = "not_configured"
+            continue
+
+        try:
+            results[provider] = validator(api_key, model)
+        except Exception:
+            # Belt-and-suspenders: a failure in one provider must not block others.
+            results[provider] = "unreachable"
+
+    return render_template("_validation_results.html", results=results)
 
 
 # ---------------------------------------------------------------------------

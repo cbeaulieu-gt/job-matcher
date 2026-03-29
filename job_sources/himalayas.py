@@ -11,7 +11,7 @@ Response: {"jobs": [...], "total": N}
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone, UTC
+from datetime import datetime, UTC
 from math import ceil
 from typing import Optional
 
@@ -117,8 +117,8 @@ class HimalayasClient(JobSource):
     def fetch_page(self, page: int) -> list[dict]:
         """Fetch a single page of raw Himalayas listings.
 
-        Converts the 0-based *page* argument to an offset
-        (``offset = page * limit``) before calling the API.
+        Converts the 1-based *page* argument to an offset
+        (``offset = (page - 1) * limit``) before calling the API.
 
         Any non-200 HTTP response or network error is logged and returns an
         empty list.  The ``total`` field in the response is cached so that
@@ -126,12 +126,12 @@ class HimalayasClient(JobSource):
         without a separate request.
 
         Args:
-            page: 0-based page number.
+            page: 1-based page number.
 
         Returns:
             List of normalised listing dicts (via ``normalise()``).
         """
-        offset = page * self._limit
+        offset = (page - 1) * self._limit
         params: dict[str, int] = {"limit": self._limit, "offset": offset}
 
         try:

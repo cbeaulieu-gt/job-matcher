@@ -23,8 +23,6 @@ import os
 import sys
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from job_sources import SOURCES, HimalayasClient, make_source
@@ -304,7 +302,7 @@ class TestHimalayasClientFetchPage:
         return HimalayasClient(config=config or _BASE_CONFIG)
 
     def test_fetch_page_uses_correct_offset(self):
-        """fetch_page(page) passes offset=page*limit to the API."""
+        """fetch_page(page) passes offset=(page-1)*limit to the API."""
         client = HimalayasClient(config=_HIMALAYAS_CONFIG_WITH_LIMIT)
         mock_resp = _mock_response(200, {"jobs": [], "total": 0})
 
@@ -313,16 +311,16 @@ class TestHimalayasClientFetchPage:
 
         call_kwargs = mock_get.call_args
         params = call_kwargs[1]["params"] if "params" in call_kwargs[1] else call_kwargs[0][1]
-        assert params["offset"] == 30  # page=3, limit=10 → offset=30
+        assert params["offset"] == 20  # page=3, limit=10 → offset=20
         assert params["limit"] == 10
 
-    def test_fetch_page_0_uses_offset_0(self):
-        """fetch_page(0) sends offset=0."""
+    def test_fetch_page_1_uses_offset_0(self):
+        """fetch_page(1) sends offset=0."""
         client = HimalayasClient(config=_HIMALAYAS_CONFIG_WITH_LIMIT)
         mock_resp = _mock_response(200, {"jobs": [_RAW_JOB], "total": 1})
 
         with patch("job_sources.himalayas.requests.get", return_value=mock_resp) as mock_get:
-            client.fetch_page(0)
+            client.fetch_page(1)
 
         params = mock_get.call_args[1]["params"]
         assert params["offset"] == 0
@@ -333,7 +331,7 @@ class TestHimalayasClientFetchPage:
         mock_resp = _mock_response(200, {"jobs": [_RAW_JOB], "total": 1})
 
         with patch("job_sources.himalayas.requests.get", return_value=mock_resp):
-            results = client.fetch_page(0)
+            results = client.fetch_page(1)
 
         assert len(results) == 1
         assert results[0]["source"] == "himalayas"
@@ -345,7 +343,7 @@ class TestHimalayasClientFetchPage:
         mock_resp = _mock_response(200, {"jobs": [_RAW_JOB], "total": 250})
 
         with patch("job_sources.himalayas.requests.get", return_value=mock_resp):
-            client.fetch_page(0)
+            client.fetch_page(1)
 
         assert client._total == 250
 
@@ -355,7 +353,7 @@ class TestHimalayasClientFetchPage:
         mock_resp = _mock_response(200, {"jobs": [], "total": 0})
 
         with patch("job_sources.himalayas.requests.get", return_value=mock_resp):
-            results = client.fetch_page(0)
+            results = client.fetch_page(1)
 
         assert results == []
 
@@ -365,7 +363,7 @@ class TestHimalayasClientFetchPage:
         mock_resp = _mock_response(500, {})
 
         with patch("job_sources.himalayas.requests.get", return_value=mock_resp):
-            results = client.fetch_page(0)
+            results = client.fetch_page(1)
 
         assert results == []
 
@@ -379,7 +377,7 @@ class TestHimalayasClientFetchPage:
             "job_sources.himalayas.requests.get",
             side_effect=req_lib.RequestException("timeout"),
         ):
-            results = client.fetch_page(0)
+            results = client.fetch_page(1)
 
         assert results == []
 
@@ -391,7 +389,7 @@ class TestHimalayasClientFetchPage:
         mock_resp.json.side_effect = ValueError("not json")
 
         with patch("job_sources.himalayas.requests.get", return_value=mock_resp):
-            results = client.fetch_page(0)
+            results = client.fetch_page(1)
 
         assert results == []
 
@@ -402,7 +400,7 @@ class TestHimalayasClientFetchPage:
         mock_resp = _mock_response(200, {"jobs": [_RAW_JOB, raw2], "total": 2})
 
         with patch("job_sources.himalayas.requests.get", return_value=mock_resp):
-            results = client.fetch_page(0)
+            results = client.fetch_page(1)
 
         assert len(results) == 2
         assert {r["source_id"] for r in results} == {"abc123", "xyz789"}

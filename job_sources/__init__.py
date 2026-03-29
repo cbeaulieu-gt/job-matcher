@@ -23,10 +23,12 @@ from __future__ import annotations
 
 from .base import JobSource
 from .adzuna import AdzunaClient
+from .remotive import RemotiveClient
 
 __all__ = [
     "JobSource",
     "AdzunaClient",
+    "RemotiveClient",
     "SOURCES",
     "make_source",
 ]
@@ -37,6 +39,7 @@ __all__ = [
 
 SOURCES: dict[str, type[JobSource]] = {
     "adzuna": AdzunaClient,
+    "remotive": RemotiveClient,
 }
 
 

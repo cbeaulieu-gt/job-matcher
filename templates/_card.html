@@ -122,6 +122,11 @@
       {%- endif -%}
     </p>
 
+    {# ── Model badge ────────────────────────────────────────────────────── #}
+    {% if listing.model_used %}
+      <p class="model-badge-body">scored by {{ listing.model_used.split('/')[-1] }}</p>
+    {% endif %}
+
     {# ── Action row ──────────────────────────────────────────────── #}
     <div class="card-divider"></div>
     {% include "_actions.html" %}

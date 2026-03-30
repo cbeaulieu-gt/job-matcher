@@ -10,6 +10,8 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
+import threading
 from datetime import datetime, timezone
 from importlib.metadata import version as pkg_version, PackageNotFoundError
 
@@ -415,14 +417,28 @@ def _mask_config_keys(data: dict) -> dict:
 # Ingestion trigger — module-level handle prevents concurrent runs
 # ---------------------------------------------------------------------------
 
+# Protects concurrent access to _ingest_process and _last_run from waitress
+# thread-pool workers.  Any read-modify-write on these globals must hold this
+# lock so two simultaneous POST /ingest/trigger requests cannot both pass the
+# "not running" check and spawn duplicate subprocesses.
+_ingest_lock: threading.Lock = threading.Lock()
+
 # Holds the running Popen handle while ingest.py is active. None when idle.
 _ingest_process: subprocess.Popen | None = None
+
+# Temp file that receives subprocess stdout, avoiding OS pipe-buffer deadlock.
+_ingest_log_file: "tempfile.SpooledTemporaryFile | None" = None
 
 # Stores the result of the most recently completed ingest run.
 _last_run: dict | None = None
 
+# Matches the summary line that ingest.py prints at the end of each run:
+#   Run complete: 25 fetched | 10 pre-filtered | 5 dupes skipped |
+#                7 scored (3 failed) | 0 scrape fallbacks | ~1,234 tok | ~$0.0012
 _INGEST_SUMMARY_RE = re.compile(
-    r"Ingest complete:\s*(\d+)\s*new,\s*(\d+)\s*filtered,\s*(\d+)\s*errors",
+    r"Run complete:\s*(\d+)\s*fetched\s*\|"   # group 1 = fetched
+    r".*?(\d+)\s*pre-filtered\s*\|"           # group 2 = pre-filtered
+    r".*?scored\s*\((\d+)\s*failed\)",         # group 3 = score-failed
     re.IGNORECASE,
 )
 
@@ -430,7 +446,14 @@ _INGEST_SUMMARY_RE = re.compile(
 def _parse_ingest_summary(output: str) -> dict:
     """Parse the summary line from ingest.py stdout and return a result dict.
 
-    Expected format: ``Ingest complete: 14 new, 203 filtered, 0 errors``
+    Expected format (single line emitted by ingest.py ``run()``):
+      Run complete: 25 fetched | 10 pre-filtered | 5 dupes skipped |
+                    7 scored (3 failed) | 0 scrape fallbacks | ~1,234 tok | ~$0.0012
+
+    Extracted fields:
+      new      — listings fetched from Adzuna this run
+      filtered — listings dropped by the pre-filter
+      errors   — listings that failed scoring
 
     If the pattern is not found (e.g. the process was killed or produced no
     output), all counts default to zero so the template always has a safe value.
@@ -449,23 +472,39 @@ def _parse_ingest_summary(output: str) -> dict:
 def _ingest_running() -> bool:
     """Return True if an ingest subprocess is currently active.
 
+    Acquires ``_ingest_lock`` before touching shared state so concurrent calls
+    from waitress worker threads are serialised.
+
     Polls the process exit code: if poll() returns None the process is still
-    running. If it has exited, capture stdout, parse the summary into
-    ``_last_run``, and reset the handle to None so a new run can start.
+    running. If it has exited, read the temp log file to capture stdout, parse
+    the summary into ``_last_run``, and reset the handle to None so a new run
+    can start.
     """
-    global _ingest_process, _last_run
-    if _ingest_process is None:
-        return False
-    if _ingest_process.poll() is not None:
-        # Process has finished — capture output and clear handle.
-        try:
-            output, _ = _ingest_process.communicate(timeout=2)
-        except (subprocess.TimeoutExpired, ValueError):
+    global _ingest_process, _ingest_log_file, _last_run
+    with _ingest_lock:
+        if _ingest_process is None:
+            return False
+        if _ingest_process.poll() is not None:
+            # Process has finished — read temp log and clear handles.
             output = ""
-        _last_run = _parse_ingest_summary(output or "")
-        _ingest_process = None
-        return False
-    return True
+            if _ingest_log_file is not None:
+                try:
+                    _ingest_log_file.seek(0)
+                    output = _ingest_log_file.read()
+                    if isinstance(output, bytes):
+                        output = output.decode("utf-8", errors="replace")
+                except (OSError, ValueError):
+                    output = ""
+                finally:
+                    try:
+                        _ingest_log_file.close()
+                    except OSError:
+                        pass
+                    _ingest_log_file = None
+            _last_run = _parse_ingest_summary(output)
+            _ingest_process = None
+            return False
+        return True
 
 
 def _render_ingest_idle() -> str:
@@ -488,12 +527,17 @@ def ingest_trigger():
 
     Uses sys.executable so the subprocess runs in the same virtualenv as the
     app server, picking up all installed dependencies automatically.
-    """
-    global _ingest_process
-    if _ingest_running():
-        return jsonify({"error": "already running"}), 409
 
-    # Build command from optional UI parameters.
+    stdout is redirected to a NamedTemporaryFile rather than subprocess.PIPE.
+    This avoids the OS pipe-buffer deadlock: if the process emits more than
+    ~64 KB of output (common with 200+ listings), a PIPE write blocks until the
+    reader drains it — but app.py only reads after the process exits, causing
+    a hang.  A temp file has no such size limit.
+    """
+    global _ingest_process, _ingest_log_file
+
+    # Build command from optional UI parameters before taking the lock so the
+    # critical section stays as short as possible.
     hours_raw = request.form.get("hours", "25").strip()
     rescore = request.form.get("rescore") == "1"
 
@@ -506,15 +550,24 @@ def ingest_trigger():
     if rescore:
         cmd.append("--rescore")
 
-    try:
-        _ingest_process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-        )
-    except (OSError, PermissionError) as e:
-        return jsonify({"error": f"Failed to start ingestion: {e}"}), 500
+    with _ingest_lock:
+        # Re-check inside the lock: another thread may have started a process
+        # between our pre-lock poll and now.
+        if _ingest_process is not None and _ingest_process.poll() is None:
+            return jsonify({"error": "already running"}), 409
+
+        try:
+            log_file = tempfile.TemporaryFile(mode="w+", suffix=".log", prefix="ingest_")
+            proc = subprocess.Popen(
+                cmd,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+            )
+        except (OSError, PermissionError) as e:
+            return jsonify({"error": f"Failed to start ingestion: {e}"}), 500
+
+        _ingest_log_file = log_file
+        _ingest_process = proc
 
     resp = make_response(_render_ingest_running(), 202)
     resp.headers["Content-Type"] = "text/html"

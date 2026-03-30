@@ -5,6 +5,7 @@ Uses Flask's built-in test client and monkeypatches the module-level
 _ingest_process handle so no real subprocess is ever spawned.
 """
 
+import io
 import os
 import sys
 import pytest
@@ -22,10 +23,12 @@ from app import app as flask_app, _parse_ingest_summary
 
 @pytest.fixture(autouse=True)
 def reset_ingest_process(monkeypatch):
-    """Ensure _ingest_process is always None before and after each test."""
+    """Ensure _ingest_process and _ingest_log_file are always None before and after each test."""
     monkeypatch.setattr(app_module, "_ingest_process", None)
+    monkeypatch.setattr(app_module, "_ingest_log_file", None)
     yield
     monkeypatch.setattr(app_module, "_ingest_process", None)
+    monkeypatch.setattr(app_module, "_ingest_log_file", None)
 
 
 @pytest.fixture()
@@ -38,13 +41,20 @@ def client():
 def _make_mock_process(*, exited: bool = False, stdout: str = "") -> MagicMock:
     """Return a MagicMock that behaves like a running or finished Popen handle.
 
-    For exited processes, ``communicate`` returns the given stdout string so
-    ``_ingest_running()`` can pass it to ``_parse_ingest_summary`` without error.
+    For exited processes, the caller should also set ``app_module._ingest_log_file``
+    to a file-like object containing ``stdout`` so that ``_ingest_running()``
+    can read it.  Use ``_make_log_file(stdout)`` as a convenience.
     """
     proc = MagicMock()
     proc.poll.return_value = None if not exited else 0
-    proc.communicate.return_value = (stdout, None)
     return proc
+
+
+def _make_log_file(content: str) -> io.StringIO:
+    """Return a StringIO positioned at the start, as a stand-in for the temp log file."""
+    buf = io.StringIO(content)
+    buf.seek(0)
+    return buf
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +71,7 @@ class TestIngestTrigger:
             return _make_mock_process()
 
         monkeypatch.setattr(app_module.subprocess, "Popen", mock_popen)
+        monkeypatch.setattr(app_module.tempfile, "TemporaryFile", lambda **kw: io.StringIO())
         resp = client.post("/ingest/trigger")
         assert resp.status_code == 202
         assert len(spawned) == 1
@@ -70,6 +81,7 @@ class TestIngestTrigger:
         monkeypatch.setattr(
             app_module.subprocess, "Popen", lambda *a, **kw: _make_mock_process()
         )
+        monkeypatch.setattr(app_module.tempfile, "TemporaryFile", lambda **kw: io.StringIO())
         resp = client.post("/ingest/trigger")
         body = resp.data.decode()
         assert "ingest-status" in body
@@ -84,6 +96,7 @@ class TestIngestTrigger:
             return _make_mock_process()
 
         monkeypatch.setattr(app_module.subprocess, "Popen", mock_popen)
+        monkeypatch.setattr(app_module.tempfile, "TemporaryFile", lambda **kw: io.StringIO())
         client.post("/ingest/trigger")
         assert "--hours" in spawned[0]
         assert "25" in spawned[0]
@@ -97,6 +110,7 @@ class TestIngestTrigger:
             return _make_mock_process()
 
         monkeypatch.setattr(app_module.subprocess, "Popen", mock_popen)
+        monkeypatch.setattr(app_module.tempfile, "TemporaryFile", lambda **kw: io.StringIO())
         client.post("/ingest/trigger", data={"hours": "48"})
         assert "48" in spawned[0]
 
@@ -109,6 +123,7 @@ class TestIngestTrigger:
             return _make_mock_process()
 
         monkeypatch.setattr(app_module.subprocess, "Popen", mock_popen)
+        monkeypatch.setattr(app_module.tempfile, "TemporaryFile", lambda **kw: io.StringIO())
         client.post("/ingest/trigger", data={"rescore": "1"})
         assert "--rescore" in spawned[0]
 
@@ -121,6 +136,7 @@ class TestIngestTrigger:
             return _make_mock_process()
 
         monkeypatch.setattr(app_module.subprocess, "Popen", mock_popen)
+        monkeypatch.setattr(app_module.tempfile, "TemporaryFile", lambda **kw: io.StringIO())
         client.post("/ingest/trigger")
         assert "--rescore" not in spawned[0]
 
@@ -133,6 +149,7 @@ class TestIngestTrigger:
             return _make_mock_process()
 
         monkeypatch.setattr(app_module.subprocess, "Popen", mock_popen)
+        monkeypatch.setattr(app_module.tempfile, "TemporaryFile", lambda **kw: io.StringIO())
         client.post("/ingest/trigger", data={"hours": "not-a-number"})
         assert "25" in spawned[0]
 
@@ -145,6 +162,7 @@ class TestIngestTrigger:
             return _make_mock_process()
 
         monkeypatch.setattr(app_module.subprocess, "Popen", mock_popen)
+        monkeypatch.setattr(app_module.tempfile, "TemporaryFile", lambda **kw: io.StringIO())
         client.post("/ingest/trigger")
         assert spawned[0][0] == sys.executable
 
@@ -153,6 +171,7 @@ class TestIngestTrigger:
         def failing_popen(cmd, **kwargs):
             raise OSError("python not found")
         monkeypatch.setattr(app_module.subprocess, "Popen", failing_popen)
+        monkeypatch.setattr(app_module.tempfile, "TemporaryFile", lambda **kw: io.StringIO())
         resp = client.post("/ingest/trigger")
         assert resp.status_code == 500
 
@@ -221,6 +240,7 @@ class TestIngestStatus:
     def test_completed_process_resets_to_idle(self, client, monkeypatch):
         """Once poll() returns non-None the handle is cleared and idle HTML is returned."""
         monkeypatch.setattr(app_module, "_ingest_process", _make_mock_process(exited=True))
+        monkeypatch.setattr(app_module, "_ingest_log_file", _make_log_file(""))
         resp = client.get("/ingest/status")
         body = resp.data.decode()
         assert "Run Ingestion" in body
@@ -254,17 +274,20 @@ class TestIngestRunningHelper:
 
     def test_returns_false_and_clears_handle_after_exit(self, monkeypatch):
         monkeypatch.setattr(app_module, "_ingest_process", _make_mock_process(exited=True))
+        monkeypatch.setattr(app_module, "_ingest_log_file", _make_log_file(""))
         result = app_module._ingest_running()
         assert result is False
         assert app_module._ingest_process is None
 
     def test_sets_last_run_after_exit(self, monkeypatch):
-        """When process exits, _last_run should be populated from parsed stdout."""
-        proc = _make_mock_process(
-            exited=True,
-            stdout="Ingest complete: 5 new, 10 filtered, 0 errors",
+        """When process exits, _last_run should be populated from parsed log output."""
+        # Use the real format that ingest.py produces.
+        summary_line = (
+            "Run complete: 5 fetched | 10 pre-filtered | 2 dupes skipped | "
+            "3 scored (0 failed) | 0 scrape fallbacks | ~500 tok | ~$0.0001"
         )
-        monkeypatch.setattr(app_module, "_ingest_process", proc)
+        monkeypatch.setattr(app_module, "_ingest_process", _make_mock_process(exited=True))
+        monkeypatch.setattr(app_module, "_ingest_log_file", _make_log_file(summary_line))
         monkeypatch.setattr(app_module, "_last_run", None)
         app_module._ingest_running()
         assert app_module._last_run is not None
@@ -272,11 +295,12 @@ class TestIngestRunningHelper:
         assert app_module._last_run["filtered"] == 10
         assert app_module._last_run["errors"] == 0
 
-    def test_communicate_exception_sets_last_run_to_zeros(self, monkeypatch):
-        """When communicate() raises TimeoutExpired, _last_run should default to zeros."""
-        proc = _make_mock_process(exited=True)
-        proc.communicate.side_effect = app_module.subprocess.TimeoutExpired("cmd", 2)
-        monkeypatch.setattr(app_module, "_ingest_process", proc)
+    def test_log_file_read_error_sets_last_run_to_zeros(self, monkeypatch):
+        """When the log file raises on read, _last_run should default to zeros."""
+        bad_file = MagicMock()
+        bad_file.seek.side_effect = OSError("seek failed")
+        monkeypatch.setattr(app_module, "_ingest_process", _make_mock_process(exited=True))
+        monkeypatch.setattr(app_module, "_ingest_log_file", bad_file)
         monkeypatch.setattr(app_module, "_last_run", None)
         app_module._ingest_running()
         assert app_module._last_run is not None
@@ -292,7 +316,11 @@ class TestIngestRunningHelper:
 class TestParseIngestSummary:
     def test_parse_ingest_summary_valid(self):
         """Correctly formed summary line should parse all three counts."""
-        result = _parse_ingest_summary("Ingest complete: 5 new, 100 filtered, 2 errors")
+        line = (
+            "Run complete: 5 fetched | 100 pre-filtered | 3 dupes skipped | "
+            "2 scored (2 failed) | 0 scrape fallbacks | ~800 tok | ~$0.0002"
+        )
+        result = _parse_ingest_summary(line)
         assert result["new"] == 5
         assert result["filtered"] == 100
         assert result["errors"] == 2
@@ -315,7 +343,11 @@ class TestParseIngestSummary:
 
     def test_parse_ingest_summary_case_insensitive(self):
         """Regex match should be case-insensitive."""
-        result = _parse_ingest_summary("INGEST COMPLETE: 3 new, 50 filtered, 1 errors")
+        line = (
+            "RUN COMPLETE: 3 fetched | 50 pre-filtered | 1 dupes skipped | "
+            "2 scored (1 failed) | 0 scrape fallbacks | ~400 tok | ~$0.0001"
+        )
+        result = _parse_ingest_summary(line)
         assert result["new"] == 3
         assert result["filtered"] == 50
         assert result["errors"] == 1
@@ -325,7 +357,8 @@ class TestParseIngestSummary:
         output = (
             "Fetching page 1...\n"
             "Fetching page 2...\n"
-            "Ingest complete: 14 new, 203 filtered, 0 errors\n"
+            "Run complete: 14 fetched | 203 pre-filtered | 7 dupes skipped | "
+            "0 scored (0 failed) | 0 scrape fallbacks | ~100 tok | ~$0.0000\n"
             "Done.\n"
         )
         result = _parse_ingest_summary(output)

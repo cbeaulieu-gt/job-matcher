@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import re
+from typing import Iterator
 
 import requests
 from bs4 import BeautifulSoup
@@ -111,6 +112,20 @@ class RemotiveClient(JobSource):
     # JobSource interface
     # ------------------------------------------------------------------
 
+    @classmethod
+    def settings_schema(cls) -> dict:
+        """Return the settings schema for Remotive.
+
+        Remotive requires no credentials — the public API is key-free.
+
+        Returns:
+            Schema dict with ``display_name`` and an empty ``fields`` list.
+        """
+        return {
+            "display_name": "Remotive",
+            "fields": [],
+        }
+
     def fetch_page(self, page: int) -> list[dict]:
         """Fetch listings from the Remotive API.
 
@@ -161,6 +176,19 @@ class RemotiveClient(JobSource):
             Always ``1``.
         """
         return 1
+
+    def pages(self) -> Iterator[list[dict]]:
+        """Yield the single page of Remotive listings.
+
+        Remotive is a single-page API, so this yields at most one list.
+        Yields nothing if the fetch returns no results.
+
+        Yields:
+            A single list of normalised listing dicts.
+        """
+        results = self.fetch_page(1)
+        if results:
+            yield results
 
     def normalise(self, raw: dict) -> dict:
         """Map a Remotive job dict to the canonical listing schema.

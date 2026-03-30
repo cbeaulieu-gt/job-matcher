@@ -26,6 +26,7 @@ Canonical listing schema
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Iterator
 
 
 class JobSource(ABC):
@@ -71,3 +72,43 @@ class JobSource(ABC):
             source fields are silently dropped.
         """
         ...
+
+    @classmethod
+    @abstractmethod
+    def settings_schema(cls) -> dict:
+        """Return the settings schema for this job source.
+
+        The returned dict describes the credentials and configuration fields
+        that the Settings UI should render for this source.
+
+        Returns:
+            Dict with exactly two keys:
+
+            * ``display_name`` — str, human-readable name shown in the UI.
+            * ``fields``       — list of field dicts.  Each field dict must
+              have: ``name`` (str), ``label`` (str), ``type`` (``"text"``
+              or ``"password"``), ``required`` (bool).  Sources that
+              require no credentials return an empty list so the UI can
+              render them as a status-only card.
+        """
+        ...
+
+    def pages(self) -> Iterator[list[dict]]:
+        """Yield normalised listing lists, one per page.
+
+        Default implementation iterates from page 1 up to ``total_pages()``
+        (inclusive) using ``fetch_page()`` and stops early when a page returns
+        zero results.  Subclasses may override this to apply source-specific
+        logic (e.g. 0-based page numbering, caching).
+
+        Yields:
+            Lists of normalised listing dicts (one list per page).
+        """
+        import logging as _logging
+        _log = _logging.getLogger(__name__)
+        for page in range(1, self.total_pages() + 1):
+            results = self.fetch_page(page)
+            if not results:
+                _log.info("Page %d returned 0 results; stopping early", page)
+                return
+            yield results

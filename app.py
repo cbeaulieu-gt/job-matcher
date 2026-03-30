@@ -10,18 +10,24 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
+import threading
 from datetime import datetime, timezone
 from importlib.metadata import version as pkg_version, PackageNotFoundError
 
 from flask import Flask, render_template, make_response, request, jsonify, redirect, url_for
 
 import db
+from credentials import CredentialError, load_providers, save_providers
+from providers import _PROVIDER_CLASS_MAP
+from job_sources import SOURCES
 
 app = Flask(__name__)
 
 DB_PATH: str = os.environ.get("DB_PATH", "jobs.db")
 _KEYS_PATH: str = os.path.join(os.path.dirname(__file__), "keys.json")
 _CONFIG_PATH: str = os.path.join(os.path.dirname(__file__), "config.json")
+_PROVIDERS_PATH: str = os.path.join(os.path.dirname(__file__), "providers.json")
 
 # Default structure mirrors keys.example.json — used when keys.json is absent.
 _KEYS_DEFAULTS: dict = {
@@ -307,20 +313,13 @@ def bookmarks():
 def toggle_bookmark(listing_id: int):
     """Toggle the bookmarked state for a listing.
 
-    Reads the current state, flips it, writes it back, then returns the
-    re-rendered action button group as an HTMX partial. HTMX swaps this
-    into the DOM in place of the existing action row, so the star icon
-    updates without a full page reload.
+    Delegates to db.toggle_bookmarked(), which performs the flip atomically
+    in a single SQL statement so rapid double-clicks cannot produce a net
+    no-op. Returns the re-rendered action button group as an HTMX partial.
     """
-    listing = db.get_listing_by_id(listing_id, db_path=DB_PATH)
+    listing = db.toggle_bookmarked(listing_id, db_path=DB_PATH)
     if listing is None:
         return make_response("", 404)
-
-    new_value = 0 if listing["bookmarked"] else 1
-    db.set_bookmarked(listing_id, new_value, db_path=DB_PATH)
-
-    # Re-fetch to get the authoritative updated state.
-    listing = db.get_listing_by_id(listing_id, db_path=DB_PATH)
     return render_template("_actions.html", listing=listing)
 
 
@@ -328,19 +327,13 @@ def toggle_bookmark(listing_id: int):
 def toggle_apply(listing_id: int):
     """Toggle the applied state for a listing.
 
-    Reads the current state, flips it, writes it back, then returns the
-    re-rendered action button group as an HTMX partial. Same read-modify-write
-    pattern as toggle_bookmark — only the action row is swapped in the DOM.
+    Delegates to db.toggle_applied(), which performs the flip atomically
+    in a single SQL statement so rapid double-clicks cannot produce a net
+    no-op. Returns the re-rendered action button group as an HTMX partial.
     """
-    listing = db.get_listing_by_id(listing_id, db_path=DB_PATH)
+    listing = db.toggle_applied(listing_id, db_path=DB_PATH)
     if listing is None:
         return make_response("", 404)
-
-    new_value = 0 if listing["applied"] else 1
-    db.set_applied(listing_id, new_value, db_path=DB_PATH)
-
-    # Re-fetch to get the authoritative updated state.
-    listing = db.get_listing_by_id(listing_id, db_path=DB_PATH)
     return render_template("_actions.html", listing=listing)
 
 
@@ -415,14 +408,28 @@ def _mask_config_keys(data: dict) -> dict:
 # Ingestion trigger — module-level handle prevents concurrent runs
 # ---------------------------------------------------------------------------
 
+# Protects concurrent access to _ingest_process and _last_run from waitress
+# thread-pool workers.  Any read-modify-write on these globals must hold this
+# lock so two simultaneous POST /ingest/trigger requests cannot both pass the
+# "not running" check and spawn duplicate subprocesses.
+_ingest_lock: threading.Lock = threading.Lock()
+
 # Holds the running Popen handle while ingest.py is active. None when idle.
 _ingest_process: subprocess.Popen | None = None
+
+# Temp file that receives subprocess stdout, avoiding OS pipe-buffer deadlock.
+_ingest_log_file: "tempfile.SpooledTemporaryFile | None" = None
 
 # Stores the result of the most recently completed ingest run.
 _last_run: dict | None = None
 
+# Matches the summary line that ingest.py prints at the end of each run:
+#   Run complete: 25 fetched | 10 pre-filtered | 5 dupes skipped |
+#                7 scored (3 failed) | 0 scrape fallbacks | ~1,234 tok | ~$0.0012
 _INGEST_SUMMARY_RE = re.compile(
-    r"Ingest complete:\s*(\d+)\s*new,\s*(\d+)\s*filtered,\s*(\d+)\s*errors",
+    r"Run complete:\s*(\d+)\s*fetched\s*\|"   # group 1 = fetched
+    r".*?(\d+)\s*pre-filtered\s*\|"           # group 2 = pre-filtered
+    r".*?scored\s*\((\d+)\s*failed\)",         # group 3 = score-failed
     re.IGNORECASE,
 )
 
@@ -430,7 +437,14 @@ _INGEST_SUMMARY_RE = re.compile(
 def _parse_ingest_summary(output: str) -> dict:
     """Parse the summary line from ingest.py stdout and return a result dict.
 
-    Expected format: ``Ingest complete: 14 new, 203 filtered, 0 errors``
+    Expected format (single line emitted by ingest.py ``run()``):
+      Run complete: 25 fetched | 10 pre-filtered | 5 dupes skipped |
+                    7 scored (3 failed) | 0 scrape fallbacks | ~1,234 tok | ~$0.0012
+
+    Extracted fields:
+      new      — listings fetched from Adzuna this run
+      filtered — listings dropped by the pre-filter
+      errors   — listings that failed scoring
 
     If the pattern is not found (e.g. the process was killed or produced no
     output), all counts default to zero so the template always has a safe value.
@@ -449,23 +463,39 @@ def _parse_ingest_summary(output: str) -> dict:
 def _ingest_running() -> bool:
     """Return True if an ingest subprocess is currently active.
 
+    Acquires ``_ingest_lock`` before touching shared state so concurrent calls
+    from waitress worker threads are serialised.
+
     Polls the process exit code: if poll() returns None the process is still
-    running. If it has exited, capture stdout, parse the summary into
-    ``_last_run``, and reset the handle to None so a new run can start.
+    running. If it has exited, read the temp log file to capture stdout, parse
+    the summary into ``_last_run``, and reset the handle to None so a new run
+    can start.
     """
-    global _ingest_process, _last_run
-    if _ingest_process is None:
-        return False
-    if _ingest_process.poll() is not None:
-        # Process has finished — capture output and clear handle.
-        try:
-            output, _ = _ingest_process.communicate(timeout=2)
-        except (subprocess.TimeoutExpired, ValueError):
+    global _ingest_process, _ingest_log_file, _last_run
+    with _ingest_lock:
+        if _ingest_process is None:
+            return False
+        if _ingest_process.poll() is not None:
+            # Process has finished — read temp log and clear handles.
             output = ""
-        _last_run = _parse_ingest_summary(output or "")
-        _ingest_process = None
-        return False
-    return True
+            if _ingest_log_file is not None:
+                try:
+                    _ingest_log_file.seek(0)
+                    output = _ingest_log_file.read()
+                    if isinstance(output, bytes):
+                        output = output.decode("utf-8", errors="replace")
+                except (OSError, ValueError):
+                    output = ""
+                finally:
+                    try:
+                        _ingest_log_file.close()
+                    except OSError:
+                        pass
+                    _ingest_log_file = None
+            _last_run = _parse_ingest_summary(output)
+            _ingest_process = None
+            return False
+        return True
 
 
 def _render_ingest_idle() -> str:
@@ -488,12 +518,17 @@ def ingest_trigger():
 
     Uses sys.executable so the subprocess runs in the same virtualenv as the
     app server, picking up all installed dependencies automatically.
-    """
-    global _ingest_process
-    if _ingest_running():
-        return jsonify({"error": "already running"}), 409
 
-    # Build command from optional UI parameters.
+    stdout is redirected to a NamedTemporaryFile rather than subprocess.PIPE.
+    This avoids the OS pipe-buffer deadlock: if the process emits more than
+    ~64 KB of output (common with 200+ listings), a PIPE write blocks until the
+    reader drains it — but app.py only reads after the process exits, causing
+    a hang.  A temp file has no such size limit.
+    """
+    global _ingest_process, _ingest_log_file
+
+    # Build command from optional UI parameters before taking the lock so the
+    # critical section stays as short as possible.
     hours_raw = request.form.get("hours", "25").strip()
     rescore = request.form.get("rescore") == "1"
 
@@ -506,15 +541,24 @@ def ingest_trigger():
     if rescore:
         cmd.append("--rescore")
 
-    try:
-        _ingest_process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-        )
-    except (OSError, PermissionError) as e:
-        return jsonify({"error": f"Failed to start ingestion: {e}"}), 500
+    with _ingest_lock:
+        # Re-check inside the lock: another thread may have started a process
+        # between our pre-lock poll and now.
+        if _ingest_process is not None and _ingest_process.poll() is None:
+            return jsonify({"error": "already running"}), 409
+
+        try:
+            log_file = tempfile.TemporaryFile(mode="w+", suffix=".log", prefix="ingest_")
+            proc = subprocess.Popen(
+                cmd,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+            )
+        except (OSError, PermissionError) as e:
+            return jsonify({"error": f"Failed to start ingestion: {e}"}), 500
+
+        _ingest_log_file = log_file
+        _ingest_process = proc
 
     resp = make_response(_render_ingest_running(), 202)
     resp.headers["Content-Type"] = "text/html"
@@ -539,116 +583,141 @@ def ingest_status():
     return resp
 
 
-def _load_keys() -> dict:
-    """Load keys.json if it exists, otherwise return a copy of the defaults.
+def _load_providers_safe() -> dict:
+    """Load providers.json and return the parsed dict, or an empty skeleton on error.
 
-    Returns a deep copy so callers can mutate freely without touching the
-    module-level default structure.
+    Uses ``_PROVIDERS_PATH`` as the primary credential store.  Falls back to
+    migration from ``_KEYS_PATH`` / ``_CONFIG_PATH`` when ``providers.json`` is
+    absent.  Returns safe empty defaults when :exc:`CredentialError` is raised
+    so the settings UI always renders even before any credentials are configured.
+
+    Returns:
+        providers.json-shaped dict with ``provider_order``, ``llm``, and
+        ``job_sources`` keys guaranteed to be present.
     """
-    import copy
-    if not os.path.exists(_KEYS_PATH):
-        return copy.deepcopy(_KEYS_DEFAULTS)
     try:
-        with open(_KEYS_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        # Guarantee every expected provider key exists, using defaults as
-        # fallback for any provider absent from the file.
-        data.setdefault("providers", {})
-        for provider, defaults in _KEYS_DEFAULTS["providers"].items():
-            data["providers"].setdefault(provider, copy.deepcopy(defaults))
-            data["providers"][provider].setdefault("api_key", "")
-            data["providers"][provider].setdefault("model", defaults["model"])
-        data.setdefault("preferred_provider", _KEYS_DEFAULTS["preferred_provider"])
-        return data
-    except (json.JSONDecodeError, OSError):
-        return copy.deepcopy(_KEYS_DEFAULTS)
+        data = load_providers(
+            providers_path=_PROVIDERS_PATH,
+            keys_path=_KEYS_PATH,
+            config_path=_CONFIG_PATH,
+        )
+    except CredentialError:
+        data = {}
+
+    data.setdefault("provider_order", [])
+    data.setdefault("llm", {})
+    data.setdefault("job_sources", {})
+    return data
 
 
 @app.route("/settings", methods=["GET", "POST"])
 def settings():
-    """Settings page — manage API keys, preferred provider, and Adzuna credentials.
+    """Settings page — manage LLM provider credentials and job source credentials.
 
-    GET:  Reads keys.json and config.json and passes only boolean has_key/has_id
-          flags to the template — raw credential values are never sent to the browser.
-    POST: Merges submitted form values over the existing keys.json and config.json.
-          A blank field means "keep existing"; a non-blank field replaces the stored
-          value. Model is always updated (not secret). Adzuna fields update config.json.
+    GET:  Builds ``llm_schemas`` and ``source_schemas`` from the provider/source
+          registries and passes only boolean ``has_values`` flags — never raw
+          credential values — to the template.  Tab is selected via ``?tab=``
+          query param (default: ``llm``).
+
+    POST: Parses namespaced form fields (``<provider_key>__<field_name>``),
+          deep-merges non-blank values into ``providers.json`` via
+          :func:`credentials.save_providers`, then redirects to
+          ``GET /settings?tab=<active_tab>``.
     """
-    saved = False
     error = None
 
     if request.method == "POST":
-        keys_data = _load_keys()
+        active_tab = request.form.get("tab", "llm").strip()
 
-        for provider in ("anthropic", "openai", "gemini"):
-            submitted_key = request.form.get(f"{provider}_key", "").strip()
-            submitted_model = request.form.get(f"{provider}_model", "").strip()
+        # --- Build updates dict from namespaced form fields ---
+        updates: dict = {"llm": {}, "job_sources": {}}
 
-            # Only update the stored key when the field was filled in.
-            if submitted_key:
-                keys_data["providers"][provider]["api_key"] = submitted_key
+        # LLM providers: iterate registry so new providers are handled automatically.
+        for provider_key, cls in _PROVIDER_CLASS_MAP.items():
+            schema = cls.settings_schema()
+            provider_updates: dict = {}
+            for field in schema["fields"]:
+                field_name = field["name"]
+                form_key = f"{provider_key}__{field_name}"
+                value = request.form.get(form_key, "").strip()
+                provider_updates[field_name] = value  # blank → save_providers skips it
+            if provider_updates:
+                updates["llm"][provider_key] = provider_updates
 
-            # Model is never secret — always round-trip whatever was submitted.
-            if submitted_model:
-                keys_data["providers"][provider]["model"] = submitted_model
-
-        preferred = request.form.get("preferred_provider", "").strip()
-        if preferred in ("anthropic", "openai", "gemini"):
-            keys_data["preferred_provider"] = preferred
+        # Job sources: same pattern.
+        for source_key, cls in SOURCES.items():
+            schema = cls.settings_schema()
+            if not schema["fields"]:
+                continue  # no-credential sources have nothing to save
+            source_updates: dict = {}
+            for field in schema["fields"]:
+                field_name = field["name"]
+                form_key = f"{source_key}__{field_name}"
+                value = request.form.get(form_key, "").strip()
+                source_updates[field_name] = value
+            if source_updates:
+                updates["job_sources"][source_key] = source_updates
 
         try:
-            with open(_KEYS_PATH, "w", encoding="utf-8") as f:
-                json.dump(keys_data, f, indent=2)
+            save_providers(updates, providers_path=_PROVIDERS_PATH)
         except OSError:
             error = "Could not save settings — check file permissions."
 
         if error is None:
-            # Handle Adzuna credentials — load current config, merge, write back.
-            adzuna_id = request.form.get("adzuna_app_id", "").strip()
-            adzuna_key = request.form.get("adzuna_app_key", "").strip()
-            if adzuna_id or adzuna_key:
-                cfg_data = load_config(_CONFIG_PATH)
-                if adzuna_id:
-                    cfg_data["adzuna_app_id"] = adzuna_id
-                if adzuna_key:
-                    cfg_data["adzuna_app_key"] = adzuna_key
-                try:
-                    with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
-                        json.dump(cfg_data, f, indent=2)
-                except OSError:
-                    error = "Could not save settings — check file permissions."
+            return redirect(url_for("settings", tab=active_tab))
 
-        if error is None:
-            saved = True
+    # --- GET (or POST with error) ---
+    active_tab = request.args.get("tab", "llm").strip()
+    providers_data = _load_providers_safe()
+    llm_section: dict = providers_data.get("llm") or {}
+    sources_section: dict = providers_data.get("job_sources") or {}
 
-        # Re-load after write so the template reflects the current state.
-        keys_data = _load_keys()
-    else:
-        keys_data = _load_keys()
+    # provider_order from providers.json determines display sequence.
+    provider_order: list[str] = providers_data.get("provider_order") or []
+    # Build ordered list: provider_order first, then any registry providers not listed.
+    seen: set[str] = set()
+    ordered_provider_keys: list[str] = []
+    for key in provider_order:
+        if key in _PROVIDER_CLASS_MAP and key not in seen:
+            ordered_provider_keys.append(key)
+            seen.add(key)
+    for key in _PROVIDER_CLASS_MAP:
+        if key not in seen:
+            ordered_provider_keys.append(key)
+            seen.add(key)
 
-    # Build the template context — only booleans for key presence, never values.
-    providers_ctx = {}
-    for provider in ("anthropic", "openai", "gemini"):
-        cfg = keys_data["providers"][provider]
-        providers_ctx[provider] = {
-            "has_key": bool(cfg.get("api_key", "").strip()),
-            "model": cfg.get("model", _KEYS_DEFAULTS["providers"][provider]["model"]),
-        }
+    llm_schemas: list[tuple[str, dict, bool]] = []
+    for key in ordered_provider_keys:
+        cls = _PROVIDER_CLASS_MAP[key]
+        schema = cls.settings_schema()
+        cfg = llm_section.get(key) or {}
+        has_values = bool(cfg.get("api_key", "").strip())
+        llm_schemas.append((key, schema, has_values))
 
-    # Adzuna status flags — read from config.json (never pass raw values).
-    cfg_data = load_config(_CONFIG_PATH)
-    has_adzuna_id = bool(cfg_data.get("adzuna_app_id", "").strip())
-    has_adzuna_key = bool(cfg_data.get("adzuna_app_key", "").strip())
+    source_schemas: list[tuple[str, dict, bool]] = []
+    for key, cls in SOURCES.items():
+        schema = cls.settings_schema()
+        cfg = sources_section.get(key) or {}
+        required_fields = [f["name"] for f in schema["fields"] if f.get("required")]
+        if required_fields:
+            has_values = all(bool(cfg.get(fn, "").strip()) for fn in required_fields)
+        else:
+            has_values = False  # no-credential sources are never "configured"
+        source_schemas.append((key, schema, has_values))
+
+    # POST-with-error: re-render the form (not a redirect) so the error is shown.
+    saved = False  # POST always redirects on success; reaching here means error or GET
+    if request.method == "POST" and error:
+        pass  # fall through to render with error
 
     return render_template(
         "settings.html",
         view="settings",
-        providers=providers_ctx,
-        preferred_provider=keys_data.get("preferred_provider", "anthropic"),
+        llm_schemas=llm_schemas,
+        source_schemas=source_schemas,
+        active_tab=active_tab,
         saved=saved,
         error=error,
-        has_adzuna_id=has_adzuna_id,
-        has_adzuna_key=has_adzuna_key,
     )
 
 
@@ -826,7 +895,8 @@ def validate_keys():
 
     No API key values are logged or returned in the response.
     """
-    keys_data = _load_keys()
+    providers_data = _load_providers_safe()
+    llm_section: dict = providers_data.get("llm") or {}
     results = {}
 
     _validators = {
@@ -836,7 +906,7 @@ def validate_keys():
     }
 
     for provider, validator in _validators.items():
-        cfg = keys_data["providers"].get(provider, {})
+        cfg = llm_section.get(provider, {})
         api_key = cfg.get("api_key", "").strip()
         model   = cfg.get("model", "").strip()
 

@@ -33,6 +33,7 @@ from bs4 import BeautifulSoup
 import db
 from job_sources import make_source, AdzunaClient  # noqa: F401 — AdzunaClient re-exported for backward compat
 from providers import build_provider_chain, LLMProvider
+from credentials import CredentialError, load_providers
 
 _DB_PATH: str = os.environ.get("DB_PATH", "jobs.db")
 
@@ -74,13 +75,6 @@ def _configure_file_logging() -> None:
 _REQUIRED_TOP_LEVEL = ("adzuna_app_id", "adzuna_app_key")
 _REQUIRED_SEARCH = ("country", "what", "results_per_page", "max_pages")
 _REQUIRED_SCORING = ("threshold",)
-
-# Default models used when constructing a keys dict from env vars.
-_ENV_VAR_DEFAULTS: tuple[tuple[str, str, str], ...] = (
-    ("ANTHROPIC_API_KEY", "anthropic", "claude-haiku-4-5-20251001"),
-    ("OPENAI_API_KEY",    "openai",    "gpt-4o-mini"),
-    ("GOOGLE_API_KEY",    "gemini",    "gemini-1.5-flash"),
-)
 
 
 def load_config(path: str = "config.json") -> dict:
@@ -135,76 +129,6 @@ def load_config(path: str = "config.json") -> dict:
 
     return config
 
-
-def load_keys(path: str = "keys.json") -> dict:
-    """Load LLM provider API keys and preferred provider from ``keys.json``.
-
-    Supports two paths:
-
-    * **keys.json present** — load and return it directly. The file must have
-      a ``providers`` key whose value is a non-empty dict.
-    * **keys.json absent** — construct an equivalent dict from environment
-      variables (``ANTHROPIC_API_KEY``, ``OPENAI_API_KEY``, ``GOOGLE_API_KEY``).
-      Only providers whose env var is non-empty are included.
-      ``preferred_provider`` is set to the first provider found, or
-      ``"anthropic"`` if none are found (which also triggers ``SystemExit``).
-
-    Raises:
-        SystemExit: If neither ``keys.json`` nor any env var provides at least
-            one API key.
-
-    Returns:
-        Dict matching the ``keys.example.json`` structure::
-
-            {
-                "providers": {
-                    "anthropic": {"api_key": "...", "model": "..."},
-                    ...
-                },
-                "preferred_provider": "anthropic"
-            }
-    """
-    if os.path.exists(path):
-        try:
-            with open(path, encoding="utf-8") as fh:
-                keys = json.load(fh)
-        except json.JSONDecodeError as exc:
-            raise SystemExit(f"keys.json is not valid JSON: {exc}")
-
-        providers = keys.get("providers")
-        if not isinstance(providers, dict) or not providers:
-            raise SystemExit(
-                f"keys.json must have a non-empty 'providers' dict. "
-                f"Copy keys.example.json to {path} and fill in your API keys."
-            )
-
-        logger.info("Loaded keys.json")
-        return keys
-
-    # keys.json not present — fall back to environment variables.
-    logger.info("keys.json not found — using env var fallback")
-
-    providers: dict[str, dict[str, str]] = {}
-    preferred_provider: str = "anthropic"
-    first_found = True
-
-    for env_var, provider_name, default_model in _ENV_VAR_DEFAULTS:
-        api_key = os.environ.get(env_var, "")
-        if api_key:
-            providers[provider_name] = {"api_key": api_key, "model": default_model}
-            if first_found:
-                preferred_provider = provider_name
-                first_found = False
-
-    if not providers:
-        raise SystemExit(
-            "No LLM API keys found. Either:\n"
-            "  1. Copy keys.example.json to keys.json and fill in your API keys, or\n"
-            "  2. Set at least one of ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY "
-            "as an environment variable."
-        )
-
-    return {"providers": providers, "preferred_provider": preferred_provider}
 
 
 def load_profile(path: str = "profile.json") -> dict:
@@ -572,6 +496,7 @@ def run(
     profile_path: str = "profile.json",
     hours: int | None = None,
     keys_path: str = "keys.json",
+    providers_path: str = "providers.json",
 ) -> None:
     """Run the full ingestion pipeline.
 
@@ -580,13 +505,15 @@ def run(
     listing.  Prints a summary line when complete.
 
     Args:
-        config_path:  Path to config.json (default ``"config.json"``).
-        profile_path: Path to profile.json (default ``"profile.json"``).
-        hours:        If provided, only process listings whose ``created_at``
-                      timestamp is within the last N hours. Overrides
-                      ``search.max_days_old`` in config with ``ceil(hours/24)``.
-        keys_path:    Path to keys.json (default ``"keys.json"``).  Override
-                      in tests to inject a temp file.
+        config_path:    Path to config.json (default ``"config.json"``).
+        profile_path:   Path to profile.json (default ``"profile.json"``).
+        hours:          If provided, only process listings whose ``created_at``
+                        timestamp is within the last N hours. Overrides
+                        ``search.max_days_old`` in config with ``ceil(hours/24)``.
+        keys_path:      Path to legacy keys.json (used by migration; default
+                        ``"keys.json"``).
+        providers_path: Path to providers.json (default ``"providers.json"``).
+                        Override in tests to inject a temp file.
     """
     config = load_config(config_path)
     profile = load_profile(profile_path)
@@ -599,8 +526,18 @@ def run(
 
     client = make_source(config)
 
-    keys = load_keys(keys_path)
-    chain = build_provider_chain(keys)
+    try:
+        providers = load_providers(
+            providers_path=providers_path,
+            keys_path=keys_path,
+            config_path=config_path,
+        )
+    except CredentialError as exc:
+        logger.error("Credential error: %s", exc)
+        import sys as _sys
+        _sys.exit(1)
+
+    chain = build_provider_chain(providers)
     dead_providers: set[str] = set()
 
     # Counters.
@@ -745,6 +682,13 @@ def run(
             listing["dismissed"] = 0
             listing["job_type"] = job_type or None
 
+            # Populate posted_at from created_at when the source's normalise()
+            # does not set it directly (non-Adzuna sources).  db.insert_listing()
+            # defaults posted_at to NULL via setdefault — setting it here ensures
+            # date-sort works correctly for all sources.
+            if not listing.get("posted_at"):
+                listing["posted_at"] = listing.get("created_at") or None
+
             try:
                 db.insert_listing(listing, db_path=_DB_PATH)
             except Exception as exc:  # noqa: BLE001
@@ -774,6 +718,7 @@ def rescore(
     config_path: str = "config.json",
     profile_path: str = "profile.json",
     keys_path: str = "keys.json",
+    providers_path: str = "providers.json",
 ) -> None:
     """Re-score all previously scored listings against the current profile.
 
@@ -782,15 +727,27 @@ def rescore(
     Does not fetch new listings from Adzuna.
 
     Args:
-        config_path:  Path to config.json (default ``"config.json"``).
-        profile_path: Path to profile.json (default ``"profile.json"``).
-        keys_path:    Path to keys.json (default ``"keys.json"``).  Override
-                      in tests to inject a temp file.
+        config_path:    Path to config.json (default ``"config.json"``).
+        profile_path:   Path to profile.json (default ``"profile.json"``).
+        keys_path:      Path to legacy keys.json (used by migration; default
+                        ``"keys.json"``).
+        providers_path: Path to providers.json (default ``"providers.json"``).
+                        Override in tests to inject a temp file.
     """
     profile = load_profile(profile_path)
 
-    keys = load_keys(keys_path)
-    chain = build_provider_chain(keys)
+    try:
+        providers = load_providers(
+            providers_path=providers_path,
+            keys_path=keys_path,
+            config_path=config_path,
+        )
+    except CredentialError as exc:
+        logger.error("Credential error: %s", exc)
+        import sys as _sys
+        _sys.exit(1)
+
+    chain = build_provider_chain(providers)
     dead_providers: set[str] = set()
 
     listings = db.get_all_scored(db_path=_DB_PATH)

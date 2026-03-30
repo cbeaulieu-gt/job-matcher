@@ -323,8 +323,7 @@ def init_db(db_path: str = _DEFAULT_DB_PATH) -> None:
                     )
                 except sqlite3.OperationalError:
                     pass  # Column already present; nothing to do.
-
-        # Create index on redirect_url for fast cross-source deduplication.
+                  
         # This is called once per candidate listing during ingest.
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_listings_redirect_url ON listings (redirect_url)"
@@ -810,6 +809,58 @@ def set_applied(listing_id: int, value: int, db_path: str = _DEFAULT_DB_PATH) ->
         conn.commit()
     finally:
         conn.close()
+
+
+def toggle_bookmarked(listing_id: int, db_path: str = _DEFAULT_DB_PATH) -> dict | None:
+    """Atomically flip the bookmarked flag and return the updated listing.
+
+    Uses a single SQL statement (``1 - bookmarked``) so concurrent requests
+    cannot both read the same state and both write the same flipped value —
+    the race condition that the read-flip-write pattern is vulnerable to.
+
+    Args:
+        listing_id: Internal integer primary key.
+        db_path:    Path to the SQLite database file.
+
+    Returns:
+        The updated listing dict, or None if the id does not exist.
+    """
+    conn = get_connection(db_path)
+    try:
+        conn.execute(
+            "UPDATE listings SET bookmarked = 1 - bookmarked WHERE id = ?",
+            (listing_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return get_listing_by_id(listing_id, db_path=db_path)
+
+
+def toggle_applied(listing_id: int, db_path: str = _DEFAULT_DB_PATH) -> dict | None:
+    """Atomically flip the applied flag and return the updated listing.
+
+    Uses a single SQL statement (``1 - applied``) so concurrent requests
+    cannot both read the same state and both write the same flipped value —
+    the race condition that the read-flip-write pattern is vulnerable to.
+
+    Args:
+        listing_id: Internal integer primary key.
+        db_path:    Path to the SQLite database file.
+
+    Returns:
+        The updated listing dict, or None if the id does not exist.
+    """
+    conn = get_connection(db_path)
+    try:
+        conn.execute(
+            "UPDATE listings SET applied = 1 - applied WHERE id = ?",
+            (listing_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return get_listing_by_id(listing_id, db_path=db_path)
 
 
 def get_applied(db_path: str = _DEFAULT_DB_PATH) -> list[dict]:

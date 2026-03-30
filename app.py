@@ -309,20 +309,13 @@ def bookmarks():
 def toggle_bookmark(listing_id: int):
     """Toggle the bookmarked state for a listing.
 
-    Reads the current state, flips it, writes it back, then returns the
-    re-rendered action button group as an HTMX partial. HTMX swaps this
-    into the DOM in place of the existing action row, so the star icon
-    updates without a full page reload.
+    Delegates to db.toggle_bookmarked(), which performs the flip atomically
+    in a single SQL statement so rapid double-clicks cannot produce a net
+    no-op. Returns the re-rendered action button group as an HTMX partial.
     """
-    listing = db.get_listing_by_id(listing_id, db_path=DB_PATH)
+    listing = db.toggle_bookmarked(listing_id, db_path=DB_PATH)
     if listing is None:
         return make_response("", 404)
-
-    new_value = 0 if listing["bookmarked"] else 1
-    db.set_bookmarked(listing_id, new_value, db_path=DB_PATH)
-
-    # Re-fetch to get the authoritative updated state.
-    listing = db.get_listing_by_id(listing_id, db_path=DB_PATH)
     return render_template("_actions.html", listing=listing)
 
 
@@ -330,19 +323,13 @@ def toggle_bookmark(listing_id: int):
 def toggle_apply(listing_id: int):
     """Toggle the applied state for a listing.
 
-    Reads the current state, flips it, writes it back, then returns the
-    re-rendered action button group as an HTMX partial. Same read-modify-write
-    pattern as toggle_bookmark — only the action row is swapped in the DOM.
+    Delegates to db.toggle_applied(), which performs the flip atomically
+    in a single SQL statement so rapid double-clicks cannot produce a net
+    no-op. Returns the re-rendered action button group as an HTMX partial.
     """
-    listing = db.get_listing_by_id(listing_id, db_path=DB_PATH)
+    listing = db.toggle_applied(listing_id, db_path=DB_PATH)
     if listing is None:
         return make_response("", 404)
-
-    new_value = 0 if listing["applied"] else 1
-    db.set_applied(listing_id, new_value, db_path=DB_PATH)
-
-    # Re-fetch to get the authoritative updated state.
-    listing = db.get_listing_by_id(listing_id, db_path=DB_PATH)
     return render_template("_actions.html", listing=listing)
 
 

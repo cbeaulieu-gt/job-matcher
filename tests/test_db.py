@@ -918,3 +918,119 @@ class TestPostedAt:
             # real-pa has a non-NULL posted_at so should sort first (DESC puts NULLs last)
             assert ids[0] == "real-pa"
             assert "null-pa" in ids
+
+
+# ---------------------------------------------------------------------------
+# Atomic toggle helpers
+# ---------------------------------------------------------------------------
+
+class TestToggleBookmarked:
+    """Tests for db.toggle_bookmarked() — atomic flip of the bookmarked flag."""
+
+    def _insert_and_get_id(self, path: str, source_id: str, bookmarked: int = 0) -> int:
+        db.insert_listing(make_listing(source_id=source_id, bookmarked=bookmarked), db_path=path)
+        conn = db.get_connection(path)
+        try:
+            row = conn.execute(
+                "SELECT id FROM listings WHERE source_id = ?", (source_id,)
+            ).fetchone()
+            return row["id"]
+        finally:
+            conn.close()
+
+    def test_toggle_bookmarked_flips_zero_to_one(self):
+        """toggle_bookmarked() on an unbookmarked listing sets bookmarked=1."""
+        with TempDB() as path:
+            listing_id = self._insert_and_get_id(path, "tb-001", bookmarked=0)
+            result = db.toggle_bookmarked(listing_id, db_path=path)
+            assert result is not None
+            assert result["bookmarked"] == 1
+
+    def test_toggle_bookmarked_flips_one_to_zero(self):
+        """toggle_bookmarked() on an already-bookmarked listing sets bookmarked=0."""
+        with TempDB() as path:
+            listing_id = self._insert_and_get_id(path, "tb-002", bookmarked=1)
+            result = db.toggle_bookmarked(listing_id, db_path=path)
+            assert result is not None
+            assert result["bookmarked"] == 0
+
+    def test_toggle_bookmarked_twice_returns_to_original(self):
+        """Two sequential toggle_bookmarked() calls return the flag to its original value."""
+        with TempDB() as path:
+            listing_id = self._insert_and_get_id(path, "tb-003", bookmarked=0)
+            db.toggle_bookmarked(listing_id, db_path=path)
+            result = db.toggle_bookmarked(listing_id, db_path=path)
+            assert result is not None
+            assert result["bookmarked"] == 0
+
+    def test_toggle_bookmarked_returns_none_for_missing_id(self):
+        """toggle_bookmarked() returns None when the listing id does not exist."""
+        with TempDB() as path:
+            result = db.toggle_bookmarked(999999, db_path=path)
+            assert result is None
+
+    def test_toggle_bookmarked_returns_full_listing_dict(self):
+        """The dict returned by toggle_bookmarked() has the expected listing fields."""
+        with TempDB() as path:
+            listing_id = self._insert_and_get_id(path, "tb-004", bookmarked=0)
+            result = db.toggle_bookmarked(listing_id, db_path=path)
+            assert result is not None
+            assert result["source_id"] == "tb-004"
+            assert "score" in result
+            assert isinstance(result["matched_skills"], list)
+
+
+class TestToggleApplied:
+    """Tests for db.toggle_applied() — atomic flip of the applied flag."""
+
+    def _insert_and_get_id(self, path: str, source_id: str, applied: int = 0) -> int:
+        db.insert_listing(make_listing(source_id=source_id, applied=applied), db_path=path)
+        conn = db.get_connection(path)
+        try:
+            row = conn.execute(
+                "SELECT id FROM listings WHERE source_id = ?", (source_id,)
+            ).fetchone()
+            return row["id"]
+        finally:
+            conn.close()
+
+    def test_toggle_applied_flips_zero_to_one(self):
+        """toggle_applied() on an unapplied listing sets applied=1."""
+        with TempDB() as path:
+            listing_id = self._insert_and_get_id(path, "ta-001", applied=0)
+            result = db.toggle_applied(listing_id, db_path=path)
+            assert result is not None
+            assert result["applied"] == 1
+
+    def test_toggle_applied_flips_one_to_zero(self):
+        """toggle_applied() on an applied listing sets applied=0."""
+        with TempDB() as path:
+            listing_id = self._insert_and_get_id(path, "ta-002", applied=1)
+            result = db.toggle_applied(listing_id, db_path=path)
+            assert result is not None
+            assert result["applied"] == 0
+
+    def test_toggle_applied_twice_returns_to_original(self):
+        """Two sequential toggle_applied() calls return the flag to its original value."""
+        with TempDB() as path:
+            listing_id = self._insert_and_get_id(path, "ta-003", applied=0)
+            db.toggle_applied(listing_id, db_path=path)
+            result = db.toggle_applied(listing_id, db_path=path)
+            assert result is not None
+            assert result["applied"] == 0
+
+    def test_toggle_applied_returns_none_for_missing_id(self):
+        """toggle_applied() returns None when the listing id does not exist."""
+        with TempDB() as path:
+            result = db.toggle_applied(999999, db_path=path)
+            assert result is None
+
+    def test_toggle_applied_returns_full_listing_dict(self):
+        """The dict returned by toggle_applied() has the expected listing fields."""
+        with TempDB() as path:
+            listing_id = self._insert_and_get_id(path, "ta-004", applied=0)
+            result = db.toggle_applied(listing_id, db_path=path)
+            assert result is not None
+            assert result["source_id"] == "ta-004"
+            assert "score" in result
+            assert isinstance(result["matched_skills"], list)

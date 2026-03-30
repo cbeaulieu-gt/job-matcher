@@ -806,6 +806,58 @@ def set_applied(listing_id: int, value: int, db_path: str = _DEFAULT_DB_PATH) ->
         conn.close()
 
 
+def toggle_bookmarked(listing_id: int, db_path: str = _DEFAULT_DB_PATH) -> dict | None:
+    """Atomically flip the bookmarked flag and return the updated listing.
+
+    Uses a single SQL statement (``1 - bookmarked``) so concurrent requests
+    cannot both read the same state and both write the same flipped value —
+    the race condition that the read-flip-write pattern is vulnerable to.
+
+    Args:
+        listing_id: Internal integer primary key.
+        db_path:    Path to the SQLite database file.
+
+    Returns:
+        The updated listing dict, or None if the id does not exist.
+    """
+    conn = get_connection(db_path)
+    try:
+        conn.execute(
+            "UPDATE listings SET bookmarked = 1 - bookmarked WHERE id = ?",
+            (listing_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return get_listing_by_id(listing_id, db_path=db_path)
+
+
+def toggle_applied(listing_id: int, db_path: str = _DEFAULT_DB_PATH) -> dict | None:
+    """Atomically flip the applied flag and return the updated listing.
+
+    Uses a single SQL statement (``1 - applied``) so concurrent requests
+    cannot both read the same state and both write the same flipped value —
+    the race condition that the read-flip-write pattern is vulnerable to.
+
+    Args:
+        listing_id: Internal integer primary key.
+        db_path:    Path to the SQLite database file.
+
+    Returns:
+        The updated listing dict, or None if the id does not exist.
+    """
+    conn = get_connection(db_path)
+    try:
+        conn.execute(
+            "UPDATE listings SET applied = 1 - applied WHERE id = ?",
+            (listing_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return get_listing_by_id(listing_id, db_path=db_path)
+
+
 def get_applied(db_path: str = _DEFAULT_DB_PATH) -> list[dict]:
     """Return all listings where applied = 1, ordered by fetched_at DESC."""
     conn = get_connection(db_path)

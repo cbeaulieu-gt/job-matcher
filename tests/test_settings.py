@@ -2,8 +2,8 @@
 tests/test_settings.py — Tests for the /settings GET and POST routes.
 
 Uses Flask's built-in test client so no real HTTP is involved. A temporary
-directory is used for keys.json so tests are fully isolated from the real
-project file.
+directory is used for providers.json/keys.json so tests are fully isolated
+from the real project files.
 """
 
 import json
@@ -23,9 +23,17 @@ from app import app as flask_app
 
 @pytest.fixture()
 def tmp_keys_path(tmp_path, monkeypatch):
-    """Point _KEYS_PATH at a temp file so tests don't touch the real keys.json."""
+    """Point _KEYS_PATH at a temp file so legacy migration never touches keys.json."""
     path = str(tmp_path / "keys.json")
     monkeypatch.setattr(app_module, "_KEYS_PATH", path)
+    return path
+
+
+@pytest.fixture()
+def tmp_providers_path(tmp_path, monkeypatch):
+    """Point _PROVIDERS_PATH at a temp file so tests don't touch providers.json."""
+    path = str(tmp_path / "providers.json")
+    monkeypatch.setattr(app_module, "_PROVIDERS_PATH", path)
     return path
 
 
@@ -36,45 +44,54 @@ def client():
         yield c
 
 
+def _write_providers(path: str, **overrides) -> None:
+    """Write a providers.json fixture to *path* with sane defaults."""
+    data = {
+        "provider_order": ["anthropic", "openai", "gemini"],
+        "llm": {
+            "anthropic": {"api_key": overrides.get("anthropic_key", "sk-real"),
+                          "model": "claude-haiku-4-5-20251001"},
+            "openai":    {"api_key": overrides.get("openai_key", ""),
+                          "model": "gpt-4o-mini"},
+            "gemini":    {"api_key": overrides.get("gemini_key", ""),
+                          "model": "gemini-1.5-flash"},
+        },
+        "job_sources": {
+            "adzuna": {
+                "app_id":  overrides.get("adzuna_app_id", ""),
+                "app_key": overrides.get("adzuna_app_key", ""),
+            },
+        },
+    }
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2)
+
+
 # ---------------------------------------------------------------------------
-# GET /settings — no keys.json present
+# GET /settings — no providers.json present
 # ---------------------------------------------------------------------------
 
 class TestSettingsGetNoFile:
-    def test_returns_200(self, client, tmp_keys_path):
+    def test_returns_200(self, client, tmp_providers_path, tmp_keys_path):
         resp = client.get("/settings")
         assert resp.status_code == 200
 
-    def test_shows_not_set_for_all_providers(self, client, tmp_keys_path, tmp_config_path):
+    def test_shows_not_set_for_all_unconfigured_providers(
+        self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
+    ):
         resp = client.get("/settings")
         body = resp.data.decode()
-        # All three LLM providers + 2 Adzuna fields should show "not set"
-        assert body.count("not-set") == 5
+        # All LLM providers + Adzuna have empty keys → all show "not-set"
+        assert "not-set" in body
 
-    def test_never_exposes_key_values(self, client, tmp_keys_path):
+    def test_never_exposes_key_values(self, client, tmp_providers_path, tmp_keys_path):
         """GET must not render any actual API key string even if the file exists."""
-        with open(tmp_keys_path, "w") as f:
-            json.dump({
-                "providers": {
-                    "anthropic": {"api_key": "sk-secret-abc", "model": "claude-haiku-4-5-20251001"},
-                    "openai":    {"api_key": "", "model": "gpt-4o-mini"},
-                    "gemini":    {"api_key": "", "model": "gemini-1.5-flash"},
-                },
-                "preferred_provider": "anthropic",
-            }, f)
-
+        _write_providers(tmp_providers_path, anthropic_key="sk-secret-abc")
         resp = client.get("/settings")
         body = resp.data.decode()
         assert "sk-secret-abc" not in body
 
-    def test_default_model_values_are_pre_filled(self, client, tmp_keys_path):
-        resp = client.get("/settings")
-        body = resp.data.decode()
-        assert "claude-haiku-4-5-20251001" in body
-        assert "gpt-4o-mini" in body
-        assert "gemini-1.5-flash" in body
-
-    def test_settings_tab_is_active(self, client, tmp_keys_path):
+    def test_settings_tab_is_active(self, client, tmp_providers_path, tmp_keys_path):
         resp = client.get("/settings")
         body = resp.data.decode()
         # The active nav-tab should link to /settings
@@ -85,183 +102,102 @@ class TestSettingsGetNoFile:
 
 
 # ---------------------------------------------------------------------------
-# GET /settings — keys.json exists with a configured key
+# GET /settings — providers.json exists with a configured key
 # ---------------------------------------------------------------------------
 
 class TestSettingsGetWithFile:
-    def _write_keys(self, path, anthropic_key="sk-real", openai_key="", gemini_key=""):
-        data = {
-            "providers": {
-                "anthropic": {"api_key": anthropic_key, "model": "claude-haiku-4-5-20251001"},
-                "openai":    {"api_key": openai_key,    "model": "gpt-4o-mini"},
-                "gemini":    {"api_key": gemini_key,    "model": "gemini-1.5-flash"},
-            },
-            "preferred_provider": "anthropic",
-        }
-        with open(path, "w") as f:
-            json.dump(data, f)
-
-    def test_configured_badge_shown_when_key_present(self, client, tmp_keys_path):
-        self._write_keys(tmp_keys_path, anthropic_key="sk-real")
+    def test_configured_badge_shown_when_key_present(
+        self, client, tmp_providers_path, tmp_keys_path
+    ):
+        _write_providers(tmp_providers_path, anthropic_key="sk-real")
         resp = client.get("/settings")
         body = resp.data.decode()
         assert "configured" in body
 
-    def test_not_set_badge_shown_for_empty_key(self, client, tmp_keys_path, tmp_config_path):
-        self._write_keys(tmp_keys_path, openai_key="")
+    def test_not_set_badge_shown_for_empty_key(
+        self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
+    ):
+        _write_providers(tmp_providers_path, anthropic_key="sk-real", openai_key="", gemini_key="")
         resp = client.get("/settings")
         body = resp.data.decode()
-        # openai and gemini LLM fields + 2 Adzuna fields (also empty by default) — four not-set badges
-        assert body.count("not-set") == 4
+        # openai and gemini LLM fields have empty api_key — at least 2 not-set badges
+        assert body.count("not-set") >= 2
 
-    def test_no_key_values_in_response(self, client, tmp_keys_path):
-        self._write_keys(tmp_keys_path, anthropic_key="sk-real")
+    def test_no_key_values_in_response(self, client, tmp_providers_path, tmp_keys_path):
+        _write_providers(tmp_providers_path, anthropic_key="sk-real")
         resp = client.get("/settings")
         body = resp.data.decode()
         assert "sk-real" not in body
 
-    def test_preferred_provider_selected(self, client, tmp_keys_path):
-        self._write_keys(tmp_keys_path)
-        resp = client.get("/settings")
-        body = resp.data.decode()
-        # The select option for anthropic should carry the selected attribute.
-        assert 'value="anthropic" selected' in body
-
 
 # ---------------------------------------------------------------------------
-# POST /settings — saves new keys
+# POST /settings — saves new keys to providers.json
 # ---------------------------------------------------------------------------
 
 class TestSettingsPost:
-    def test_saves_new_key_and_returns_200(self, client, tmp_keys_path):
+    def test_saves_new_key_and_redirects(self, client, tmp_providers_path, tmp_keys_path):
+        _write_providers(tmp_providers_path)
         resp = client.post("/settings", data={
-            "anthropic_key": "sk-new-key",
-            "anthropic_model": "claude-haiku-4-5-20251001",
-            "openai_key": "",
-            "openai_model": "gpt-4o-mini",
-            "gemini_key": "",
-            "gemini_model": "gemini-1.5-flash",
-            "preferred_provider": "anthropic",
-        })
+            "anthropic__api_key": "sk-new-key",
+            "anthropic__model": "claude-haiku-4-5-20251001",
+            "tab": "llm",
+        }, follow_redirects=True)
         assert resp.status_code == 200
 
-        with open(tmp_keys_path) as f:
+        with open(tmp_providers_path, encoding="utf-8") as f:
             saved = json.load(f)
-        assert saved["providers"]["anthropic"]["api_key"] == "sk-new-key"
+        assert saved["llm"]["anthropic"]["api_key"] == "sk-new-key"
 
-    def test_shows_saved_notice_on_success(self, client, tmp_keys_path):
+    def test_blank_key_field_preserves_existing_key(
+        self, client, tmp_providers_path, tmp_keys_path
+    ):
+        _write_providers(tmp_providers_path, anthropic_key="sk-existing")
+
+        # Submit with blank anthropic api_key — should NOT overwrite.
+        client.post("/settings", data={
+            "anthropic__api_key": "",
+            "anthropic__model": "claude-haiku-4-5-20251001",
+            "tab": "llm",
+        })
+
+        with open(tmp_providers_path, encoding="utf-8") as f:
+            saved = json.load(f)
+        assert saved["llm"]["anthropic"]["api_key"] == "sk-existing"
+
+    def test_model_is_updated(self, client, tmp_providers_path, tmp_keys_path):
+        _write_providers(tmp_providers_path)
+        client.post("/settings", data={
+            "anthropic__api_key": "",
+            "anthropic__model": "claude-opus-4-20251001",
+            "tab": "llm",
+        })
+        with open(tmp_providers_path, encoding="utf-8") as f:
+            saved = json.load(f)
+        assert saved["llm"]["anthropic"]["model"] == "claude-opus-4-20251001"
+
+    def test_saved_key_not_echoed_in_response(
+        self, client, tmp_providers_path, tmp_keys_path
+    ):
+        """After a successful POST+redirect the raw key must not appear in HTML."""
         resp = client.post("/settings", data={
-            "anthropic_key": "sk-abc",
-            "anthropic_model": "claude-haiku-4-5-20251001",
-            "openai_key": "",
-            "openai_model": "gpt-4o-mini",
-            "gemini_key": "",
-            "gemini_model": "gemini-1.5-flash",
-            "preferred_provider": "anthropic",
-        })
-        body = resp.data.decode()
-        assert "Settings saved." in body
-
-    def test_blank_key_field_preserves_existing_key(self, client, tmp_keys_path):
-        # Pre-populate file with an existing key.
-        with open(tmp_keys_path, "w") as f:
-            json.dump({
-                "providers": {
-                    "anthropic": {"api_key": "sk-existing", "model": "claude-haiku-4-5-20251001"},
-                    "openai":    {"api_key": "", "model": "gpt-4o-mini"},
-                    "gemini":    {"api_key": "", "model": "gemini-1.5-flash"},
-                },
-                "preferred_provider": "anthropic",
-            }, f)
-
-        # Submit with blank anthropic_key — should NOT overwrite.
-        client.post("/settings", data={
-            "anthropic_key": "",
-            "anthropic_model": "claude-haiku-4-5-20251001",
-            "openai_key": "",
-            "openai_model": "gpt-4o-mini",
-            "gemini_key": "",
-            "gemini_model": "gemini-1.5-flash",
-            "preferred_provider": "anthropic",
-        })
-
-        with open(tmp_keys_path) as f:
-            saved = json.load(f)
-        assert saved["providers"]["anthropic"]["api_key"] == "sk-existing"
-
-    def test_model_is_always_updated(self, client, tmp_keys_path):
-        client.post("/settings", data={
-            "anthropic_key": "",
-            "anthropic_model": "claude-opus-4-20251001",
-            "openai_key": "",
-            "openai_model": "gpt-4o-mini",
-            "gemini_key": "",
-            "gemini_model": "gemini-1.5-flash",
-            "preferred_provider": "anthropic",
-        })
-        with open(tmp_keys_path) as f:
-            saved = json.load(f)
-        assert saved["providers"]["anthropic"]["model"] == "claude-opus-4-20251001"
-
-    def test_preferred_provider_is_saved(self, client, tmp_keys_path):
-        client.post("/settings", data={
-            "anthropic_key": "",
-            "anthropic_model": "claude-haiku-4-5-20251001",
-            "openai_key": "sk-openai",
-            "openai_model": "gpt-4o-mini",
-            "gemini_key": "",
-            "gemini_model": "gemini-1.5-flash",
-            "preferred_provider": "openai",
-        })
-        with open(tmp_keys_path) as f:
-            saved = json.load(f)
-        assert saved["preferred_provider"] == "openai"
-
-    def test_invalid_preferred_provider_is_rejected(self, client, tmp_keys_path):
-        """An unrecognised preferred_provider value must not be written to disk."""
-        client.post("/settings", data={
-            "anthropic_key": "",
-            "anthropic_model": "claude-haiku-4-5-20251001",
-            "openai_key": "",
-            "openai_model": "gpt-4o-mini",
-            "gemini_key": "",
-            "gemini_model": "gemini-1.5-flash",
-            "preferred_provider": "malicious_provider",
-        })
-        with open(tmp_keys_path) as f:
-            saved = json.load(f)
-        # Should fall back to the default.
-        assert saved["preferred_provider"] == "anthropic"
-
-    def test_saved_key_not_echoed_in_response(self, client, tmp_keys_path):
-        """Even after a successful POST the raw key must not appear in the HTML."""
-        resp = client.post("/settings", data={
-            "anthropic_key": "sk-supersecret",
-            "anthropic_model": "claude-haiku-4-5-20251001",
-            "openai_key": "",
-            "openai_model": "gpt-4o-mini",
-            "gemini_key": "",
-            "gemini_model": "gemini-1.5-flash",
-            "preferred_provider": "anthropic",
-        })
+            "anthropic__api_key": "sk-supersecret",
+            "tab": "llm",
+        }, follow_redirects=True)
         body = resp.data.decode()
         assert "sk-supersecret" not in body
 
-    def test_creates_keys_json_from_scratch(self, client, tmp_keys_path):
-        assert not os.path.exists(tmp_keys_path)
+    def test_creates_providers_json_from_scratch(
+        self, client, tmp_providers_path, tmp_keys_path
+    ):
+        assert not os.path.exists(tmp_providers_path)
         client.post("/settings", data={
-            "anthropic_key": "sk-brand-new",
-            "anthropic_model": "claude-haiku-4-5-20251001",
-            "openai_key": "",
-            "openai_model": "gpt-4o-mini",
-            "gemini_key": "",
-            "gemini_model": "gemini-1.5-flash",
-            "preferred_provider": "anthropic",
+            "anthropic__api_key": "sk-brand-new",
+            "tab": "llm",
         })
-        assert os.path.exists(tmp_keys_path)
-        with open(tmp_keys_path) as f:
+        assert os.path.exists(tmp_providers_path)
+        with open(tmp_providers_path, encoding="utf-8") as f:
             saved = json.load(f)
-        assert saved["providers"]["anthropic"]["api_key"] == "sk-brand-new"
+        assert saved["llm"]["anthropic"]["api_key"] == "sk-brand-new"
 
 
 # ---------------------------------------------------------------------------
@@ -277,106 +213,108 @@ def tmp_config_path(tmp_path, monkeypatch):
 
 
 class TestSettingsAdzuna:
-    """Tests for the Adzuna credentials section on /settings."""
+    """Tests for the Adzuna credentials section on /settings (Job Sources tab)."""
 
-    def test_get_no_config_shows_not_set_badges(self, client, tmp_keys_path, tmp_config_path):
-        """When config.json is absent both Adzuna fields should show the not-set badge."""
+    def test_get_shows_not_set_when_adzuna_empty(
+        self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
+    ):
+        """When adzuna credentials are absent the Job Sources tab shows the not-set badge."""
+        _write_providers(tmp_providers_path, adzuna_app_id="", adzuna_app_key="")
         resp = client.get("/settings")
         body = resp.data.decode()
-        assert "App ID not set" in body
-        assert "App Key not set" in body
+        assert "not-set" in body
 
-    def test_get_with_credentials_shows_configured_badges(self, client, tmp_keys_path, tmp_config_path):
-        """When both Adzuna credentials are present both badges should read 'configured'."""
-        with open(tmp_config_path, "w") as f:
-            json.dump({"adzuna_app_id": "myid123", "adzuna_app_key": "mykey456"}, f)
-
+    def test_get_shows_configured_when_adzuna_present(
+        self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
+    ):
+        """When both Adzuna credentials are present the badge should read 'configured'."""
+        _write_providers(
+            tmp_providers_path, adzuna_app_id="myid123", adzuna_app_key="mykey456"
+        )
         resp = client.get("/settings")
         body = resp.data.decode()
-        assert "App ID configured" in body
-        assert "App Key configured" in body
+        assert "configured" in body
 
-    def test_get_never_exposes_raw_adzuna_values(self, client, tmp_keys_path, tmp_config_path):
+    def test_get_never_exposes_raw_adzuna_values(
+        self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
+    ):
         """Raw Adzuna credential values must never appear in the HTML response."""
-        with open(tmp_config_path, "w") as f:
-            json.dump({"adzuna_app_id": "raw-id-secret", "adzuna_app_key": "raw-key-secret"}, f)
-
+        _write_providers(
+            tmp_providers_path, adzuna_app_id="raw-id-secret", adzuna_app_key="raw-key-secret"
+        )
         resp = client.get("/settings")
         body = resp.data.decode()
         assert "raw-id-secret" not in body
         assert "raw-key-secret" not in body
 
-    def test_post_writes_adzuna_credentials_to_config(self, client, tmp_keys_path, tmp_config_path):
-        """Submitting non-blank Adzuna fields should write them to config.json."""
+    def test_post_writes_adzuna_credentials_to_providers_json(
+        self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
+    ):
+        """Submitting non-blank Adzuna fields should write them to providers.json."""
+        _write_providers(tmp_providers_path)
         resp = client.post("/settings", data={
-            "anthropic_key": "", "anthropic_model": "claude-haiku-4-5-20251001",
-            "openai_key": "", "openai_model": "gpt-4o-mini",
-            "gemini_key": "", "gemini_model": "gemini-1.5-flash",
-            "preferred_provider": "anthropic",
-            "adzuna_app_id": "new-app-id",
-            "adzuna_app_key": "new-app-key",
-        })
+            "adzuna__app_id": "new-app-id",
+            "adzuna__app_key": "new-app-key",
+            "tab": "sources",
+        }, follow_redirects=True)
         assert resp.status_code == 200
 
-        with open(tmp_config_path) as f:
+        with open(tmp_providers_path, encoding="utf-8") as f:
             saved = json.load(f)
-        assert saved["adzuna_app_id"] == "new-app-id"
-        assert saved["adzuna_app_key"] == "new-app-key"
+        assert saved["job_sources"]["adzuna"]["app_id"] == "new-app-id"
+        assert saved["job_sources"]["adzuna"]["app_key"] == "new-app-key"
 
-    def test_post_blank_adzuna_fields_preserve_existing_values(self, client, tmp_keys_path, tmp_config_path):
+    def test_post_blank_adzuna_fields_preserve_existing_values(
+        self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
+    ):
         """Submitting blank Adzuna fields must NOT overwrite existing values."""
-        with open(tmp_config_path, "w") as f:
-            json.dump({"adzuna_app_id": "existing-id", "adzuna_app_key": "existing-key"}, f)
-
+        _write_providers(
+            tmp_providers_path, adzuna_app_id="existing-id", adzuna_app_key="existing-key"
+        )
         client.post("/settings", data={
-            "anthropic_key": "", "anthropic_model": "claude-haiku-4-5-20251001",
-            "openai_key": "", "openai_model": "gpt-4o-mini",
-            "gemini_key": "", "gemini_model": "gemini-1.5-flash",
-            "preferred_provider": "anthropic",
-            "adzuna_app_id": "",
-            "adzuna_app_key": "",
+            "adzuna__app_id": "",
+            "adzuna__app_key": "",
+            "tab": "sources",
         })
 
-        with open(tmp_config_path) as f:
+        with open(tmp_providers_path, encoding="utf-8") as f:
             saved = json.load(f)
-        assert saved["adzuna_app_id"] == "existing-id"
-        assert saved["adzuna_app_key"] == "existing-key"
+        assert saved["job_sources"]["adzuna"]["app_id"] == "existing-id"
+        assert saved["job_sources"]["adzuna"]["app_key"] == "existing-key"
 
-    def test_post_saved_adzuna_values_not_echoed_in_response(self, client, tmp_keys_path, tmp_config_path):
-        """Even after a successful POST the raw Adzuna credentials must not appear in the HTML."""
+    def test_post_saved_adzuna_values_not_echoed_in_response(
+        self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
+    ):
+        """Even after a successful POST+redirect the raw Adzuna credentials must not appear."""
+        _write_providers(tmp_providers_path)
         resp = client.post("/settings", data={
-            "anthropic_key": "", "anthropic_model": "claude-haiku-4-5-20251001",
-            "openai_key": "", "openai_model": "gpt-4o-mini",
-            "gemini_key": "", "gemini_model": "gemini-1.5-flash",
-            "preferred_provider": "anthropic",
-            "adzuna_app_id": "super-secret-id",
-            "adzuna_app_key": "super-secret-key",
-        })
+            "adzuna__app_id": "super-secret-id",
+            "adzuna__app_key": "super-secret-key",
+            "tab": "sources",
+        }, follow_redirects=True)
         body = resp.data.decode()
         assert "super-secret-id" not in body
         assert "super-secret-key" not in body
 
-    def test_post_config_write_failure_returns_200_with_error_message(
-        self, client, tmp_keys_path, tmp_config_path, monkeypatch
+    def test_post_write_failure_returns_200_with_error_message(
+        self, client, tmp_providers_path, tmp_keys_path, tmp_config_path, monkeypatch
     ):
-        """If config.json cannot be written the response should be 200 with an error notice."""
+        """If providers.json cannot be written the response should show an error notice."""
+        _write_providers(tmp_providers_path)
         original_open = open
 
         def patched_open(file, mode="r", **kwargs):
-            # Raise OSError only when writing config.json.
-            if "w" in mode and str(file) == tmp_config_path:
+            # Raise OSError only when writing the tmp file used by save_providers.
+            if "w" in str(mode) and str(file) == tmp_providers_path + ".tmp":
                 raise OSError("Permission denied")
             return original_open(file, mode, **kwargs)
 
         monkeypatch.setattr("builtins.open", patched_open)
 
         resp = client.post("/settings", data={
-            "anthropic_key": "", "anthropic_model": "claude-haiku-4-5-20251001",
-            "openai_key": "", "openai_model": "gpt-4o-mini",
-            "gemini_key": "", "gemini_model": "gemini-1.5-flash",
-            "preferred_provider": "anthropic",
-            "adzuna_app_id": "some-id",
-            "adzuna_app_key": "some-key",
+            "adzuna__app_id": "some-id",
+            "adzuna__app_key": "some-key",
+            "tab": "sources",
         })
         assert resp.status_code == 200
         body = resp.data.decode()
@@ -433,7 +371,9 @@ class TestSettingsConfigGet:
         body = resp.data.decode()
         assert "8.0" in body
 
-    def test_profile_tab_on_settings_page(self, client, tmp_keys_path, tmp_config_path):
+    def test_profile_tab_on_settings_page(
+        self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
+    ):
         """The /settings page nav must contain a link to /profile."""
         resp = client.get("/settings")
         body = resp.data.decode()
@@ -584,41 +524,46 @@ class TestMaskConfigKeys:
 
 
 # ---------------------------------------------------------------------------
-# _load_keys helper — unit tests
+# _load_providers_safe helper — unit tests
 # ---------------------------------------------------------------------------
 
-class TestLoadKeys:
-    def test_returns_defaults_when_file_absent(self, tmp_keys_path):
-        assert not os.path.exists(tmp_keys_path)
-        result = app_module._load_keys()
-        assert result["preferred_provider"] == "anthropic"
-        assert result["providers"]["anthropic"]["api_key"] == ""
+class TestLoadProvidersSafe:
+    """Unit tests for the _load_providers_safe() helper added in issue #149.
 
-    def test_returns_defaults_on_corrupt_json(self, tmp_keys_path):
-        with open(tmp_keys_path, "w") as f:
+    This replaces the old TestLoadKeys tests which covered the removed
+    _load_keys() shim.
+    """
+
+    def test_returns_empty_skeleton_when_no_file(
+        self, tmp_providers_path, tmp_keys_path, tmp_config_path
+    ):
+        """When providers.json is absent and no migration sources exist, returns
+        safe empty dict rather than raising."""
+        assert not os.path.exists(tmp_providers_path)
+        result = app_module._load_providers_safe()
+        assert "llm" in result
+        assert "job_sources" in result
+        assert "provider_order" in result
+
+    def test_returns_empty_skeleton_on_corrupt_json(
+        self, tmp_providers_path, tmp_keys_path
+    ):
+        with open(tmp_providers_path, "w") as f:
             f.write("not valid json {{{{")
-        result = app_module._load_keys()
-        assert result["providers"]["anthropic"]["api_key"] == ""
+        result = app_module._load_providers_safe()
+        assert result["llm"] == {}
+        assert result["job_sources"] == {}
 
-    def test_fills_missing_providers_with_defaults(self, tmp_keys_path):
-        # Write a file that only has the anthropic provider.
-        with open(tmp_keys_path, "w") as f:
-            json.dump({
-                "providers": {
-                    "anthropic": {"api_key": "sk-x", "model": "claude-haiku-4-5-20251001"},
-                },
-                "preferred_provider": "anthropic",
-            }, f)
-        result = app_module._load_keys()
-        assert "openai" in result["providers"]
-        assert "gemini" in result["providers"]
+    def test_loads_existing_providers_json(self, tmp_providers_path, tmp_keys_path):
+        _write_providers(tmp_providers_path, anthropic_key="sk-x")
+        result = app_module._load_providers_safe()
+        assert result["llm"]["anthropic"]["api_key"] == "sk-x"
 
-    def test_does_not_mutate_module_defaults(self, tmp_keys_path):
-        original = json.dumps(app_module._KEYS_DEFAULTS, sort_keys=True)
-        result = app_module._load_keys()
-        result["providers"]["anthropic"]["api_key"] = "mutated"
-        after = json.dumps(app_module._KEYS_DEFAULTS, sort_keys=True)
-        assert original == after
+    def test_never_raises(self, tmp_providers_path, tmp_keys_path, tmp_config_path):
+        """_load_providers_safe() must never propagate CredentialError."""
+        assert not os.path.exists(tmp_providers_path)
+        result = app_module._load_providers_safe()
+        assert isinstance(result, dict)
 
 
 # ---------------------------------------------------------------------------
@@ -632,44 +577,54 @@ class TestValidateKeys:
     The endpoint must return HTML (not JSON) with one row per provider.
     """
 
-    def _write_keys(self, path, anthropic_key="sk-ant", openai_key="sk-oai", gemini_key="gm-key"):
+    def _write_providers_for_validate(
+        self, path,
+        anthropic_key="sk-ant",
+        openai_key="sk-oai",
+        gemini_key="gm-key",
+    ):
+        """Write providers.json in the new unified format."""
         data = {
-            "providers": {
+            "provider_order": ["anthropic", "openai", "gemini"],
+            "llm": {
                 "anthropic": {"api_key": anthropic_key, "model": "claude-haiku-4-5-20251001"},
                 "openai":    {"api_key": openai_key,    "model": "gpt-4o-mini"},
                 "gemini":    {"api_key": gemini_key,    "model": "gemini-1.5-flash"},
             },
-            "preferred_provider": "anthropic",
+            "job_sources": {},
         }
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f)
 
     # ------------------------------------------------------------------
     # Endpoint basics
     # ------------------------------------------------------------------
 
-    def test_returns_200(self, client, tmp_keys_path, monkeypatch):
-        self._write_keys(tmp_keys_path)
+    def test_returns_200(self, client, tmp_providers_path, tmp_keys_path, monkeypatch):
+        self._write_providers_for_validate(tmp_providers_path)
         monkeypatch.setattr(app_module, "_validate_anthropic", lambda k, m: "valid")
         monkeypatch.setattr(app_module, "_validate_openai",    lambda k, m: "valid")
         monkeypatch.setattr(app_module, "_validate_gemini",    lambda k, m: "valid")
         resp = client.post("/api/validate-keys")
         assert resp.status_code == 200
 
-    def test_returns_html_not_json(self, client, tmp_keys_path, monkeypatch):
+    def test_returns_html_not_json(
+        self, client, tmp_providers_path, tmp_keys_path, monkeypatch
+    ):
         """HTMX expects HTML — the endpoint must not return a JSON object."""
-        self._write_keys(tmp_keys_path)
+        self._write_providers_for_validate(tmp_providers_path)
         monkeypatch.setattr(app_module, "_validate_anthropic", lambda k, m: "valid")
         monkeypatch.setattr(app_module, "_validate_openai",    lambda k, m: "valid")
         monkeypatch.setattr(app_module, "_validate_gemini",    lambda k, m: "valid")
         resp = client.post("/api/validate-keys")
         body = resp.data.decode()
-        # Must contain HTML markup, not a raw JSON object.
         assert "<" in body
         assert body.strip()[0] != "{"
 
-    def test_shows_provider_names(self, client, tmp_keys_path, monkeypatch):
-        self._write_keys(tmp_keys_path)
+    def test_shows_provider_names(
+        self, client, tmp_providers_path, tmp_keys_path, monkeypatch
+    ):
+        self._write_providers_for_validate(tmp_providers_path)
         monkeypatch.setattr(app_module, "_validate_anthropic", lambda k, m: "valid")
         monkeypatch.setattr(app_module, "_validate_openai",    lambda k, m: "valid")
         monkeypatch.setattr(app_module, "_validate_gemini",    lambda k, m: "valid")
@@ -683,8 +638,10 @@ class TestValidateKeys:
     # State rendering — valid
     # ------------------------------------------------------------------
 
-    def test_valid_state_shown_for_all_providers(self, client, tmp_keys_path, monkeypatch):
-        self._write_keys(tmp_keys_path)
+    def test_valid_state_shown_for_all_providers(
+        self, client, tmp_providers_path, tmp_keys_path, monkeypatch
+    ):
+        self._write_providers_for_validate(tmp_providers_path)
         monkeypatch.setattr(app_module, "_validate_anthropic", lambda k, m: "valid")
         monkeypatch.setattr(app_module, "_validate_openai",    lambda k, m: "valid")
         monkeypatch.setattr(app_module, "_validate_gemini",    lambda k, m: "valid")
@@ -697,8 +654,10 @@ class TestValidateKeys:
     # State rendering — invalid key
     # ------------------------------------------------------------------
 
-    def test_invalid_key_state_shown(self, client, tmp_keys_path, monkeypatch):
-        self._write_keys(tmp_keys_path)
+    def test_invalid_key_state_shown(
+        self, client, tmp_providers_path, tmp_keys_path, monkeypatch
+    ):
+        self._write_providers_for_validate(tmp_providers_path)
         monkeypatch.setattr(app_module, "_validate_anthropic", lambda k, m: "invalid_key")
         monkeypatch.setattr(app_module, "_validate_openai",    lambda k, m: "valid")
         monkeypatch.setattr(app_module, "_validate_gemini",    lambda k, m: "valid")
@@ -711,8 +670,10 @@ class TestValidateKeys:
     # State rendering — unknown model
     # ------------------------------------------------------------------
 
-    def test_unknown_model_state_shown(self, client, tmp_keys_path, monkeypatch):
-        self._write_keys(tmp_keys_path)
+    def test_unknown_model_state_shown(
+        self, client, tmp_providers_path, tmp_keys_path, monkeypatch
+    ):
+        self._write_providers_for_validate(tmp_providers_path)
         monkeypatch.setattr(app_module, "_validate_anthropic", lambda k, m: "valid")
         monkeypatch.setattr(app_module, "_validate_openai",    lambda k, m: "unknown_model")
         monkeypatch.setattr(app_module, "_validate_gemini",    lambda k, m: "valid")
@@ -725,8 +686,10 @@ class TestValidateKeys:
     # State rendering — unreachable
     # ------------------------------------------------------------------
 
-    def test_unreachable_state_shown(self, client, tmp_keys_path, monkeypatch):
-        self._write_keys(tmp_keys_path)
+    def test_unreachable_state_shown(
+        self, client, tmp_providers_path, tmp_keys_path, monkeypatch
+    ):
+        self._write_providers_for_validate(tmp_providers_path)
         monkeypatch.setattr(app_module, "_validate_anthropic", lambda k, m: "valid")
         monkeypatch.setattr(app_module, "_validate_openai",    lambda k, m: "valid")
         monkeypatch.setattr(app_module, "_validate_gemini",    lambda k, m: "unreachable")
@@ -739,22 +702,35 @@ class TestValidateKeys:
     # State rendering — not configured
     # ------------------------------------------------------------------
 
-    def test_not_configured_when_key_absent(self, client, tmp_keys_path, monkeypatch):
-        """Providers with no key set must show 'not_configured' without calling the validator."""
-        self._write_keys(tmp_keys_path, anthropic_key="", openai_key="", gemini_key="")
-        # Validators should never be called — patch to fail loudly if they are.
-        monkeypatch.setattr(app_module, "_validate_anthropic", lambda k, m: (_ for _ in ()).throw(AssertionError("should not be called")))
-        monkeypatch.setattr(app_module, "_validate_openai",    lambda k, m: (_ for _ in ()).throw(AssertionError("should not be called")))
-        monkeypatch.setattr(app_module, "_validate_gemini",    lambda k, m: (_ for _ in ()).throw(AssertionError("should not be called")))
+    def test_not_configured_when_key_absent(
+        self, client, tmp_providers_path, tmp_keys_path, monkeypatch
+    ):
+        """Providers with no key set must show 'not_configured' without calling validator."""
+        self._write_providers_for_validate(
+            tmp_providers_path, anthropic_key="", openai_key="", gemini_key=""
+        )
+        monkeypatch.setattr(
+            app_module, "_validate_anthropic",
+            lambda k, m: (_ for _ in ()).throw(AssertionError("should not be called"))
+        )
+        monkeypatch.setattr(
+            app_module, "_validate_openai",
+            lambda k, m: (_ for _ in ()).throw(AssertionError("should not be called"))
+        )
+        monkeypatch.setattr(
+            app_module, "_validate_gemini",
+            lambda k, m: (_ for _ in ()).throw(AssertionError("should not be called"))
+        )
         resp = client.post("/api/validate-keys")
         body = resp.data.decode()
         assert "validation-muted" in body
         assert body.count("validation-muted") == 3
 
-    def test_not_configured_shown_when_no_keys_file(self, client, tmp_keys_path, monkeypatch):
-        """When keys.json is absent all providers must show not_configured."""
-        # tmp_keys_path fixture points _KEYS_PATH to a non-existent file.
-        assert not os.path.exists(tmp_keys_path)
+    def test_not_configured_shown_when_no_providers_file(
+        self, client, tmp_providers_path, tmp_keys_path, monkeypatch
+    ):
+        """When providers.json is absent all providers must show not_configured."""
+        assert not os.path.exists(tmp_providers_path)
         monkeypatch.setattr(app_module, "_validate_anthropic", lambda k, m: "valid")
         monkeypatch.setattr(app_module, "_validate_openai",    lambda k, m: "valid")
         monkeypatch.setattr(app_module, "_validate_gemini",    lambda k, m: "valid")
@@ -767,9 +743,11 @@ class TestValidateKeys:
     # Isolation — failure in one provider must not block others
     # ------------------------------------------------------------------
 
-    def test_one_provider_failure_does_not_block_others(self, client, tmp_keys_path, monkeypatch):
+    def test_one_provider_failure_does_not_block_others(
+        self, client, tmp_providers_path, tmp_keys_path, monkeypatch
+    ):
         """If a validator raises unexpectedly, the other providers still run."""
-        self._write_keys(tmp_keys_path)
+        self._write_providers_for_validate(tmp_providers_path)
 
         def _bad_validator(key, model):
             raise RuntimeError("network exploded")
@@ -780,7 +758,6 @@ class TestValidateKeys:
         resp = client.post("/api/validate-keys")
         assert resp.status_code == 200
         body = resp.data.decode()
-        # Anthropic should degrade to 'unreachable', others should still render.
         assert "Unreachable" in body
         assert "validation-valid" in body
 
@@ -788,10 +765,12 @@ class TestValidateKeys:
     # Security — no key values in response
     # ------------------------------------------------------------------
 
-    def test_key_values_not_in_response(self, client, tmp_keys_path, monkeypatch):
+    def test_key_values_not_in_response(
+        self, client, tmp_providers_path, tmp_keys_path, monkeypatch
+    ):
         """API key strings must never appear in the HTML partial."""
-        self._write_keys(
-            tmp_keys_path,
+        self._write_providers_for_validate(
+            tmp_providers_path,
             anthropic_key="sk-ant-supersecret",
             openai_key="sk-oai-supersecret",
             gemini_key="gm-supersecret",

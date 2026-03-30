@@ -164,22 +164,26 @@ def migrate_from_legacy(
     # Atomic write
     # ---------------------------------------------------------------------------
     tmp_path = providers_path + ".tmp"
+    _write_ok = False
     try:
         with open(tmp_path, "w", encoding="utf-8") as fh:
             json.dump(providers_dict, fh, indent=2)
         os.replace(tmp_path, providers_path)
+        _write_ok = True
         logger.info(
             "Migrated legacy credentials to %s. "
             "keys.json and config.json have not been modified.",
-            providers_path,
+            os.path.abspath(providers_path),
         )
-    except OSError as exc:
-        # Clean up any partial temp file so the next run retries cleanly.
-        try:
-            os.remove(tmp_path)
-        except OSError:
-            pass
-        raise exc  # Re-raise so callers know the write failed
+    finally:
+        # If the write or rename failed, clean up the temp file so the next
+        # run does not find a partial artifact. If _write_ok is True the
+        # rename already consumed the temp file, so remove() would no-op anyway.
+        if not _write_ok:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
     return providers_dict
 

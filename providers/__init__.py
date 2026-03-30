@@ -169,7 +169,13 @@ def build_provider_chain(providers: dict) -> list[LLMProvider]:
     for name in ordered_names:
         cfg = llm_section.get(name)
         if cfg is None:
-            # Provider is in the registry but has no entry in the llm section.
+            # Provider is registered but has no entry in the llm section —
+            # warn so operators know why it is absent from the chain.
+            _log.warning(
+                "build_provider_chain: '%s' is in the provider registry but has no "
+                "entry in providers[\"llm\"] — skipping.",
+                name,
+            )
             continue
         api_key: str = cfg.get("api_key", "") or ""
         if not api_key:

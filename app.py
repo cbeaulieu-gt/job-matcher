@@ -580,20 +580,31 @@ def _load_keys() -> dict:
     llm_section: dict = providers_data.get("llm") or {}
     provider_order: list = providers_data.get("provider_order") or []
 
-    # Reconstruct the legacy "providers" sub-dict, filling defaults for any missing entry.
+    # Reconstruct the legacy "providers" sub-dict dynamically from the union of
+    # all known default providers and whatever is in the llm section.  This
+    # ensures two things:
+    #   1. Known providers (anthropic, openai, gemini) always appear in the
+    #      output with safe empty defaults even when absent from providers.json,
+    #      so the settings template never receives a KeyError.
+    #   2. Providers added to providers.json beyond the default three are also
+    #      included — the old hardcoded loop silently dropped them.
+    all_provider_names: list[str] = list(
+        dict.fromkeys(list(_KEYS_DEFAULTS["providers"].keys()) + list(llm_section.keys()))
+    )
     legacy_providers: dict = {}
-    for provider, defaults in _KEYS_DEFAULTS["providers"].items():
+    for provider in all_provider_names:
         cfg = llm_section.get(provider, {})
+        default_model = _KEYS_DEFAULTS["providers"].get(provider, {}).get("model", "")
         legacy_providers[provider] = {
             "api_key": cfg.get("api_key", ""),
-            "model":   cfg.get("model", defaults["model"]),
+            "model":   cfg.get("model", default_model),
         }
 
     # preferred_provider is the first entry in provider_order that exists in the
-    # registry, falling back to the legacy default.
+    # llm section, falling back to the legacy default.
     preferred = _KEYS_DEFAULTS["preferred_provider"]
     for name in provider_order:
-        if name in _KEYS_DEFAULTS["providers"]:
+        if name in llm_section:
             preferred = name
             break
 

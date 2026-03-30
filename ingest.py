@@ -76,13 +76,6 @@ _REQUIRED_TOP_LEVEL = ("adzuna_app_id", "adzuna_app_key")
 _REQUIRED_SEARCH = ("country", "what", "results_per_page", "max_pages")
 _REQUIRED_SCORING = ("threshold",)
 
-# Default models used when constructing a keys dict from env vars.
-_ENV_VAR_DEFAULTS: tuple[tuple[str, str, str], ...] = (
-    ("ANTHROPIC_API_KEY", "anthropic", "claude-haiku-4-5-20251001"),
-    ("OPENAI_API_KEY",    "openai",    "gpt-4o-mini"),
-    ("GOOGLE_API_KEY",    "gemini",    "gemini-1.5-flash"),
-)
-
 
 def load_config(path: str = "config.json") -> dict:
     """Load and validate config.json.
@@ -136,76 +129,6 @@ def load_config(path: str = "config.json") -> dict:
 
     return config
 
-
-def load_keys(path: str = "keys.json") -> dict:
-    """Load LLM provider API keys and preferred provider from ``keys.json``.
-
-    Supports two paths:
-
-    * **keys.json present** — load and return it directly. The file must have
-      a ``providers`` key whose value is a non-empty dict.
-    * **keys.json absent** — construct an equivalent dict from environment
-      variables (``ANTHROPIC_API_KEY``, ``OPENAI_API_KEY``, ``GOOGLE_API_KEY``).
-      Only providers whose env var is non-empty are included.
-      ``preferred_provider`` is set to the first provider found, or
-      ``"anthropic"`` if none are found (which also triggers ``SystemExit``).
-
-    Raises:
-        SystemExit: If neither ``keys.json`` nor any env var provides at least
-            one API key.
-
-    Returns:
-        Dict matching the ``keys.example.json`` structure::
-
-            {
-                "providers": {
-                    "anthropic": {"api_key": "...", "model": "..."},
-                    ...
-                },
-                "preferred_provider": "anthropic"
-            }
-    """
-    if os.path.exists(path):
-        try:
-            with open(path, encoding="utf-8") as fh:
-                keys = json.load(fh)
-        except json.JSONDecodeError as exc:
-            raise SystemExit(f"keys.json is not valid JSON: {exc}")
-
-        providers = keys.get("providers")
-        if not isinstance(providers, dict) or not providers:
-            raise SystemExit(
-                f"keys.json must have a non-empty 'providers' dict. "
-                f"Copy keys.example.json to {path} and fill in your API keys."
-            )
-
-        logger.info("Loaded keys.json")
-        return keys
-
-    # keys.json not present — fall back to environment variables.
-    logger.info("keys.json not found — using env var fallback")
-
-    providers: dict[str, dict[str, str]] = {}
-    preferred_provider: str = "anthropic"
-    first_found = True
-
-    for env_var, provider_name, default_model in _ENV_VAR_DEFAULTS:
-        api_key = os.environ.get(env_var, "")
-        if api_key:
-            providers[provider_name] = {"api_key": api_key, "model": default_model}
-            if first_found:
-                preferred_provider = provider_name
-                first_found = False
-
-    if not providers:
-        raise SystemExit(
-            "No LLM API keys found. Either:\n"
-            "  1. Copy keys.example.json to keys.json and fill in your API keys, or\n"
-            "  2. Set at least one of ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY "
-            "as an environment variable."
-        )
-
-    return {"providers": providers, "preferred_provider": preferred_provider}
 
 
 def load_profile(path: str = "profile.json") -> dict:

@@ -514,3 +514,92 @@ class TestBuildProviderChainNewAPI:
         chain = build_provider_chain(providers)
         assert len(chain) == 1
         assert isinstance(chain[0], OpenAIProvider)
+
+
+# ===========================================================================
+# Warning #5 — partial Adzuna credentials
+# ===========================================================================
+
+class TestPartialAdzunaCredentials:
+    """load_providers() handles partial Adzuna credentials gracefully."""
+
+    def test_app_id_set_app_key_missing_returns_partial(self, tmp_path):
+        """providers.json with app_id but no app_key is returned as-is — no crash."""
+        partial_adzuna = {
+            "provider_order": ["anthropic"],
+            "llm": {
+                "anthropic": {"api_key": "sk-ant-test", "model": "claude-haiku-4-5-20251001"},
+            },
+            "job_sources": {
+                "adzuna": {"app_id": "my-app-id"},  # app_key key absent
+            },
+        }
+        _write(tmp_path / "providers.json", partial_adzuna)
+        result = load_providers(providers_path=str(tmp_path / "providers.json"))
+        # Should return the dict without crashing
+        assert result["job_sources"]["adzuna"]["app_id"] == "my-app-id"
+        # app_key is absent from the dict — callers must handle a missing key
+        assert "app_key" not in result["job_sources"]["adzuna"]
+
+    def test_app_key_set_app_id_missing_returns_partial(self, tmp_path):
+        """providers.json with app_key but no app_id is returned as-is — no crash."""
+        partial_adzuna = {
+            "provider_order": ["anthropic"],
+            "llm": {
+                "anthropic": {"api_key": "sk-ant-test", "model": "claude-haiku-4-5-20251001"},
+            },
+            "job_sources": {
+                "adzuna": {"app_key": "my-app-key"},  # app_id key absent
+            },
+        }
+        _write(tmp_path / "providers.json", partial_adzuna)
+        result = load_providers(providers_path=str(tmp_path / "providers.json"))
+        assert result["job_sources"]["adzuna"]["app_key"] == "my-app-key"
+        assert "app_id" not in result["job_sources"]["adzuna"]
+
+
+# ===========================================================================
+# Warning #6 — missing provider_order key
+# ===========================================================================
+
+class TestMissingProviderOrderKey:
+    """load_providers() and build_provider_chain() handle absent provider_order gracefully."""
+
+    def test_load_providers_missing_provider_order_defaults_to_empty_list(self, tmp_path):
+        """providers.json without provider_order key is loaded; provider_order defaults to []."""
+        no_order = {
+            "llm": {
+                "anthropic": {"api_key": "sk-ant-test", "model": "claude-haiku-4-5-20251001"},
+                "openai":    {"api_key": "sk-oai-test", "model": "gpt-4o-mini"},
+            },
+            "job_sources": {"adzuna": {"app_id": "", "app_key": ""}},
+            # provider_order key is intentionally absent
+        }
+        _write(tmp_path / "providers.json", no_order)
+        result = load_providers(providers_path=str(tmp_path / "providers.json"))
+        # load_providers returns the raw file contents — provider_order is absent
+        assert "provider_order" not in result
+
+    def test_build_provider_chain_missing_provider_order_uses_registry_order(self):
+        """build_provider_chain() with no provider_order key uses all registered providers."""
+        _start_patches()
+        try:
+            from providers import build_provider_chain, AnthropicProvider, OpenAIProvider, GeminiProvider
+            providers = {
+                # provider_order key absent
+                "llm": {
+                    "anthropic": {"api_key": "key-ant", "model": "claude-haiku-4-5-20251001"},
+                    "openai":    {"api_key": "key-oai", "model": "gpt-4o-mini"},
+                    "gemini":    {"api_key": "key-ggl", "model": "gemini-1.5-flash"},
+                },
+                "job_sources": {"adzuna": {"app_id": "", "app_key": ""}},
+            }
+            assert "provider_order" not in providers
+            chain = build_provider_chain(providers)
+            # All three providers should appear in registry insertion order
+            assert len(chain) == 3
+            assert isinstance(chain[0], AnthropicProvider)
+            assert isinstance(chain[1], OpenAIProvider)
+            assert isinstance(chain[2], GeminiProvider)
+        finally:
+            _stop_patches()

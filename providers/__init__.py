@@ -8,7 +8,7 @@ Public API
 * ``OpenAIProvider``       — OpenAI Chat Completions backend
 * ``GeminiProvider``       — Google Gemini GenerativeAI backend
 * ``make_provider()``      — factory that reads ``config`` and returns the right provider
-* ``build_provider_chain`` — build an ordered fallback list from a parsed keys.json dict
+* ``build_provider_chain`` — build an ordered fallback list from a parsed providers.json dict
 
 Usage
 -----
@@ -99,68 +99,82 @@ _PROVIDER_CLASS_MAP: dict[str, type[LLMProvider]] = {
 }
 
 
-def build_provider_chain(keys: dict) -> list[LLMProvider]:
+def build_provider_chain(providers: dict) -> list[LLMProvider]:
     """Return an ordered list of initialised ``LLMProvider`` instances.
 
-    Reads ``keys["providers"]`` and ``keys.get("preferred_provider")`` to
-    determine ordering:
+    Accepts the ``providers.json``-shaped dict introduced in Issue #147::
 
-    1. ``preferred_provider`` goes first if it has a non-empty ``api_key``.
-    2. The remaining providers follow in dict insertion order, skipping any
-       with an empty ``api_key``.
-    3. If ``preferred_provider`` is absent or empty the full list is used in
-       dict insertion order.
+        {
+            "provider_order": ["anthropic", "gemini", "openai"],
+            "llm": {
+                "anthropic": {"api_key": "...", "model": "..."},
+                ...
+            },
+            ...
+        }
+
+    Ordering rules
+    --------------
+    1. Start from ``providers["provider_order"]`` (top-level key).
+       If the key is absent or the list is empty, use ``_PROVIDER_CLASS_MAP``
+       insertion order for all registered providers.
+    2. Each entry in ``provider_order`` that is **not** in ``_PROVIDER_CLASS_MAP``
+       is skipped with a ``WARNING`` log.
+    3. Each entry in ``_PROVIDER_CLASS_MAP`` that is **not** in ``provider_order``
+       is appended at the end in registry insertion order.
+    4. Duplicate entries in ``provider_order`` are silently deduplicated (second
+       occurrence dropped).
+    5. Providers whose ``api_key`` is empty are skipped at runtime regardless of
+       position.
 
     Args:
-        keys: Parsed contents of keys.json.
+        providers: Parsed ``providers.json`` dict (or equivalent in-memory dict).
 
     Returns:
         List of ``LLMProvider`` instances in fallback order.  Providers with
-        empty ``api_key`` values are silently skipped.
-
-    Raises:
-        ValueError: If ``keys["providers"]`` is missing or all providers have
-            empty ``api_key`` values.
+        empty ``api_key`` values are silently skipped.  May be empty if all
+        configured providers have empty keys.
     """
-    raw_providers: dict = keys.get("providers")
-    if not raw_providers:
-        raise ValueError("keys['providers'] is missing or empty.")
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
 
-    preferred: str = keys.get("preferred_provider", "") or ""
+    llm_section: dict = providers.get("llm") or {}
+    raw_order: list = providers.get("provider_order") or []
 
-    # Build a filtered list of (name, cfg) pairs that have a non-empty key.
-    valid: list[tuple[str, dict]] = [
-        (name, cfg)
-        for name, cfg in raw_providers.items()
-        if cfg.get("api_key", "")
-    ]
+    # --- Build the effective ordered name list, deduplicating as we go ---
+    seen: set[str] = set()
+    ordered_names: list[str] = []
 
-    if not valid:
-        raise ValueError(
-            "No providers with a non-empty api_key found in keys['providers']."
-        )
-
-    # Reorder so that preferred_provider comes first, if it is among the valid ones.
-    if preferred and any(name == preferred for name, _ in valid):
-        ordered = [entry for entry in valid if entry[0] == preferred]
-        ordered += [entry for entry in valid if entry[0] != preferred]
-    else:
-        ordered = valid
-
-    chain: list[LLMProvider] = []
-    for name, cfg in ordered:
-        cls = _PROVIDER_CLASS_MAP.get(name)
-        if cls is None:
-            # Unknown provider names are silently skipped to allow forward
-            # compatibility as new providers are added to keys.json before
-            # they are implemented here.
+    for name in raw_order:
+        if name in seen:
+            continue  # duplicate — silently drop
+        seen.add(name)
+        if name not in _PROVIDER_CLASS_MAP:
+            _log.warning(
+                "build_provider_chain: '%s' is in provider_order but not in the "
+                "provider registry — skipping.",
+                name,
+            )
             continue
-        chain.append(cls(api_key=cfg["api_key"], model=cfg.get("model", "")))
+        ordered_names.append(name)
 
-    if not chain:
-        raise ValueError(
-            "No supported providers found in keys['providers']. "
-            f"Supported names: {list(_PROVIDER_CLASS_MAP)}."
-        )
+    # Append any registry providers not yet in the list (in registry order).
+    for name in _PROVIDER_CLASS_MAP:
+        if name not in seen:
+            ordered_names.append(name)
+            seen.add(name)
+
+    # --- Instantiate providers that have a non-empty api_key ---
+    chain: list[LLMProvider] = []
+    for name in ordered_names:
+        cfg = llm_section.get(name)
+        if cfg is None:
+            # Provider is in the registry but has no entry in the llm section.
+            continue
+        api_key: str = cfg.get("api_key", "") or ""
+        if not api_key:
+            continue  # empty key → skip regardless of position
+        cls = _PROVIDER_CLASS_MAP[name]
+        chain.append(cls(api_key=api_key, model=cfg.get("model", "")))
 
     return chain

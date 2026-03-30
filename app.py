@@ -16,6 +16,7 @@ from importlib.metadata import version as pkg_version, PackageNotFoundError
 from flask import Flask, render_template, make_response, request, jsonify, redirect, url_for
 
 import db
+from credentials import CredentialError, load_providers
 
 app = Flask(__name__)
 
@@ -540,28 +541,63 @@ def ingest_status():
 
 
 def _load_keys() -> dict:
-    """Load keys.json if it exists, otherwise return a copy of the defaults.
+    """Load credentials and return them in the legacy keys.json-shaped dict.
 
-    Returns a deep copy so callers can mutate freely without touching the
-    module-level default structure.
+    Delegates to :func:`credentials.load_providers` for the actual credential
+    loading (providers.json → migration → env vars).  The result is translated
+    back to the ``{"providers": {...}, "preferred_provider": "..."}`` shape that
+    the existing settings route, validation endpoint, and templates expect.
+
+    ``providers.json`` is resolved relative to the directory containing
+    ``_KEYS_PATH`` so that test fixtures which monkeypatch ``_KEYS_PATH`` to a
+    temp directory will also resolve ``providers.json`` in that temp directory
+    rather than the real project root.  This preserves full test isolation.
+
+    Returns a dict with safe empty values when :exc:`CredentialError` is raised
+    (e.g. no credentials configured yet) so the settings UI still renders.
+
+    Note: ``_KEYS_PATH`` is still used as the write target for the settings POST
+    handler.  The migration to providers.json as the write target is handled in a
+    later issue (#3 of the Settings Overhaul milestone).
     """
     import copy
-    if not os.path.exists(_KEYS_PATH):
-        return copy.deepcopy(_KEYS_DEFAULTS)
+
+    # Derive providers.json path from the same directory as _KEYS_PATH so that
+    # monkeypatched test environments stay fully isolated from the real project.
+    keys_dir = os.path.dirname(os.path.abspath(_KEYS_PATH))
+    providers_path = os.path.join(keys_dir, "providers.json")
+
     try:
-        with open(_KEYS_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        # Guarantee every expected provider key exists, using defaults as
-        # fallback for any provider absent from the file.
-        data.setdefault("providers", {})
-        for provider, defaults in _KEYS_DEFAULTS["providers"].items():
-            data["providers"].setdefault(provider, copy.deepcopy(defaults))
-            data["providers"][provider].setdefault("api_key", "")
-            data["providers"][provider].setdefault("model", defaults["model"])
-        data.setdefault("preferred_provider", _KEYS_DEFAULTS["preferred_provider"])
-        return data
-    except (json.JSONDecodeError, OSError):
+        providers_data = load_providers(
+            providers_path=providers_path,
+            keys_path=_KEYS_PATH,
+            config_path=_CONFIG_PATH,
+        )
+    except CredentialError:
         return copy.deepcopy(_KEYS_DEFAULTS)
+
+    # Translate providers.json shape → legacy keys.json shape for existing callers.
+    llm_section: dict = providers_data.get("llm") or {}
+    provider_order: list = providers_data.get("provider_order") or []
+
+    # Reconstruct the legacy "providers" sub-dict, filling defaults for any missing entry.
+    legacy_providers: dict = {}
+    for provider, defaults in _KEYS_DEFAULTS["providers"].items():
+        cfg = llm_section.get(provider, {})
+        legacy_providers[provider] = {
+            "api_key": cfg.get("api_key", ""),
+            "model":   cfg.get("model", defaults["model"]),
+        }
+
+    # preferred_provider is the first entry in provider_order that exists in the
+    # registry, falling back to the legacy default.
+    preferred = _KEYS_DEFAULTS["preferred_provider"]
+    for name in provider_order:
+        if name in _KEYS_DEFAULTS["providers"]:
+            preferred = name
+            break
+
+    return {"providers": legacy_providers, "preferred_provider": preferred}
 
 
 @app.route("/settings", methods=["GET", "POST"])

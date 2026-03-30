@@ -33,6 +33,7 @@ from bs4 import BeautifulSoup
 import db
 from job_sources import make_source, AdzunaClient  # noqa: F401 — AdzunaClient re-exported for backward compat
 from providers import build_provider_chain, LLMProvider
+from credentials import CredentialError, load_providers
 
 _DB_PATH: str = os.environ.get("DB_PATH", "jobs.db")
 
@@ -572,6 +573,7 @@ def run(
     profile_path: str = "profile.json",
     hours: int | None = None,
     keys_path: str = "keys.json",
+    providers_path: str = "providers.json",
 ) -> None:
     """Run the full ingestion pipeline.
 
@@ -580,13 +582,15 @@ def run(
     listing.  Prints a summary line when complete.
 
     Args:
-        config_path:  Path to config.json (default ``"config.json"``).
-        profile_path: Path to profile.json (default ``"profile.json"``).
-        hours:        If provided, only process listings whose ``created_at``
-                      timestamp is within the last N hours. Overrides
-                      ``search.max_days_old`` in config with ``ceil(hours/24)``.
-        keys_path:    Path to keys.json (default ``"keys.json"``).  Override
-                      in tests to inject a temp file.
+        config_path:    Path to config.json (default ``"config.json"``).
+        profile_path:   Path to profile.json (default ``"profile.json"``).
+        hours:          If provided, only process listings whose ``created_at``
+                        timestamp is within the last N hours. Overrides
+                        ``search.max_days_old`` in config with ``ceil(hours/24)``.
+        keys_path:      Path to legacy keys.json (used by migration; default
+                        ``"keys.json"``).
+        providers_path: Path to providers.json (default ``"providers.json"``).
+                        Override in tests to inject a temp file.
     """
     config = load_config(config_path)
     profile = load_profile(profile_path)
@@ -599,8 +603,18 @@ def run(
 
     client = make_source(config)
 
-    keys = load_keys(keys_path)
-    chain = build_provider_chain(keys)
+    try:
+        providers = load_providers(
+            providers_path=providers_path,
+            keys_path=keys_path,
+            config_path=config_path,
+        )
+    except CredentialError as exc:
+        logger.error("Credential error: %s", exc)
+        import sys as _sys
+        _sys.exit(1)
+
+    chain = build_provider_chain(providers)
     dead_providers: set[str] = set()
 
     # Counters.
@@ -774,6 +788,7 @@ def rescore(
     config_path: str = "config.json",
     profile_path: str = "profile.json",
     keys_path: str = "keys.json",
+    providers_path: str = "providers.json",
 ) -> None:
     """Re-score all previously scored listings against the current profile.
 
@@ -782,15 +797,27 @@ def rescore(
     Does not fetch new listings from Adzuna.
 
     Args:
-        config_path:  Path to config.json (default ``"config.json"``).
-        profile_path: Path to profile.json (default ``"profile.json"``).
-        keys_path:    Path to keys.json (default ``"keys.json"``).  Override
-                      in tests to inject a temp file.
+        config_path:    Path to config.json (default ``"config.json"``).
+        profile_path:   Path to profile.json (default ``"profile.json"``).
+        keys_path:      Path to legacy keys.json (used by migration; default
+                        ``"keys.json"``).
+        providers_path: Path to providers.json (default ``"providers.json"``).
+                        Override in tests to inject a temp file.
     """
     profile = load_profile(profile_path)
 
-    keys = load_keys(keys_path)
-    chain = build_provider_chain(keys)
+    try:
+        providers = load_providers(
+            providers_path=providers_path,
+            keys_path=keys_path,
+            config_path=config_path,
+        )
+    except CredentialError as exc:
+        logger.error("Credential error: %s", exc)
+        import sys as _sys
+        _sys.exit(1)
+
+    chain = build_provider_chain(providers)
     dead_providers: set[str] = set()
 
     listings = db.get_all_scored(db_path=_DB_PATH)

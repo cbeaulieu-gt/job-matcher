@@ -1,0 +1,12 @@
+{
+  "_comment": "Copy to providers.json and fill in your keys. providers.json is gitignored and must never be committed.",
+  "provider_order": ["anthropic", "openai", "gemini"],
+  "llm": {
+    "anthropic": { "api_key": "", "model": "claude-haiku-4-5-20251001" },
+    "openai":    { "api_key": "", "model": "gpt-4o-mini" },
+    "gemini":    { "api_key": "", "model": "gemini-1.5-flash" }
+  },
+  "job_sources": {
+    "adzuna": { "app_id": "", "app_key": "" }
+  }
+}

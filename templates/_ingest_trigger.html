@@ -34,5 +34,13 @@
       </select>
     </label>
   </form>
+  {% if last_run %}
+    <p class="ingest-last-run">
+      Last run: <strong>{{ last_run.new }} new</strong> &middot;
+      {{ last_run.filtered }} filtered &middot;
+      {{ last_run.errors }} errors
+      &ensp;<span class="ingest-run-time">{{ last_run.completed_at | timeago }}</span>
+    </p>
+  {% endif %}
 </div>
 {% endif %}

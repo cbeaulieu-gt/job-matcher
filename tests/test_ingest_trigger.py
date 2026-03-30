@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import app as app_module
-from app import app as flask_app
+from app import app as flask_app, _parse_ingest_summary
 
 
 # ---------------------------------------------------------------------------
@@ -35,10 +35,15 @@ def client():
         yield c
 
 
-def _make_mock_process(*, exited: bool = False) -> MagicMock:
-    """Return a MagicMock that behaves like a running or finished Popen handle."""
+def _make_mock_process(*, exited: bool = False, stdout: str = "") -> MagicMock:
+    """Return a MagicMock that behaves like a running or finished Popen handle.
+
+    For exited processes, ``communicate`` returns the given stdout string so
+    ``_ingest_running()`` can pass it to ``_parse_ingest_summary`` without error.
+    """
     proc = MagicMock()
     proc.poll.return_value = None if not exited else 0
+    proc.communicate.return_value = (stdout, None)
     return proc
 
 
@@ -252,3 +257,106 @@ class TestIngestRunningHelper:
         result = app_module._ingest_running()
         assert result is False
         assert app_module._ingest_process is None
+
+    def test_sets_last_run_after_exit(self, monkeypatch):
+        """When process exits, _last_run should be populated from parsed stdout."""
+        proc = _make_mock_process(
+            exited=True,
+            stdout="Ingest complete: 5 new, 10 filtered, 0 errors",
+        )
+        monkeypatch.setattr(app_module, "_ingest_process", proc)
+        monkeypatch.setattr(app_module, "_last_run", None)
+        app_module._ingest_running()
+        assert app_module._last_run is not None
+        assert app_module._last_run["new"] == 5
+        assert app_module._last_run["filtered"] == 10
+        assert app_module._last_run["errors"] == 0
+
+    def test_communicate_exception_sets_last_run_to_zeros(self, monkeypatch):
+        """When communicate() raises TimeoutExpired, _last_run should default to zeros."""
+        proc = _make_mock_process(exited=True)
+        proc.communicate.side_effect = app_module.subprocess.TimeoutExpired("cmd", 2)
+        monkeypatch.setattr(app_module, "_ingest_process", proc)
+        monkeypatch.setattr(app_module, "_last_run", None)
+        app_module._ingest_running()
+        assert app_module._last_run is not None
+        assert app_module._last_run["new"] == 0
+        assert app_module._last_run["filtered"] == 0
+        assert app_module._last_run["errors"] == 0
+
+
+# ---------------------------------------------------------------------------
+# _parse_ingest_summary — unit tests
+# ---------------------------------------------------------------------------
+
+class TestParseIngestSummary:
+    def test_parse_ingest_summary_valid(self):
+        """Correctly formed summary line should parse all three counts."""
+        result = _parse_ingest_summary("Ingest complete: 5 new, 100 filtered, 2 errors")
+        assert result["new"] == 5
+        assert result["filtered"] == 100
+        assert result["errors"] == 2
+        assert result["completed_at"] is not None
+
+    def test_parse_ingest_summary_empty(self):
+        """Empty string should return zeros for all counts."""
+        result = _parse_ingest_summary("")
+        assert result["new"] == 0
+        assert result["filtered"] == 0
+        assert result["errors"] == 0
+        assert result["completed_at"] is not None
+
+    def test_parse_ingest_summary_no_match_in_noise(self):
+        """Output with no summary line should also return zeros."""
+        result = _parse_ingest_summary("Some random log output\nNo summary here")
+        assert result["new"] == 0
+        assert result["filtered"] == 0
+        assert result["errors"] == 0
+
+    def test_parse_ingest_summary_case_insensitive(self):
+        """Regex match should be case-insensitive."""
+        result = _parse_ingest_summary("INGEST COMPLETE: 3 new, 50 filtered, 1 errors")
+        assert result["new"] == 3
+        assert result["filtered"] == 50
+        assert result["errors"] == 1
+
+    def test_parse_ingest_summary_summary_in_multiline_output(self):
+        """Summary line embedded in longer output should still be found."""
+        output = (
+            "Fetching page 1...\n"
+            "Fetching page 2...\n"
+            "Ingest complete: 14 new, 203 filtered, 0 errors\n"
+            "Done.\n"
+        )
+        result = _parse_ingest_summary(output)
+        assert result["new"] == 14
+        assert result["filtered"] == 203
+        assert result["errors"] == 0
+
+
+# ---------------------------------------------------------------------------
+# GET /ingest/status — last_run context passed to template
+# ---------------------------------------------------------------------------
+
+class TestIngestStatusLastRun:
+    def test_ingest_status_idle_shows_last_run(self, client, monkeypatch):
+        """When _last_run is set, the idle partial should include the new count."""
+        from datetime import datetime, timezone
+        sample_last_run = {
+            "new": 7,
+            "filtered": 42,
+            "errors": 0,
+            "completed_at": datetime(2026, 3, 29, 12, 0, 0, tzinfo=timezone.utc),
+        }
+        monkeypatch.setattr(app_module, "_last_run", sample_last_run)
+        resp = client.get("/ingest/status")
+        body = resp.data.decode()
+        assert "7 new" in body
+        assert "42 filtered" in body
+
+    def test_ingest_status_idle_no_last_run_section_when_none(self, client, monkeypatch):
+        """When _last_run is None, the last-run paragraph should not appear."""
+        monkeypatch.setattr(app_module, "_last_run", None)
+        resp = client.get("/ingest/status")
+        body = resp.data.decode()
+        assert "Last run" not in body

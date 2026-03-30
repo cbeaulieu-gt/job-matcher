@@ -7,6 +7,7 @@ Business logic lives in ingest.py; none of it belongs here.
 
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -417,18 +418,51 @@ def _mask_config_keys(data: dict) -> dict:
 # Holds the running Popen handle while ingest.py is active. None when idle.
 _ingest_process: subprocess.Popen | None = None
 
+# Stores the result of the most recently completed ingest run.
+_last_run: dict | None = None
+
+_INGEST_SUMMARY_RE = re.compile(
+    r"Ingest complete:\s*(\d+)\s*new,\s*(\d+)\s*filtered,\s*(\d+)\s*errors",
+    re.IGNORECASE,
+)
+
+
+def _parse_ingest_summary(output: str) -> dict:
+    """Parse the summary line from ingest.py stdout and return a result dict.
+
+    Expected format: ``Ingest complete: 14 new, 203 filtered, 0 errors``
+
+    If the pattern is not found (e.g. the process was killed or produced no
+    output), all counts default to zero so the template always has a safe value.
+    """
+    m = _INGEST_SUMMARY_RE.search(output)
+    if m:
+        return {
+            "new": int(m.group(1)),
+            "filtered": int(m.group(2)),
+            "errors": int(m.group(3)),
+            "completed_at": datetime.now(timezone.utc),
+        }
+    return {"new": 0, "filtered": 0, "errors": 0, "completed_at": datetime.now(timezone.utc)}
+
 
 def _ingest_running() -> bool:
     """Return True if an ingest subprocess is currently active.
 
     Polls the process exit code: if poll() returns None the process is still
-    running. If it has exited, reset the handle to None so a new run can start.
+    running. If it has exited, capture stdout, parse the summary into
+    ``_last_run``, and reset the handle to None so a new run can start.
     """
-    global _ingest_process
+    global _ingest_process, _last_run
     if _ingest_process is None:
         return False
     if _ingest_process.poll() is not None:
-        # Process has finished — clear the handle.
+        # Process has finished — capture output and clear handle.
+        try:
+            output, _ = _ingest_process.communicate(timeout=2)
+        except (subprocess.TimeoutExpired, ValueError):
+            output = ""
+        _last_run = _parse_ingest_summary(output or "")
         _ingest_process = None
         return False
     return True
@@ -436,7 +470,7 @@ def _ingest_running() -> bool:
 
 def _render_ingest_idle() -> str:
     """Return the HTML partial for the idle 'Run Ingestion' button."""
-    return render_template("_ingest_trigger.html", running=False)
+    return render_template("_ingest_trigger.html", running=False, last_run=_last_run)
 
 
 def _render_ingest_running() -> str:
@@ -475,8 +509,9 @@ def ingest_trigger():
     try:
         _ingest_process = subprocess.Popen(
             cmd,
-            stdout=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
+            text=True,
         )
     except (OSError, PermissionError) as e:
         return jsonify({"error": f"Failed to start ingestion: {e}"}), 500

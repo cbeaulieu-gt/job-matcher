@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Job Matcher · Config Editor</title>
+  <title>Job Matcher · Profile</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="stylesheet" href="/static/style.css">
 </head>
@@ -22,15 +22,15 @@
          class="nav-tab{% if view == 'applied' %} active{% endif %}">applied</a>
       <a href="/stats"
          class="nav-tab{% if view == 'stats' %} active{% endif %}">stats</a>
+      <a href="/profile"
+         class="nav-tab{% if view == 'profile' %} active{% endif %}">profile</a>
       <a href="/settings"
          class="nav-tab{% if view == 'settings' %} active{% endif %}">settings</a>
     </nav>
   </header>
 
-  {# ── Breadcrumb ────────────────────────────────────────────── #}
-  <div class="page-breadcrumb">
-    <a href="/settings">Settings</a> &rsaquo; Config Editor
-  </div>
+  {# ── Page heading ─────────────────────────────────────────────── #}
+  <h1 class="page-heading">Profile</h1>
 
   {# ── Success notice ───────────────────────────────────────────── #}
   {% if saved %}
@@ -43,7 +43,7 @@
   {% endif %}
 
   {# ── Editor form ──────────────────────────────────────────────── #}
-  <form class="settings-form" method="post" action="/settings/config">
+  <form class="settings-form" method="post" action="/profile">
 
     <h2 class="settings-section-title">config.json</h2>
 

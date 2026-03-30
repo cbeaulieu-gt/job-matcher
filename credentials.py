@@ -297,3 +297,91 @@ def load_providers(
             }
         },
     }
+
+
+# ===========================================================================
+# save_providers()
+# ===========================================================================
+
+def save_providers(
+    updates: dict,
+    providers_path: str = "providers.json",
+) -> None:
+    """Deep-merge *updates* into ``providers.json`` and write atomically.
+
+    Only non-blank string values in *updates* are applied; blank strings
+    (``""`` or whitespace-only) are silently skipped so that an empty form
+    field never overwrites an existing credential.
+
+    The write is atomic: data is written to ``providers.json.tmp`` first,
+    then renamed with ``os.replace()``.  If the write fails the temp file
+    is cleaned up and the original ``providers.json`` is left unchanged.
+
+    Args:
+        updates:        Nested dict shaped like ``providers.json``::
+
+                            {
+                                "llm": {
+                                    "anthropic": {"api_key": "new-key"},
+                                },
+                                "job_sources": {
+                                    "adzuna": {"app_id": "new-id"},
+                                },
+                            }
+
+                        Only the keys present in *updates* are touched;
+                        everything else in the existing file is preserved.
+
+        providers_path: Path to ``providers.json``; created from scratch
+                        when absent.
+
+    Raises:
+        OSError: If the file cannot be written (permissions, disk full, …).
+    """
+    # --- Load existing data (start from empty skeleton when absent) ---
+    if os.path.exists(providers_path):
+        try:
+            with open(providers_path, encoding="utf-8") as fh:
+                existing: dict = json.load(fh)
+        except (json.JSONDecodeError, OSError):
+            existing = {}
+    else:
+        existing = {}
+
+    # Ensure top-level sections exist.
+    existing.setdefault("provider_order", [])
+    existing.setdefault("llm", {})
+    existing.setdefault("job_sources", {})
+
+    def _deep_merge(base: dict, patch: dict) -> None:
+        """Recursively apply *patch* values into *base* in-place.
+
+        A patch value is applied only when it is a non-empty string (or
+        any non-string truthy value).  Nested dicts are merged recursively.
+        """
+        for key, value in patch.items():
+            if isinstance(value, dict):
+                base.setdefault(key, {})
+                _deep_merge(base[key], value)
+            else:
+                # Skip blank strings — keep whatever is already in base.
+                if isinstance(value, str) and not value.strip():
+                    continue
+                base[key] = value
+
+    _deep_merge(existing, updates)
+
+    # --- Atomic write ---
+    tmp_path = providers_path + ".tmp"
+    _write_ok = False
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as fh:
+            json.dump(existing, fh, indent=2)
+        os.replace(tmp_path, providers_path)
+        _write_ok = True
+    finally:
+        if not _write_ok:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass

@@ -7,6 +7,39 @@
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="stylesheet" href="/static/style.css">
   <script src="https://unpkg.com/htmx.org@1.9.10" crossorigin="anonymous"></script>
+  <style>
+    /* ── Settings tab chrome ─────────────────────────────────────── */
+    .settings-tabs {
+      display: flex;
+      gap: 0;
+      border-bottom: 1px solid var(--border-mid);
+      margin-bottom: 1.5rem;
+    }
+    .settings-tab-btn {
+      padding: 0.6rem 1.4rem;
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: var(--text-secondary);
+      font-family: inherit;
+      font-size: 0.9rem;
+      cursor: pointer;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .settings-tab-btn:hover {
+      color: var(--text-primary);
+    }
+    .settings-tab-btn.active {
+      color: var(--text-accent);
+      border-bottom-color: var(--text-accent);
+    }
+    .tab-pane {
+      display: none;
+    }
+    .tab-pane.active {
+      display: block;
+    }
+  </style>
 </head>
 <body>
 <div class="page-wrap">
@@ -43,155 +76,172 @@
     <p class="save-error">{{ error }}</p>
   {% endif %}
 
-  {# ── Settings form ────────────────────────────────────────────── #}
-  <form class="settings-form" method="post" action="/settings">
-
-    <h2 class="settings-section-title">Job Source Credentials</h2>
-
-    {# ── Adzuna ── #}
-    <div class="provider-row">
-      <div class="provider-header">
-        <span class="provider-name">Adzuna</span>
-        {% if has_adzuna_id %}
-          <span class="key-status configured">&#10003; App ID configured</span>
-        {% else %}
-          <span class="key-status not-set">&#9675; App ID not set</span>
-        {% endif %}
-        {% if has_adzuna_key %}
-          <span class="key-status configured">&#10003; App Key configured</span>
-        {% else %}
-          <span class="key-status not-set">&#9675; App Key not set</span>
-        {% endif %}
-      </div>
-      <label class="settings-label" for="adzuna_app_id">App ID</label>
-      <input
-        id="adzuna_app_id"
-        class="settings-input"
-        type="password"
-        name="adzuna_app_id"
-        autocomplete="off"
-        placeholder="Enter new App ID to update (leave blank to keep existing)">
-      <label class="settings-label" for="adzuna_app_key">App Key</label>
-      <input
-        id="adzuna_app_key"
-        class="settings-input"
-        type="password"
-        name="adzuna_app_key"
-        autocomplete="off"
-        placeholder="Enter new App Key to update (leave blank to keep existing)">
-    </div>
-
-    <h2 class="settings-section-title">LLM Providers</h2>
-
-    {# ── Anthropic ── #}
-    <div class="provider-row">
-      <div class="provider-header">
-        <span class="provider-name">Anthropic</span>
-        {% if providers.anthropic.has_key %}
-          <span class="key-status configured">&#10003; configured</span>
-        {% else %}
-          <span class="key-status not-set">&#9675; not set</span>
-        {% endif %}
-      </div>
-      <label class="settings-label" for="anthropic_key">API Key</label>
-      <input
-        id="anthropic_key"
-        class="settings-input"
-        type="password"
-        name="anthropic_key"
-        autocomplete="off"
-        placeholder="Enter new key to update (leave blank to keep existing)">
-      <label class="settings-label" for="anthropic_model">Model ID</label>
-      <input
-        id="anthropic_model"
-        class="settings-input"
-        type="text"
-        name="anthropic_model"
-        value="{{ providers.anthropic.model }}">
-    </div>
-
-    {# ── OpenAI ── #}
-    <div class="provider-row">
-      <div class="provider-header">
-        <span class="provider-name">OpenAI</span>
-        {% if providers.openai.has_key %}
-          <span class="key-status configured">&#10003; configured</span>
-        {% else %}
-          <span class="key-status not-set">&#9675; not set</span>
-        {% endif %}
-      </div>
-      <label class="settings-label" for="openai_key">API Key</label>
-      <input
-        id="openai_key"
-        class="settings-input"
-        type="password"
-        name="openai_key"
-        autocomplete="off"
-        placeholder="Enter new key to update (leave blank to keep existing)">
-      <label class="settings-label" for="openai_model">Model ID</label>
-      <input
-        id="openai_model"
-        class="settings-input"
-        type="text"
-        name="openai_model"
-        value="{{ providers.openai.model }}">
-    </div>
-
-    {# ── Gemini ── #}
-    <div class="provider-row">
-      <div class="provider-header">
-        <span class="provider-name">Gemini</span>
-        {% if providers.gemini.has_key %}
-          <span class="key-status configured">&#10003; configured</span>
-        {% else %}
-          <span class="key-status not-set">&#9675; not set</span>
-        {% endif %}
-      </div>
-      <label class="settings-label" for="gemini_key">API Key</label>
-      <input
-        id="gemini_key"
-        class="settings-input"
-        type="password"
-        name="gemini_key"
-        autocomplete="off"
-        placeholder="Enter new key to update (leave blank to keep existing)">
-      <label class="settings-label" for="gemini_model">Model ID</label>
-      <input
-        id="gemini_model"
-        class="settings-input"
-        type="text"
-        name="gemini_model"
-        value="{{ providers.gemini.model }}">
-    </div>
-
-    {# ── Preferred provider ── #}
-    <div class="provider-row">
-      <label class="settings-label" for="preferred_provider">Preferred Provider</label>
-      <select id="preferred_provider" class="settings-select filter-select" name="preferred_provider">
-        <option value="anthropic" {% if preferred_provider == "anthropic" %}selected{% endif %}>Anthropic</option>
-        <option value="openai"    {% if preferred_provider == "openai"    %}selected{% endif %}>OpenAI</option>
-        <option value="gemini"    {% if preferred_provider == "gemini"    %}selected{% endif %}>Gemini</option>
-      </select>
-    </div>
-
-    <button type="submit" class="btn btn-save">Save</button>
-
-  </form>
-
-  {# ── Validate API Keys ────────────────────────────────────────── #}
-  <div class="validate-section">
+  {# ── Tab buttons ──────────────────────────────────────────────── #}
+  <div class="settings-tabs" role="tablist">
     <button
-      class="btn btn-validate"
-      hx-post="/api/validate-keys"
-      hx-target="#validation-results"
-      hx-swap="innerHTML"
-      hx-indicator="#validate-spinner">
-      Validate Keys
-    </button>
-    <span id="validate-spinner" class="htmx-indicator validate-spinner">checking&hellip;</span>
-    <div id="validation-results"></div>
+      class="settings-tab-btn{% if active_tab == 'llm' %} active{% endif %}"
+      role="tab"
+      aria-selected="{% if active_tab == 'llm' %}true{% else %}false{% endif %}"
+      aria-controls="pane-llm"
+      data-tab="llm"
+      type="button">LLM Providers</button>
+    <button
+      class="settings-tab-btn{% if active_tab == 'sources' %} active{% endif %}"
+      role="tab"
+      aria-selected="{% if active_tab == 'sources' %}true{% else %}false{% endif %}"
+      aria-controls="pane-sources"
+      data-tab="sources"
+      type="button">Job Sources</button>
+  </div>
+
+  {# ── LLM Providers tab ────────────────────────────────────────── #}
+  <div
+    id="pane-llm"
+    class="tab-pane{% if active_tab == 'llm' %} active{% endif %}"
+    role="tabpanel">
+
+    <form class="settings-form" method="post" action="/settings">
+      <input type="hidden" name="tab" value="llm">
+
+      {% for provider_key, schema, has_values in llm_schemas %}
+        <div class="provider-row">
+          <div class="provider-header">
+            <span class="provider-name">{{ schema.display_name }}</span>
+            {% if has_values %}
+              <span class="key-status configured">&#9679; configured</span>
+            {% else %}
+              <span class="key-status not-set">&#9675; not set</span>
+            {% endif %}
+          </div>
+
+          {% for field in schema.fields %}
+            <label class="settings-label" for="{{ provider_key }}__{{ field.name }}">
+              {{ field.label }}
+            </label>
+            {% if field.type == "password" %}
+              <input
+                id="{{ provider_key }}__{{ field.name }}"
+                class="settings-input"
+                type="password"
+                name="{{ provider_key }}__{{ field.name }}"
+                autocomplete="off"
+                placeholder="Enter new value to update (leave blank to keep existing)">
+            {% else %}
+              <input
+                id="{{ provider_key }}__{{ field.name }}"
+                class="settings-input"
+                type="text"
+                name="{{ provider_key }}__{{ field.name }}"
+                autocomplete="off"
+                placeholder="{{ field.default if field.default is defined else '' }}">
+            {% endif %}
+          {% endfor %}
+        </div>
+      {% endfor %}
+
+      <button type="submit" class="btn btn-save">Save</button>
+    </form>
+
+    {# ── Validate API Keys ──────────────────────────────────────── #}
+    <div class="validate-section">
+      <button
+        class="btn btn-validate"
+        hx-post="/api/validate-keys"
+        hx-target="#validation-results"
+        hx-swap="innerHTML"
+        hx-indicator="#validate-spinner">
+        Validate Keys
+      </button>
+      <span id="validate-spinner" class="htmx-indicator validate-spinner">checking&hellip;</span>
+      <div id="validation-results"></div>
+    </div>
+  </div>
+
+  {# ── Job Sources tab ──────────────────────────────────────────── #}
+  <div
+    id="pane-sources"
+    class="tab-pane{% if active_tab == 'sources' %} active{% endif %}"
+    role="tabpanel">
+
+    <form class="settings-form" method="post" action="/settings">
+      <input type="hidden" name="tab" value="sources">
+
+      {% for source_key, schema, has_values in source_schemas %}
+        <div class="provider-row">
+          <div class="provider-header">
+            <span class="provider-name">{{ schema.display_name }}</span>
+            {% if schema.fields %}
+              {% if has_values %}
+                <span class="key-status configured">&#9679; configured</span>
+              {% else %}
+                <span class="key-status not-set">&#9675; not set</span>
+              {% endif %}
+            {% else %}
+              <span class="key-status configured">&#9679; no credentials required</span>
+            {% endif %}
+          </div>
+
+          {% for field in schema.fields %}
+            <label class="settings-label" for="{{ source_key }}__{{ field.name }}">
+              {{ field.label }}
+            </label>
+            {% if field.type == "password" %}
+              <input
+                id="{{ source_key }}__{{ field.name }}"
+                class="settings-input"
+                type="password"
+                name="{{ source_key }}__{{ field.name }}"
+                autocomplete="off"
+                placeholder="Enter new value to update (leave blank to keep existing)">
+            {% else %}
+              <input
+                id="{{ source_key }}__{{ field.name }}"
+                class="settings-input"
+                type="text"
+                name="{{ source_key }}__{{ field.name }}"
+                autocomplete="off"
+                placeholder="{{ field.default if field.default is defined else '' }}">
+            {% endif %}
+          {% endfor %}
+        </div>
+      {% endfor %}
+
+      <button type="submit" class="btn btn-save">Save</button>
+    </form>
   </div>
 
 </div>
+
+{# ── Tab switching script ──────────────────────────────────────── #}
+<script>
+(function () {
+  var buttons = document.querySelectorAll('.settings-tab-btn');
+  var panes   = document.querySelectorAll('.tab-pane');
+
+  function activateTab(tabId) {
+    buttons.forEach(function (btn) {
+      var isActive = btn.dataset.tab === tabId;
+      btn.classList.toggle('active', isActive);
+      btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    });
+    panes.forEach(function (pane) {
+      pane.classList.toggle('active', pane.id === 'pane-' + tabId);
+    });
+  }
+
+  buttons.forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      activateTab(btn.dataset.tab);
+    });
+  });
+
+  // On page load, read ?tab= and activate that tab (overrides server-side default).
+  var params = new URLSearchParams(window.location.search);
+  var tabParam = params.get('tab');
+  if (tabParam && document.getElementById('pane-' + tabParam)) {
+    activateTab(tabParam);
+  }
+}());
+</script>
 </body>
 </html>

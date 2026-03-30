@@ -18,13 +18,16 @@ from importlib.metadata import version as pkg_version, PackageNotFoundError
 from flask import Flask, render_template, make_response, request, jsonify, redirect, url_for
 
 import db
-from credentials import CredentialError, load_providers
+from credentials import CredentialError, load_providers, save_providers
+from providers import _PROVIDER_CLASS_MAP
+from job_sources import SOURCES
 
 app = Flask(__name__)
 
 DB_PATH: str = os.environ.get("DB_PATH", "jobs.db")
 _KEYS_PATH: str = os.path.join(os.path.dirname(__file__), "keys.json")
 _CONFIG_PATH: str = os.path.join(os.path.dirname(__file__), "config.json")
+_PROVIDERS_PATH: str = os.path.join(os.path.dirname(__file__), "providers.json")
 
 # Default structure mirrors keys.example.json — used when keys.json is absent.
 _KEYS_DEFAULTS: dict = {
@@ -580,162 +583,141 @@ def ingest_status():
     return resp
 
 
-def _load_keys() -> dict:
-    """Load credentials and return them in the legacy keys.json-shaped dict.
+def _load_providers_safe() -> dict:
+    """Load providers.json and return the parsed dict, or an empty skeleton on error.
 
-    Delegates to :func:`credentials.load_providers` for the actual credential
-    loading (providers.json → migration → env vars).  The result is translated
-    back to the ``{"providers": {...}, "preferred_provider": "..."}`` shape that
-    the existing settings route, validation endpoint, and templates expect.
+    Uses ``_PROVIDERS_PATH`` as the primary credential store.  Falls back to
+    migration from ``_KEYS_PATH`` / ``_CONFIG_PATH`` when ``providers.json`` is
+    absent.  Returns safe empty defaults when :exc:`CredentialError` is raised
+    so the settings UI always renders even before any credentials are configured.
 
-    ``providers.json`` is resolved relative to the directory containing
-    ``_KEYS_PATH`` so that test fixtures which monkeypatch ``_KEYS_PATH`` to a
-    temp directory will also resolve ``providers.json`` in that temp directory
-    rather than the real project root.  This preserves full test isolation.
-
-    Returns a dict with safe empty values when :exc:`CredentialError` is raised
-    (e.g. no credentials configured yet) so the settings UI still renders.
-
-    Note: ``_KEYS_PATH`` is still used as the write target for the settings POST
-    handler.  The migration to providers.json as the write target is handled in a
-    later issue (#3 of the Settings Overhaul milestone).
+    Returns:
+        providers.json-shaped dict with ``provider_order``, ``llm``, and
+        ``job_sources`` keys guaranteed to be present.
     """
-    import copy
-
-    # Derive providers.json path from the same directory as _KEYS_PATH so that
-    # monkeypatched test environments stay fully isolated from the real project.
-    keys_dir = os.path.dirname(os.path.abspath(_KEYS_PATH))
-    providers_path = os.path.join(keys_dir, "providers.json")
-
     try:
-        providers_data = load_providers(
-            providers_path=providers_path,
+        data = load_providers(
+            providers_path=_PROVIDERS_PATH,
             keys_path=_KEYS_PATH,
             config_path=_CONFIG_PATH,
         )
     except CredentialError:
-        return copy.deepcopy(_KEYS_DEFAULTS)
+        data = {}
 
-    # Translate providers.json shape → legacy keys.json shape for existing callers.
-    llm_section: dict = providers_data.get("llm") or {}
-    provider_order: list = providers_data.get("provider_order") or []
-
-    # Reconstruct the legacy "providers" sub-dict dynamically from the union of
-    # all known default providers and whatever is in the llm section.  This
-    # ensures two things:
-    #   1. Known providers (anthropic, openai, gemini) always appear in the
-    #      output with safe empty defaults even when absent from providers.json,
-    #      so the settings template never receives a KeyError.
-    #   2. Providers added to providers.json beyond the default three are also
-    #      included — the old hardcoded loop silently dropped them.
-    all_provider_names: list[str] = list(
-        dict.fromkeys(list(_KEYS_DEFAULTS["providers"].keys()) + list(llm_section.keys()))
-    )
-    legacy_providers: dict = {}
-    for provider in all_provider_names:
-        cfg = llm_section.get(provider, {})
-        default_model = _KEYS_DEFAULTS["providers"].get(provider, {}).get("model", "")
-        legacy_providers[provider] = {
-            "api_key": cfg.get("api_key", ""),
-            "model":   cfg.get("model", default_model),
-        }
-
-    # preferred_provider is the first entry in provider_order that exists in the
-    # llm section, falling back to the legacy default.
-    preferred = _KEYS_DEFAULTS["preferred_provider"]
-    for name in provider_order:
-        if name in llm_section:
-            preferred = name
-            break
-
-    return {"providers": legacy_providers, "preferred_provider": preferred}
+    data.setdefault("provider_order", [])
+    data.setdefault("llm", {})
+    data.setdefault("job_sources", {})
+    return data
 
 
 @app.route("/settings", methods=["GET", "POST"])
 def settings():
-    """Settings page — manage API keys, preferred provider, and Adzuna credentials.
+    """Settings page — manage LLM provider credentials and job source credentials.
 
-    GET:  Reads keys.json and config.json and passes only boolean has_key/has_id
-          flags to the template — raw credential values are never sent to the browser.
-    POST: Merges submitted form values over the existing keys.json and config.json.
-          A blank field means "keep existing"; a non-blank field replaces the stored
-          value. Model is always updated (not secret). Adzuna fields update config.json.
+    GET:  Builds ``llm_schemas`` and ``source_schemas`` from the provider/source
+          registries and passes only boolean ``has_values`` flags — never raw
+          credential values — to the template.  Tab is selected via ``?tab=``
+          query param (default: ``llm``).
+
+    POST: Parses namespaced form fields (``<provider_key>__<field_name>``),
+          deep-merges non-blank values into ``providers.json`` via
+          :func:`credentials.save_providers`, then redirects to
+          ``GET /settings?tab=<active_tab>``.
     """
-    saved = False
     error = None
 
     if request.method == "POST":
-        keys_data = _load_keys()
+        active_tab = request.form.get("tab", "llm").strip()
 
-        for provider in ("anthropic", "openai", "gemini"):
-            submitted_key = request.form.get(f"{provider}_key", "").strip()
-            submitted_model = request.form.get(f"{provider}_model", "").strip()
+        # --- Build updates dict from namespaced form fields ---
+        updates: dict = {"llm": {}, "job_sources": {}}
 
-            # Only update the stored key when the field was filled in.
-            if submitted_key:
-                keys_data["providers"][provider]["api_key"] = submitted_key
+        # LLM providers: iterate registry so new providers are handled automatically.
+        for provider_key, cls in _PROVIDER_CLASS_MAP.items():
+            schema = cls.settings_schema()
+            provider_updates: dict = {}
+            for field in schema["fields"]:
+                field_name = field["name"]
+                form_key = f"{provider_key}__{field_name}"
+                value = request.form.get(form_key, "").strip()
+                provider_updates[field_name] = value  # blank → save_providers skips it
+            if provider_updates:
+                updates["llm"][provider_key] = provider_updates
 
-            # Model is never secret — always round-trip whatever was submitted.
-            if submitted_model:
-                keys_data["providers"][provider]["model"] = submitted_model
-
-        preferred = request.form.get("preferred_provider", "").strip()
-        if preferred in ("anthropic", "openai", "gemini"):
-            keys_data["preferred_provider"] = preferred
+        # Job sources: same pattern.
+        for source_key, cls in SOURCES.items():
+            schema = cls.settings_schema()
+            if not schema["fields"]:
+                continue  # no-credential sources have nothing to save
+            source_updates: dict = {}
+            for field in schema["fields"]:
+                field_name = field["name"]
+                form_key = f"{source_key}__{field_name}"
+                value = request.form.get(form_key, "").strip()
+                source_updates[field_name] = value
+            if source_updates:
+                updates["job_sources"][source_key] = source_updates
 
         try:
-            with open(_KEYS_PATH, "w", encoding="utf-8") as f:
-                json.dump(keys_data, f, indent=2)
+            save_providers(updates, providers_path=_PROVIDERS_PATH)
         except OSError:
             error = "Could not save settings — check file permissions."
 
         if error is None:
-            # Handle Adzuna credentials — load current config, merge, write back.
-            adzuna_id = request.form.get("adzuna_app_id", "").strip()
-            adzuna_key = request.form.get("adzuna_app_key", "").strip()
-            if adzuna_id or adzuna_key:
-                cfg_data = load_config(_CONFIG_PATH)
-                if adzuna_id:
-                    cfg_data["adzuna_app_id"] = adzuna_id
-                if adzuna_key:
-                    cfg_data["adzuna_app_key"] = adzuna_key
-                try:
-                    with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
-                        json.dump(cfg_data, f, indent=2)
-                except OSError:
-                    error = "Could not save settings — check file permissions."
+            return redirect(url_for("settings", tab=active_tab))
 
-        if error is None:
-            saved = True
+    # --- GET (or POST with error) ---
+    active_tab = request.args.get("tab", "llm").strip()
+    providers_data = _load_providers_safe()
+    llm_section: dict = providers_data.get("llm") or {}
+    sources_section: dict = providers_data.get("job_sources") or {}
 
-        # Re-load after write so the template reflects the current state.
-        keys_data = _load_keys()
-    else:
-        keys_data = _load_keys()
+    # provider_order from providers.json determines display sequence.
+    provider_order: list[str] = providers_data.get("provider_order") or []
+    # Build ordered list: provider_order first, then any registry providers not listed.
+    seen: set[str] = set()
+    ordered_provider_keys: list[str] = []
+    for key in provider_order:
+        if key in _PROVIDER_CLASS_MAP and key not in seen:
+            ordered_provider_keys.append(key)
+            seen.add(key)
+    for key in _PROVIDER_CLASS_MAP:
+        if key not in seen:
+            ordered_provider_keys.append(key)
+            seen.add(key)
 
-    # Build the template context — only booleans for key presence, never values.
-    providers_ctx = {}
-    for provider in ("anthropic", "openai", "gemini"):
-        cfg = keys_data["providers"][provider]
-        providers_ctx[provider] = {
-            "has_key": bool(cfg.get("api_key", "").strip()),
-            "model": cfg.get("model", _KEYS_DEFAULTS["providers"][provider]["model"]),
-        }
+    llm_schemas: list[tuple[str, dict, bool]] = []
+    for key in ordered_provider_keys:
+        cls = _PROVIDER_CLASS_MAP[key]
+        schema = cls.settings_schema()
+        cfg = llm_section.get(key) or {}
+        has_values = bool(cfg.get("api_key", "").strip())
+        llm_schemas.append((key, schema, has_values))
 
-    # Adzuna status flags — read from config.json (never pass raw values).
-    cfg_data = load_config(_CONFIG_PATH)
-    has_adzuna_id = bool(cfg_data.get("adzuna_app_id", "").strip())
-    has_adzuna_key = bool(cfg_data.get("adzuna_app_key", "").strip())
+    source_schemas: list[tuple[str, dict, bool]] = []
+    for key, cls in SOURCES.items():
+        schema = cls.settings_schema()
+        cfg = sources_section.get(key) or {}
+        required_fields = [f["name"] for f in schema["fields"] if f.get("required")]
+        if required_fields:
+            has_values = all(bool(cfg.get(fn, "").strip()) for fn in required_fields)
+        else:
+            has_values = False  # no-credential sources are never "configured"
+        source_schemas.append((key, schema, has_values))
+
+    # POST-with-error: re-render the form (not a redirect) so the error is shown.
+    saved = False  # POST always redirects on success; reaching here means error or GET
+    if request.method == "POST" and error:
+        pass  # fall through to render with error
 
     return render_template(
         "settings.html",
         view="settings",
-        providers=providers_ctx,
-        preferred_provider=keys_data.get("preferred_provider", "anthropic"),
+        llm_schemas=llm_schemas,
+        source_schemas=source_schemas,
+        active_tab=active_tab,
         saved=saved,
         error=error,
-        has_adzuna_id=has_adzuna_id,
-        has_adzuna_key=has_adzuna_key,
     )
 
 
@@ -913,7 +895,8 @@ def validate_keys():
 
     No API key values are logged or returned in the response.
     """
-    keys_data = _load_keys()
+    providers_data = _load_providers_safe()
+    llm_section: dict = providers_data.get("llm") or {}
     results = {}
 
     _validators = {
@@ -923,7 +906,7 @@ def validate_keys():
     }
 
     for provider, validator in _validators.items():
-        cfg = keys_data["providers"].get(provider, {})
+        cfg = llm_section.get(provider, {})
         api_key = cfg.get("api_key", "").strip()
         model   = cfg.get("model", "").strip()
 

@@ -1,14 +1,17 @@
 """
 tests/test_provider_chain.py — Unit tests for build_provider_chain().
 
-All provider SDK clients are patched at import time so no real API keys or
-network access are needed.  Covers:
+Updated to use the providers.json-shaped dict (with top-level ``provider_order``
+and ``llm`` keys) introduced in Issue #147.
 
-  - preferred_provider placed first in the chain
+All provider SDK clients are patched so no real API keys or network access
+are needed.  Covers:
+
+  - provider_order determines chain ordering
   - providers with empty api_key silently skipped
-  - preferred_provider absent → dict insertion order used
-  - all empty api_keys → ValueError raised
-  - preferred_provider present but its api_key is empty → skipped
+  - provider_order absent → registry insertion order used
+  - all empty api_keys → empty chain (no ValueError)
+  - provider first in order but has empty key → skipped
   - single valid provider → chain length 1
 """
 
@@ -28,22 +31,23 @@ from providers import build_provider_chain, AnthropicProvider, OpenAIProvider, G
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_keys(
+def _make_providers(
     anthropic_key: str = "test-key-anthropic",
     openai_key: str    = "test-key-openai",
     gemini_key: str    = "test-key-gemini",
-    preferred: str     = "anthropic",
+    provider_order: list | None = None,
 ) -> dict:
-    """Return a keys.json-shaped dict with the given keys and preferred provider."""
+    """Return a providers.json-shaped dict for testing build_provider_chain()."""
     d: dict = {
-        "providers": {
+        "llm": {
             "anthropic": {"api_key": anthropic_key, "model": "claude-haiku-4-5-20251001"},
             "openai":    {"api_key": openai_key,    "model": "gpt-4o-mini"},
             "gemini":    {"api_key": gemini_key,    "model": "gemini-1.5-flash"},
         },
+        "job_sources": {"adzuna": {"app_id": "", "app_key": ""}},
     }
-    if preferred is not None:
-        d["preferred_provider"] = preferred
+    if provider_order is not None:
+        d["provider_order"] = provider_order
     return d
 
 
@@ -69,7 +73,7 @@ def _stop_patches(mocks) -> None:
 # ---------------------------------------------------------------------------
 
 class TestBuildProviderChain(unittest.TestCase):
-    """Unit tests for build_provider_chain()."""
+    """Unit tests for build_provider_chain() using the providers.json API."""
 
     def setUp(self) -> None:
         self._mocks = _start_patches()
@@ -78,16 +82,16 @@ class TestBuildProviderChain(unittest.TestCase):
         _stop_patches(self._mocks)
 
     # ------------------------------------------------------------------
-    # 1. preferred_provider goes first
+    # 1. provider_order determines chain ordering
     # ------------------------------------------------------------------
 
-    def test_preferred_first(self):
-        """Chain starts with the preferred_provider when all three have keys."""
-        keys = _make_keys(preferred="openai")
-        chain = build_provider_chain(keys)
+    def test_provider_order_first_is_first_in_chain(self):
+        """Chain starts with the first entry in provider_order."""
+        providers = _make_providers(provider_order=["openai", "anthropic", "gemini"])
+        chain = build_provider_chain(providers)
 
         self.assertIsInstance(chain[0], OpenAIProvider,
-            "OpenAI should be first when preferred_provider='openai'")
+            "OpenAI should be first when it leads provider_order")
         self.assertEqual(len(chain), 3,
             "All three providers should appear in the chain")
 
@@ -97,8 +101,11 @@ class TestBuildProviderChain(unittest.TestCase):
 
     def test_empty_key_skipped(self):
         """Providers with an empty api_key are silently omitted from the chain."""
-        keys = _make_keys(anthropic_key="", preferred="openai")
-        chain = build_provider_chain(keys)
+        providers = _make_providers(
+            anthropic_key="",
+            provider_order=["openai", "anthropic", "gemini"],
+        )
+        chain = build_provider_chain(providers)
 
         types = [type(p) for p in chain]
         self.assertNotIn(AnthropicProvider, types,
@@ -107,44 +114,49 @@ class TestBuildProviderChain(unittest.TestCase):
             "OpenAIProvider should be present with a valid key")
 
     # ------------------------------------------------------------------
-    # 3. No preferred_provider → dict insertion order
+    # 3. No provider_order → registry insertion order
     # ------------------------------------------------------------------
 
-    def test_preferred_missing_falls_back_to_order(self):
-        """When preferred_provider is absent the order follows dict insertion order."""
-        keys = _make_keys()
-        # Remove preferred_provider entirely so the function uses insertion order.
-        del keys["preferred_provider"]
-
-        chain = build_provider_chain(keys)
+    def test_missing_provider_order_falls_back_to_registry_order(self):
+        """When provider_order is absent the order follows _PROVIDER_CLASS_MAP insertion order."""
+        providers = _make_providers()  # no provider_order key
+        chain = build_provider_chain(providers)
 
         self.assertIsInstance(chain[0], AnthropicProvider,
-            "First provider should be 'anthropic' (first in dict) when preferred is absent")
+            "First provider should be 'anthropic' (first in registry) when provider_order absent")
         self.assertIsInstance(chain[1], OpenAIProvider)
         self.assertIsInstance(chain[2], GeminiProvider)
 
     # ------------------------------------------------------------------
-    # 4. All empty keys → ValueError
+    # 4. All empty keys → empty chain (no exception)
     # ------------------------------------------------------------------
 
-    def test_no_valid_providers_raises(self):
-        """ValueError is raised when every provider has an empty api_key."""
-        keys = _make_keys(anthropic_key="", openai_key="", gemini_key="", preferred="anthropic")
-
-        with self.assertRaises(ValueError):
-            build_provider_chain(keys)
+    def test_all_empty_keys_returns_empty_chain(self):
+        """When every provider has an empty api_key the chain is empty (no crash)."""
+        providers = _make_providers(
+            anthropic_key="",
+            openai_key="",
+            gemini_key="",
+            provider_order=["anthropic", "openai", "gemini"],
+        )
+        chain = build_provider_chain(providers)
+        self.assertEqual(chain, [],
+            "Empty chain expected when all api_keys are empty")
 
     # ------------------------------------------------------------------
-    # 5. preferred_provider has empty key → skip it, use next valid one
+    # 5. First provider in order has empty key → skipped, next valid one leads
     # ------------------------------------------------------------------
 
-    def test_preferred_empty_key_skipped(self):
-        """preferred_provider is skipped when its api_key is empty; next valid provider leads."""
-        keys = _make_keys(anthropic_key="", preferred="anthropic")
-        chain = build_provider_chain(keys)
+    def test_first_in_order_empty_key_skipped(self):
+        """First entry in provider_order is skipped when its api_key is empty."""
+        providers = _make_providers(
+            anthropic_key="",
+            provider_order=["anthropic", "openai", "gemini"],
+        )
+        chain = build_provider_chain(providers)
 
         self.assertIsInstance(chain[0], OpenAIProvider,
-            "OpenAI (first remaining valid provider) should lead when preferred key is empty")
+            "OpenAI (next valid) should lead when first provider's key is empty")
         types = [type(p) for p in chain]
         self.assertNotIn(AnthropicProvider, types,
             "AnthropicProvider must not appear when its api_key is empty")
@@ -154,14 +166,15 @@ class TestBuildProviderChain(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_single_provider(self):
-        """A keys dict with only one provider produces a chain of length 1."""
-        keys = {
-            "providers": {
+        """A providers dict with only one provider with a key produces a chain of length 1."""
+        providers = {
+            "provider_order": ["gemini"],
+            "llm": {
                 "gemini": {"api_key": "test-key-123", "model": "gemini-1.5-flash"},
             },
-            "preferred_provider": "gemini",
+            "job_sources": {"adzuna": {"app_id": "", "app_key": ""}},
         }
-        chain = build_provider_chain(keys)
+        chain = build_provider_chain(providers)
 
         self.assertEqual(len(chain), 1,
             "Chain should contain exactly one provider")

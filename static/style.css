@@ -858,6 +858,23 @@ body {
   background-color: var(--bg-hover);
 }
 
+/* Expand chevron — rotates when card is open */
+.card-summary::after {
+  content: "▶";
+  flex-shrink: 0;
+  font-size: 0.55rem;
+  color: var(--text-muted);
+  padding-left: 10px;
+  transition: transform 160ms ease, color 120ms ease;
+}
+.card-details[open] > .card-summary::after {
+  transform: rotate(90deg);
+  color: var(--text-accent);
+}
+.card-summary:hover::after {
+  color: var(--text-secondary);
+}
+
 /* Two-row column: title on top, meta below */
 .summary-main {
   flex: 1;
@@ -947,8 +964,7 @@ body {
 }
 
 /* Re-instate top spacing for the first content element in the body */
-.card-body .skill-section:first-child,
-.card-body .concerns-section:first-child {
+.card-body > *:first-child {
   margin-top: 14px;
 }
 
@@ -960,6 +976,16 @@ body {
 /* HTMX request indicator */
 .htmx-request .card-summary {
   opacity: 0.5;
+  pointer-events: none;
+}
+
+/* Dismiss animation */
+@keyframes card-dismiss {
+  0%   { opacity: 1; transform: translateY(0) scale(1); }
+  100% { opacity: 0; transform: translateY(-8px) scale(0.98); }
+}
+.card-details.is-dismissing {
+  animation: card-dismiss 280ms ease forwards;
   pointer-events: none;
 }
 
@@ -1021,6 +1047,16 @@ body {
   background: transparent;
   color: var(--text-muted);
   opacity: 0.7;
+}
+
+/* Model badge in expanded card body */
+.model-badge-body {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  letter-spacing: 0.03em;
+  opacity: 0.8;
+  margin: 2px 0 10px;
 }
 
 /* ------------------------------------------------------------

@@ -26,11 +26,9 @@
 
   <span class="actions-spacer"></span>
 
-  <button
-    class="btn btn-dismiss"
-    hx-post="/dismiss/{{ listing.id }}"
-    hx-target="#card-{{ listing.id }}"
-    hx-swap="outerHTML"
-    title="Dismiss"
-  >✕</button>
+  <button class="btn btn-dismiss"
+          hx-delete="/dismiss/{{ listing.id }}"
+          hx-target="#card-{{ listing.id }}"
+          hx-swap="outerHTML swap:300ms"
+          hx-on:click="this.closest('.card-details').classList.add('is-dismissing')">✕</button>
 </div>

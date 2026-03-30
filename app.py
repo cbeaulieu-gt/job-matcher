@@ -12,7 +12,7 @@ import sys
 from datetime import datetime, timezone
 from importlib.metadata import version as pkg_version, PackageNotFoundError
 
-from flask import Flask, render_template, make_response, request, jsonify
+from flask import Flask, render_template, make_response, request, jsonify, redirect, url_for
 
 import db
 
@@ -696,7 +696,6 @@ def profile():
 
 @app.route("/settings/config")
 def settings_config_redirect():
-    from flask import redirect, url_for
     return redirect(url_for("profile"), code=301)
 
 

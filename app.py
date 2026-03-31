@@ -923,6 +923,61 @@ def validate_keys():
     return render_template("_validation_results.html", results=results)
 
 
+@app.route("/api/providers/reorder", methods=["POST"])
+def api_providers_reorder():
+    """Persist a new LLM provider fallback order.
+
+    Expects JSON body: ``{"order": ["anthropic", "gemini", "openai"]}``
+
+    * All entries must be known keys in ``_PROVIDER_CLASS_MAP``; unknown keys → 400.
+    * ``order`` may be a subset of the registry (omitted providers are appended at
+      runtime by ``build_provider_chain()``).
+    * Writes only ``provider_order`` at the top level of ``providers.json``.
+    * Returns the rendered ``_provider_order.html`` fragment on success (200).
+    * Returns a plain-text error message on failure (400/500).
+    """
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return "Invalid request body — expected JSON object.", 400
+
+    order = body.get("order")
+    if not isinstance(order, list):
+        return "Missing or invalid 'order' field — expected a JSON array.", 400
+
+    unknown = [k for k in order if k not in _PROVIDER_CLASS_MAP]
+    if unknown:
+        return f"Unknown provider key(s): {', '.join(unknown)}", 400
+
+    try:
+        save_providers({"provider_order": order}, providers_path=_PROVIDERS_PATH)
+    except OSError:
+        return "Could not save order — check file permissions.", 500
+
+    # Re-build llm_schemas in the new order for the response fragment.
+    providers_data = _load_providers_safe()
+    llm_section: dict = providers_data.get("llm") or {}
+    seen: set[str] = set()
+    llm_schemas: list[tuple[str, dict, bool]] = []
+    for key in order:
+        if key in _PROVIDER_CLASS_MAP and key not in seen:
+            cls = _PROVIDER_CLASS_MAP[key]
+            schema = cls.settings_schema()
+            cfg = llm_section.get(key) or {}
+            has_values = bool(cfg.get("api_key", "").strip())
+            llm_schemas.append((key, schema, has_values))
+            seen.add(key)
+    for key in _PROVIDER_CLASS_MAP:
+        if key not in seen:
+            cls = _PROVIDER_CLASS_MAP[key]
+            schema = cls.settings_schema()
+            cfg = llm_section.get(key) or {}
+            has_values = bool(cfg.get("api_key", "").strip())
+            llm_schemas.append((key, schema, has_values))
+            seen.add(key)
+
+    return render_template("_provider_order.html", llm_schemas=llm_schemas)
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------

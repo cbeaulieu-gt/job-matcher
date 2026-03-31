@@ -67,6 +67,15 @@ Results include a `model_used` field stored as `"provider/model"` per listing. S
 - `scripts/setup.ps1` — Registers waitress as an NSSM Windows service and creates a Task Scheduler job for daily ingest.
 - `scripts/status.ps1` / `scripts/teardown.ps1` — Ops helpers.
 
+## UI Development
+
+All UI work must follow `docs/STYLE_GUIDE.md`. Read it before touching any HTML or CSS.
+
+- **Consult first** — the guide documents every CSS token, component class, typography rule, and state convention. Do not introduce new patterns without checking whether an existing one already covers the case.
+- **Keep it current** — if a change introduces a new component, token, or convention, update `docs/STYLE_GUIDE.md` in the same PR. The guide is the source of truth, not `static/style.css`.
+- **Never hard-code hex values** — always use a CSS custom property from `:root`.
+- **Tier colors are semantic** — green (`--score-high-*`) = success/configured/matched; amber (`--score-mid-*`) = warning; red (`--score-low-*`) = error. Do not use tier colors for decorative purposes.
+
 ## Key design decisions
 
 | Decision | Why |

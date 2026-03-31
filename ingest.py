@@ -37,6 +37,12 @@ from credentials import CredentialError, load_providers
 
 _DB_PATH: str = os.environ.get("DB_PATH", "jobs.db")
 
+_CONFIG_DIR = os.path.join(os.path.dirname(__file__), "config")
+_DEFAULT_CONFIG_PATH = os.path.join(_CONFIG_DIR, "config.json")
+_DEFAULT_PROFILE_PATH = os.path.join(_CONFIG_DIR, "profile.json")
+_DEFAULT_KEYS_PATH = os.path.join(_CONFIG_DIR, "keys.json")
+_DEFAULT_PROVIDERS_PATH = os.path.join(_CONFIG_DIR, "providers.json")
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
@@ -77,8 +83,8 @@ _REQUIRED_SEARCH = ("country", "what", "results_per_page", "max_pages")
 _REQUIRED_SCORING = ("threshold",)
 
 
-def load_config(path: str = "config.json") -> dict:
-    """Load and validate config.json.
+def load_config(path: str = _DEFAULT_CONFIG_PATH) -> dict:
+    """Load and validate config/config.json.
 
     Raises SystemExit with a descriptive message if the file cannot be read
     or any required key is missing.
@@ -131,8 +137,8 @@ def load_config(path: str = "config.json") -> dict:
 
 
 
-def load_profile(path: str = "profile.json") -> dict:
-    """Load profile.json and return the parsed dict.
+def load_profile(path: str = _DEFAULT_PROFILE_PATH) -> dict:
+    """Load config/profile.json and return the parsed dict.
 
     Raises SystemExit if the file cannot be read or is not valid JSON.
     """
@@ -492,11 +498,11 @@ def score_listing_with_fallback(
 # ---------------------------------------------------------------------------
 
 def run(
-    config_path: str = "config.json",
-    profile_path: str = "profile.json",
+    config_path: str = _DEFAULT_CONFIG_PATH,
+    profile_path: str = _DEFAULT_PROFILE_PATH,
     hours: int | None = None,
-    keys_path: str = "keys.json",
-    providers_path: str = "providers.json",
+    keys_path: str = _DEFAULT_KEYS_PATH,
+    providers_path: str = _DEFAULT_PROVIDERS_PATH,
 ) -> None:
     """Run the full ingestion pipeline.
 
@@ -505,14 +511,14 @@ def run(
     listing.  Prints a summary line when complete.
 
     Args:
-        config_path:    Path to config.json (default ``"config.json"``).
-        profile_path:   Path to profile.json (default ``"profile.json"``).
+        config_path:    Path to config.json (default ``"config/config.json"``).
+        profile_path:   Path to profile.json (default ``"config/profile.json"``).
         hours:          If provided, only process listings whose ``created_at``
                         timestamp is within the last N hours. Overrides
                         ``search.max_days_old`` in config with ``ceil(hours/24)``.
         keys_path:      Path to legacy keys.json (used by migration; default
-                        ``"keys.json"``).
-        providers_path: Path to providers.json (default ``"providers.json"``).
+                        ``"config/keys.json"``).
+        providers_path: Path to providers.json (default ``"config/providers.json"``).
                         Override in tests to inject a temp file.
     """
     config = load_config(config_path)
@@ -723,10 +729,10 @@ def run(
 # ---------------------------------------------------------------------------
 
 def rescore(
-    config_path: str = "config.json",
-    profile_path: str = "profile.json",
-    keys_path: str = "keys.json",
-    providers_path: str = "providers.json",
+    config_path: str = _DEFAULT_CONFIG_PATH,
+    profile_path: str = _DEFAULT_PROFILE_PATH,
+    keys_path: str = _DEFAULT_KEYS_PATH,
+    providers_path: str = _DEFAULT_PROVIDERS_PATH,
 ) -> None:
     """Re-score all previously scored listings against the current profile.
 
@@ -735,11 +741,11 @@ def rescore(
     Does not fetch new listings from Adzuna.
 
     Args:
-        config_path:    Path to config.json (default ``"config.json"``).
-        profile_path:   Path to profile.json (default ``"profile.json"``).
+        config_path:    Path to config.json (default ``"config/config.json"``).
+        profile_path:   Path to profile.json (default ``"config/profile.json"``).
         keys_path:      Path to legacy keys.json (used by migration; default
-                        ``"keys.json"``).
-        providers_path: Path to providers.json (default ``"providers.json"``).
+                        ``"config/keys.json"``).
+        providers_path: Path to providers.json (default ``"config/providers.json"``).
                         Override in tests to inject a temp file.
     """
     profile = load_profile(profile_path)
@@ -839,8 +845,8 @@ if __name__ == "__main__":
         help="Re-score all previously scored listings against the current profile. "
              "Does not fetch new listings.",
     )
-    parser.add_argument("--config", default="config.json", help="Path to config.json")
-    parser.add_argument("--profile", default="profile.json", help="Path to profile.json")
+    parser.add_argument("--config", default=_DEFAULT_CONFIG_PATH, help="Path to config.json")
+    parser.add_argument("--profile", default=_DEFAULT_PROFILE_PATH, help="Path to profile.json")
     parser.add_argument(
         "--hours",
         type=int,

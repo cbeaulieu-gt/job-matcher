@@ -10,7 +10,7 @@
 
     This script does NOT prompt for Adzuna credentials or LLM API keys.
     After setup completes, open http://localhost:5000/settings to enter LLM
-    provider keys, then edit config.json in the project root to add your
+    provider keys, then edit config/config.json to add your
     Adzuna App ID and App Key before running ingest.
 .EXAMPLE
     .\setup.ps1
@@ -159,50 +159,60 @@ Write-Ok "Directory ready: $dataDir"
 Write-Ok "Logs directory:  $logsDir"
 
 # ---------------------------------------------------------------------------
-# Step 5 - Set up keys.json
+# Step 5 - Ensure config/ directory exists
 # ---------------------------------------------------------------------------
 Write-Host ''
-Write-Step 'Setting up keys.json...'
+Write-Step 'Ensuring config/ directory exists...'
 
-$keysPath        = Join-Path -Path $ProjectRoot -ChildPath 'keys.json'
-$keysExamplePath = Join-Path -Path $ProjectRoot -ChildPath 'keys.example.json'
+$configDir = Join-Path -Path $ProjectRoot -ChildPath 'config'
+$null = New-Item -Path $configDir -ItemType Directory -Force
+Write-Ok "Config directory ready: $configDir"
+
+# ---------------------------------------------------------------------------
+# Step 6 - Set up config/keys.json
+# ---------------------------------------------------------------------------
+Write-Host ''
+Write-Step 'Setting up config/keys.json...'
+
+$keysPath        = Join-Path -Path $configDir -ChildPath 'keys.json'
+$keysExamplePath = Join-Path -Path $configDir -ChildPath 'keys.example.json'
 
 if (-not (Test-Path -Path $keysPath -PathType Leaf)) {
     if (Test-Path -Path $keysExamplePath -PathType Leaf) {
         Copy-Item -Path $keysExamplePath -Destination $keysPath
-        Write-Ok 'keys.json created from example - configure API keys at http://localhost:5000/settings'
+        Write-Ok 'config/keys.json created from example - configure API keys at http://localhost:5000/settings'
     }
     else {
-        Write-Host '  keys.example.json not found - skipping keys.json creation.' -ForegroundColor Yellow
-        Write-Host '  Create keys.json manually in the project root before starting the service.' -ForegroundColor Yellow
+        Write-Host '  config/keys.example.json not found - skipping keys.json creation.' -ForegroundColor Yellow
+        Write-Host '  Create config/keys.json manually before starting the service.' -ForegroundColor Yellow
     }
 }
 else {
-    Write-Ok 'keys.json already present - skipping'
+    Write-Ok 'config/keys.json already present - skipping'
 }
 
 # ---------------------------------------------------------------------------
-# Step 6 - Set up config.json
+# Step 7 - Set up config/config.json
 # ---------------------------------------------------------------------------
 Write-Host ''
-Write-Step 'Setting up config.json...'
+Write-Step 'Setting up config/config.json...'
 
-$configPath        = Join-Path -Path $ProjectRoot -ChildPath 'config.json'
-$configExamplePath = Join-Path -Path $ProjectRoot -ChildPath 'config.example.json'
+$configPath        = Join-Path -Path $configDir -ChildPath 'config.json'
+$configExamplePath = Join-Path -Path $configDir -ChildPath 'config.example.json'
 
 if (-not (Test-Path -Path $configPath -PathType Leaf)) {
     if (Test-Path -Path $configExamplePath -PathType Leaf) {
         Copy-Item -Path $configExamplePath -Destination $configPath
-        Write-Ok 'config.json created from example - edit it at http://localhost:5000/settings or directly in the project root'
+        Write-Ok 'config/config.json created from example - edit it at http://localhost:5000/settings or directly in config/'
     } else {
-        Write-Host '  config.example.json not found - skipping config.json creation.' -ForegroundColor Yellow
+        Write-Host '  config/config.example.json not found - skipping config.json creation.' -ForegroundColor Yellow
     }
 } else {
-    Write-Ok 'config.json already present - skipping'
+    Write-Ok 'config/config.json already present - skipping'
 }
 
 # ---------------------------------------------------------------------------
-# Step 7 - Harden config file ACLs
+# Step 8 - Harden config file ACLs
 # ---------------------------------------------------------------------------
 Write-Host ''
 Write-Step 'Hardening config file permissions...'
@@ -240,22 +250,22 @@ function Set-ConfigFileAcl {
 
 if (Test-Path -Path $keysPath -PathType Leaf) {
     Set-ConfigFileAcl -FilePath $keysPath
-    Write-Ok 'keys.json ACL: current user + SYSTEM = FullControl'
+    Write-Ok 'config/keys.json ACL: current user + SYSTEM = FullControl'
 }
 else {
-    Write-Host '  keys.json not found - skipping ACL step.' -ForegroundColor Yellow
+    Write-Host '  config/keys.json not found - skipping ACL step.' -ForegroundColor Yellow
 }
 
 if (Test-Path -Path $configPath -PathType Leaf) {
     Set-ConfigFileAcl -FilePath $configPath
-    Write-Ok 'config.json ACL: current user + SYSTEM = FullControl'
+    Write-Ok 'config/config.json ACL: current user + SYSTEM = FullControl'
 }
 else {
-    Write-Host '  config.json not found - skipping ACL step.' -ForegroundColor Yellow
+    Write-Host '  config/config.json not found - skipping ACL step.' -ForegroundColor Yellow
 }
 
 # ---------------------------------------------------------------------------
-# Step 8 - Set system environment variables
+# Step 9 - Set system environment variables
 # ---------------------------------------------------------------------------
 Write-Host ''
 Write-Step 'Setting system environment variables (Machine scope)...'
@@ -417,7 +427,7 @@ Write-Banner 'Setup Complete'
 Write-Host 'Next steps:' -ForegroundColor Cyan
 Write-Host "  1. Open the app:        http://localhost:5000"
 Write-Host "  2. Configure LLM keys:  http://localhost:5000/settings"
-Write-Host "  3. Edit config.json:    $ProjectRoot\config.json  (Adzuna credentials, search params)"
+Write-Host "  3. Edit config/config.json:    $configDir\config.json  (Adzuna credentials, search params)"
 Write-Host "  4. Check status:        .\scripts\status.ps1"
 Write-Host "  5. View web logs:       $logsDir\web.log"
 Write-Host "  6. View ingest logs:    $logsDir\ingest.log"

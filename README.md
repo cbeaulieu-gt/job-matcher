@@ -70,7 +70,6 @@ LLM provider keys (Anthropic, OpenAI, Gemini) are configured separately via `con
 | `search.country` | If using Adzuna | Adzuna country code: `us`, `gb`, `au`, etc. (Adzuna-specific) |
 | `search.what` | If using Adzuna | Keyword query sent to Adzuna, e.g. `"software engineer"` (Adzuna-specific; other sources use their own query logic) |
 | `search.where` | No | Location filter for Adzuna, e.g. `"miami"`. Omit or leave empty for nationwide. (Adzuna-specific) |
-| `search.salary_min` | No | Minimum salary in local currency (USD for `us`). Listings with no salary data are allowed through regardless. |
 | `search.results_per_page` | If using Adzuna | Max 50 (Adzuna API limit) |
 | `search.max_pages` | If using Adzuna | Number of pages to fetch per run. 5 pages at 50 results = up to 250 raw listings. |
 
@@ -79,6 +78,7 @@ LLM provider keys (Anthropic, OpenAI, Gemini) are configured separately via `con
 | Key | Required | Notes |
 |---|---|---|
 | `scoring.threshold` | Yes | Minimum score (0–10) for a listing to appear in the feed |
+| `search.salary_min` | No | Minimum salary in local currency. Listings with no salary data are allowed through regardless. Applies to all sources. |
 | `prefilter.title_include` | No | Listing title must match at least one of these (case-insensitive substring). Omit to allow all titles. |
 | `prefilter.title_exclude` | No | Listing title must match none of these. |
 | `prefilter.require_contract_time` | No | e.g. `"full_time"`. Set to `null` to skip this check. |

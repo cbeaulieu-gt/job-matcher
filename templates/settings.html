@@ -326,6 +326,7 @@
 
   var listEl     = container.querySelector('#provider-order-list');
   var savedOrder = null;
+  var inFlight   = false;
 
   function updatePositionBadges() {
     var items = listEl.querySelectorAll('.order-item');
@@ -342,7 +343,7 @@
     dragClass:  'sortable-drag',
 
     onStart: function () {
-      /* Capture order before the drag so we can revert on failure. */
+      if (inFlight) { return false; }   /* block drag while save is pending */
       savedOrder = sortable.toArray();
     },
 
@@ -350,6 +351,7 @@
       var newOrder = sortable.toArray();
       updatePositionBadges();          /* optimistic update */
 
+      inFlight = true;
       fetch('/api/providers/reorder', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -361,10 +363,12 @@
           resp.text().then(function (html) {
             container.innerHTML = html;
             listEl = container.querySelector('#provider-order-list');
+            var opts = sortable.options;
             sortable.destroy();
-            sortable = Sortable.create(listEl, sortable.options);
+            sortable = Sortable.create(listEl, opts);
+            if (errorEl) errorEl.style.display = 'none';
+            inFlight = false;
           });
-          if (errorEl) errorEl.style.display = 'none';
         } else {
           /* Revert DOM to pre-drag order. */
           if (savedOrder) sortable.sort(savedOrder);
@@ -373,6 +377,7 @@
             errorEl.textContent = 'Could not save order — check file permissions.';
             errorEl.style.display = '';
           }
+          inFlight = false;
         }
       })
       .catch(function () {
@@ -382,6 +387,7 @@
           errorEl.textContent = 'Could not save order — network error.';
           errorEl.style.display = '';
         }
+        inFlight = false;
       });
     },
   });

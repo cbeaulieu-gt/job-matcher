@@ -393,6 +393,7 @@ def insert_listing(listing: dict, db_path: str = _DEFAULT_DB_PATH) -> None:
             row[col] = json.dumps([])
 
     # Ensure token, status, and classification columns are present even if absent from the source dict.
+    row.setdefault("salary_is_predicted", None)
     row.setdefault("tokens_input", None)
     row.setdefault("tokens_output", None)
     row.setdefault("applied", 0)

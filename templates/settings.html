@@ -103,21 +103,62 @@
     .sortable-ghost { opacity: 0.3; }
     .sortable-drag  { opacity: 0.9; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
 
-    /* ── Source enabled toggle ──────────────────────────────────── */
-    .source-enabled-label {
+    /* ── Per-source enabled toggle ───────────────────────────────────────── */
+    .source-toggle {
+      margin-left: auto;
       display: flex;
       align-items: center;
-      gap: 0.4rem;
-      font-size: 0.85rem;
-      color: var(--text-primary);
       cursor: pointer;
-      margin-right: 0.75rem;
+      flex-shrink: 0;
     }
-    .source-enabled-label input[type="checkbox"] {
-      accent-color: var(--text-accent);
-      width: 1rem;
-      height: 1rem;
-      cursor: pointer;
+
+    /* Hide the real checkbox accessibly */
+    .source-toggle input[type="checkbox"] {
+      position: absolute;
+      opacity: 0;
+      width: 0;
+      height: 0;
+      pointer-events: none;
+    }
+
+    /* The pill track */
+    .source-toggle-track {
+      position: relative;
+      display: inline-block;
+      width: 36px;
+      height: 20px;
+      border-radius: 10px;
+      background: var(--border-mid);
+      border: 1px solid var(--border-strong, #525c72);
+      transition: background 0.2s, border-color 0.2s;
+    }
+
+    /* The sliding knob */
+    .source-toggle-knob {
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--text-muted, #7a8599);
+      transition: transform 0.2s, background 0.2s;
+    }
+
+    /* Checked state — amber track, knob slides right and brightens */
+    .source-toggle input[type="checkbox"]:checked + .source-toggle-track {
+      background: var(--text-accent);
+      border-color: var(--text-accent);
+    }
+    .source-toggle input[type="checkbox"]:checked + .source-toggle-track .source-toggle-knob {
+      transform: translateX(16px);
+      background: #fff;
+    }
+
+    /* Focus ring for keyboard accessibility */
+    .source-toggle input[type="checkbox"]:focus-visible + .source-toggle-track {
+      outline: 2px solid var(--text-accent);
+      outline-offset: 2px;
     }
   </style>
 </head>
@@ -259,13 +300,6 @@
       {% for source_key, schema, has_values, is_enabled in source_schemas %}
         <div class="provider-row">
           <div class="provider-header">
-            <label class="source-enabled-label">
-              <input
-                type="checkbox"
-                name="{{ source_key }}__enabled"
-                {% if is_enabled %}checked{% endif %}>
-              Enabled
-            </label>
             <span class="provider-name">{{ schema.display_name }}</span>
             {% if schema.fields %}
               {% if has_values %}
@@ -276,6 +310,15 @@
             {% else %}
               <span class="key-status configured">&#9679; no credentials required</span>
             {% endif %}
+            <label class="source-toggle" aria-label="Enable {{ schema.display_name }}">
+              <input
+                type="checkbox"
+                name="{{ source_key }}__enabled"
+                {% if is_enabled %}checked{% endif %}>
+              <span class="source-toggle-track">
+                <span class="source-toggle-knob"></span>
+              </span>
+            </label>
           </div>
 
           {% for field in schema.fields %}

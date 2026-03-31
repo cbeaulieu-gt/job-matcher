@@ -535,3 +535,115 @@ class TestMakeSourceHimalayas:
         config = {"job_source": "himalayas"}
         source = make_source(config)
         assert isinstance(source, JobSource)
+
+
+# ---------------------------------------------------------------------------
+# Issue #175: empty/missing redirect_url — listing must be skipped
+# ---------------------------------------------------------------------------
+
+class TestHimalayasMissingRedirectUrl:
+    """fetch_page() must skip listings with no usable URL instead of yielding them."""
+
+    def _client(self) -> HimalayasClient:
+        return HimalayasClient(config=_BASE_CONFIG)
+
+    def test_normalise_uses_application_url_when_present(self):
+        """normalise() uses applicationUrl when it is non-empty."""
+        client = self._client()
+        result = client.normalise(_RAW_JOB)
+        assert result["redirect_url"] == "https://himalayas.app/jobs/abc123/apply"
+
+    def test_normalise_falls_back_to_slug_url_when_application_url_missing(self):
+        """normalise() constructs a URL from slug when applicationUrl is absent."""
+        client = self._client()
+        raw = {**_RAW_JOB, "slug": "senior-python-engineer-remote-co"}
+        raw.pop("applicationUrl", None)
+        result = client.normalise(raw)
+        assert result["redirect_url"] == "https://himalayas.app/jobs/senior-python-engineer-remote-co"
+
+    def test_normalise_falls_back_to_slug_url_when_application_url_empty(self):
+        """normalise() constructs a URL from slug when applicationUrl is an empty string."""
+        client = self._client()
+        raw = {**_RAW_JOB, "applicationUrl": "", "slug": "senior-python-engineer-remote-co"}
+        result = client.normalise(raw)
+        assert result["redirect_url"] == "https://himalayas.app/jobs/senior-python-engineer-remote-co"
+
+    def test_normalise_falls_back_to_slug_url_when_application_url_null(self):
+        """normalise() constructs a URL from slug when applicationUrl is null."""
+        client = self._client()
+        raw = {**_RAW_JOB, "applicationUrl": None, "slug": "senior-python-engineer-remote-co"}
+        result = client.normalise(raw)
+        assert result["redirect_url"] == "https://himalayas.app/jobs/senior-python-engineer-remote-co"
+
+    def test_normalise_redirect_url_empty_when_no_application_url_and_no_slug(self):
+        """normalise() yields empty redirect_url when both applicationUrl and slug are absent."""
+        client = self._client()
+        raw = {k: v for k, v in _RAW_JOB.items() if k != "applicationUrl"}
+        result = client.normalise(raw)
+        assert result["redirect_url"] == ""
+
+    def test_fetch_page_skips_listing_with_empty_redirect_url(self):
+        """fetch_page() does not yield a listing whose redirect_url is empty."""
+        client = self._client()
+        raw_no_url = {k: v for k, v in _RAW_JOB.items() if k != "applicationUrl"}
+        mock_resp = _mock_response(200, {"jobs": [raw_no_url], "total": 1})
+
+        with patch("job_sources.himalayas.requests.get", return_value=mock_resp):
+            results = client.fetch_page(1)
+
+        assert results == []
+
+    def test_fetch_page_skips_listing_with_null_redirect_url(self):
+        """fetch_page() does not yield a listing whose applicationUrl is null."""
+        client = self._client()
+        raw_null_url = {**_RAW_JOB, "applicationUrl": None}
+        mock_resp = _mock_response(200, {"jobs": [raw_null_url], "total": 1})
+
+        with patch("job_sources.himalayas.requests.get", return_value=mock_resp):
+            results = client.fetch_page(1)
+
+        assert results == []
+
+    def test_fetch_page_keeps_valid_listings_alongside_skipped_ones(self):
+        """fetch_page() yields only the listings that have a usable URL."""
+        client = self._client()
+        raw_no_url = {k: v for k, v in _RAW_JOB.items() if k != "applicationUrl"}
+        raw_no_url["id"] = "no-url-id"
+        valid_raw = {**_RAW_JOB, "id": "valid-id"}
+        mock_resp = _mock_response(200, {"jobs": [raw_no_url, valid_raw], "total": 2})
+
+        with patch("job_sources.himalayas.requests.get", return_value=mock_resp):
+            results = client.fetch_page(1)
+
+        assert len(results) == 1
+        assert results[0]["source_id"] == "valid-id"
+
+    def test_fetch_page_uses_slug_fallback_url_and_does_not_skip(self):
+        """A listing with no applicationUrl but a slug is kept (URL built from slug)."""
+        client = self._client()
+        raw_with_slug = {
+            **_RAW_JOB,
+            "applicationUrl": "",
+            "slug": "senior-python-engineer-remote-co",
+        }
+        mock_resp = _mock_response(200, {"jobs": [raw_with_slug], "total": 1})
+
+        with patch("job_sources.himalayas.requests.get", return_value=mock_resp):
+            results = client.fetch_page(1)
+
+        assert len(results) == 1
+        assert results[0]["redirect_url"] == "https://himalayas.app/jobs/senior-python-engineer-remote-co"
+
+    def test_fetch_page_skipped_listing_emits_warning(self, caplog):
+        """fetch_page() logs a warning when it skips a listing with no URL."""
+        import logging
+
+        client = self._client()
+        raw_no_url = {**_RAW_JOB, "applicationUrl": None, "title": "Skipped Job"}
+        mock_resp = _mock_response(200, {"jobs": [raw_no_url], "total": 1})
+
+        with patch("job_sources.himalayas.requests.get", return_value=mock_resp):
+            with caplog.at_level(logging.WARNING, logger="ingest.himalayas"):
+                client.fetch_page(1)
+
+        assert any("Skipped Job" in record.message for record in caplog.records)

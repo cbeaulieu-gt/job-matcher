@@ -60,9 +60,9 @@ class CredentialError(Exception):
 # ===========================================================================
 
 def migrate_from_legacy(
-    providers_path: str = "providers.json",
-    keys_path: str = "keys.json",
-    config_path: str = "config.json",
+    providers_path: str = "config/providers.json",
+    keys_path: str = "config/keys.json",
+    config_path: str = "config/config.json",
 ) -> Optional[dict]:
     """Attempt to build a ``providers.json``-shaped dict from legacy credential files.
 
@@ -193,9 +193,9 @@ def migrate_from_legacy(
 # ===========================================================================
 
 def load_providers(
-    providers_path: str = "providers.json",
-    keys_path: str = "keys.json",
-    config_path: str = "config.json",
+    providers_path: str = "config/providers.json",
+    keys_path: str = "config/keys.json",
+    config_path: str = "config/config.json",
 ) -> dict:
     """Load the unified credential store and return it as a dict.
 
@@ -305,7 +305,7 @@ def load_providers(
 
 def save_providers(
     updates: dict,
-    providers_path: str = "providers.json",
+    providers_path: str = "config/providers.json",
 ) -> None:
     """Deep-merge *updates* into ``providers.json`` and write atomically.
 

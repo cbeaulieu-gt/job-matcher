@@ -43,21 +43,21 @@ uv pip install -r requirements.txt
 
 ```bash
 # bash / macOS / Linux
-cp config.example.json config.json
-cp keys.example.json keys.json
-cp profile.example.json profile.json
+cp config/config.example.json config/config.json
+cp config/keys.example.json config/keys.json
+cp config/profile.example.json config/profile.json
 
 # PowerShell
-Copy-Item config.example.json config.json
-Copy-Item keys.example.json keys.json
-Copy-Item profile.example.json profile.json
+Copy-Item config\config.example.json config\config.json
+Copy-Item config\keys.example.json config\keys.json
+Copy-Item config\profile.example.json config\profile.json
 ```
 
-`keys.json` holds LLM provider API keys and model selection. You can fill it in directly or configure it through the `/settings` UI after starting the web server.
+`config/keys.json` holds LLM provider API keys and model selection. You can fill it in directly or configure it through the `/settings` UI after starting the web server.
 
-**5. Fill in `config.json`**
+**5. Fill in `config/config.json`**
 
-Open `config.json` and set the following. Both Adzuna keys are required — the script will exit immediately if either is missing or empty. LLM provider keys (Anthropic etc.) are configured separately via `keys.json` and the `/settings` UI.
+Open `config/config.json` and set the following. Both Adzuna keys are required — the script will exit immediately if either is missing or empty. LLM provider keys (Anthropic etc.) are configured separately via `config/keys.json` and the `/settings` UI.
 
 | Key | Required | Notes |
 |---|---|---|
@@ -75,7 +75,7 @@ Open `config.json` and set the following. Both Adzuna keys are required — the 
 | `prefilter.require_contract_time` | No | e.g. `"full_time"`. Set to `null` to skip this check. |
 | `prefilter.require_contract_type` | No | e.g. `"permanent"`. Set to `null` to skip this check. |
 
-**6. Edit `profile.json` to match your skills**
+**6. Edit `config/profile.json` to match your skills**
 
 See [Customising your profile](#customising-your-profile) below.
 
@@ -97,7 +97,7 @@ The pipeline runs in five stages:
 
 ### Re-scoring existing listings
 
-To re-evaluate all previously scored listings against an updated `profile.json` without fetching new listings:
+To re-evaluate all previously scored listings against an updated `config/profile.json` without fetching new listings:
 
 ```bash
 python ingest.py --rescore
@@ -107,7 +107,7 @@ Scores, matched/missing skills, concerns, and verdicts are overwritten in place.
 
 ### Overriding config and profile paths
 
-By default, `ingest.py` reads `config.json` and `profile.json` from the current directory. You can override either with:
+By default, `ingest.py` reads `config/config.json` and `config/profile.json`. You can override either with:
 
 ```bash
 python ingest.py --config path/to/other_config.json
@@ -192,7 +192,7 @@ Title patterns are case-insensitive substring matches, not regex.
 
 ## Customising your profile
 
-`profile.json` is injected verbatim into the Claude Haiku scoring prompt. Edit it to reflect your actual experience — the more accurate it is, the more useful the scores will be.
+`config/profile.json` is injected verbatim into the Claude Haiku scoring prompt. Edit it to reflect your actual experience — the more accurate it is, the more useful the scores will be.
 
 | Field | Format | Purpose |
 |---|---|---|
@@ -202,7 +202,7 @@ Title patterns are case-insensitive substring matches, not regex.
 | `preferred_industries` | Array of strings | Optional. Haiku uses this to note industry fit. |
 | `location_preference` | String | e.g. `"remote or Miami, FL"`. Haiku uses this to flag location concerns. |
 
-Changes to `profile.json` take effect on the next ingestion run. Previously scored listings are not rescored automatically.
+Changes to `config/profile.json` take effect on the next ingestion run. Previously scored listings are not rescored automatically.
 
 ---
 
@@ -223,18 +223,18 @@ What it does:
 - Prompts for the data directory path and daily ingest time (infrastructure only — no credential prompts)
 - Sets system environment variables (`DB_PATH`, `FLASK_DEBUG`)
 - Creates the data directory and a `logs/` subfolder
-- Copies `keys.example.json` → `keys.json` and restricts its ACL to the current user
-- Copies `config.example.json` → `config.json` (if absent) — edit it to add Adzuna credentials
+- Copies `config/keys.example.json` → `config/keys.json` and restricts its ACL to the current user
+- Copies `config/config.example.json` → `config/config.json` (if absent) — edit it to add Adzuna credentials
 - Registers the `JobMatcher` Windows service (waitress via NSSM) set to auto-start
 - Registers the `JobMatcherIngest` daily Task Scheduler task
 - Opens Windows Firewall inbound TCP port 5000 so the UI is reachable from the network
 
-After the script completes, navigate to `http://localhost:5000/settings` to enter your LLM provider API keys, then edit `config.json` in the project root to add your Adzuna App ID and App Key.
+After the script completes, navigate to `http://localhost:5000/settings` to enter your LLM provider API keys, then edit `config/config.json` to add your Adzuna App ID and App Key.
 
 ### Prerequisites
 
 - Python venv already set up and `uv pip install -r requirements.txt` run
-- `profile.json` present in the project root (`config.json` is created from the example by the script if absent)
+- `config/profile.json` present in the project (`config/config.json` is created from the example by the script if absent)
 - [NSSM](https://nssm.cc/download) downloaded and either on `PATH` or referenced by full path
 
 ### Environment variables (reference)
@@ -249,7 +249,7 @@ Set Adzuna credentials and the database path as machine-level environment variab
 
 Restart your terminal after setting machine-level variables for them to take effect.
 
-LLM provider API keys are managed separately through `keys.json` and the `/settings` UI — do not set them as environment variables.
+LLM provider API keys are managed separately through `config/keys.json` and the `/settings` UI — do not set them as environment variables.
 
 ### Web service — NSSM (reference)
 
@@ -353,7 +353,7 @@ The self-hosted runner must be registered on the server before automated deploym
 
 ### Secrets and config
 
-`config.json`, `keys.json`, and `profile.json` are gitignored and are never touched by the workflow. API keys live only in `keys.json` on the server — the deployment workflow does not use or require any GitHub Actions secrets for application credentials.
+`config/config.json`, `config/keys.json`, and `config/profile.json` are gitignored and are never touched by the workflow. API keys live only in `config/keys.json` on the server — the deployment workflow does not use or require any GitHub Actions secrets for application credentials.
 
 ### Required secrets
 

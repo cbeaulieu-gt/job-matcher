@@ -25,9 +25,9 @@ from job_sources import SOURCES
 app = Flask(__name__)
 
 DB_PATH: str = os.environ.get("DB_PATH", "jobs.db")
-_KEYS_PATH: str = os.path.join(os.path.dirname(__file__), "keys.json")
-_CONFIG_PATH: str = os.path.join(os.path.dirname(__file__), "config.json")
-_PROVIDERS_PATH: str = os.path.join(os.path.dirname(__file__), "providers.json")
+_KEYS_PATH: str = os.path.join(os.path.dirname(__file__), "config", "keys.json")
+_CONFIG_PATH: str = os.path.join(os.path.dirname(__file__), "config", "config.json")
+_PROVIDERS_PATH: str = os.path.join(os.path.dirname(__file__), "config", "providers.json")
 
 # Default structure mirrors keys.example.json — used when keys.json is absent.
 _KEYS_DEFAULTS: dict = {
@@ -44,8 +44,8 @@ _KEYS_DEFAULTS: dict = {
 # Config
 # ---------------------------------------------------------------------------
 
-def load_config(path: str = "config.json") -> dict:
-    """Load config.json if it exists; return safe defaults otherwise.
+def load_config(path: str = "config/config.json") -> dict:
+    """Load config/config.json if it exists; return safe defaults otherwise.
 
     This allows the server to start and display the UI even before the user
     has created their config file.

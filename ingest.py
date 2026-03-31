@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import json
 import logging
-from logging.handlers import RotatingFileHandler
 import math
 import os
 import re
@@ -51,28 +50,41 @@ logger = logging.getLogger("ingest")
 
 
 def _configure_file_logging() -> None:
-    """Attach a RotatingFileHandler to the root logger.
+    """Attach a FileHandler writing to a timestamped per-run log file.
+
+    Files are named  ingest_YYYYMMDD_HHMMSS.log  and stored in the same
+    logs/ directory as before.  Old files are pruned to keep at most
+    MAX_LOG_FILES runs (default 30).
 
     Called only from the __main__ entry point so that importing this module
     during tests does not create directories or open file handles.
-
-    The log directory is derived from DB_PATH so it co-locates with the
-    database: C:\\ProgramData\\JobMatcher\\data\\logs\\ingest.log in production,
-    or ./logs/ingest.log when DB_PATH is unset (local dev).
     """
-    db_abs   = os.path.abspath(os.environ.get("DB_PATH", "jobs.db"))
-    log_dir  = os.path.join(os.path.dirname(db_abs), "logs")
-    log_file = os.path.join(log_dir, "ingest.log")
+    MAX_LOG_FILES = 30
+
+    db_abs  = os.path.abspath(os.environ.get("DB_PATH", "jobs.db"))
+    log_dir = os.path.join(os.path.dirname(db_abs), "logs")
     os.makedirs(log_dir, exist_ok=True)
 
-    handler = RotatingFileHandler(
-        log_file, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
-    )
+    ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = os.path.join(log_dir, f"ingest_{ts}.log")
+
+    handler = logging.FileHandler(log_file, encoding="utf-8")
     handler.setFormatter(
         logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
     )
     logging.getLogger().addHandler(handler)
     logger.info("Logging to file: %s", log_file)
+
+    # Prune oldest files beyond the retention limit.
+    existing = sorted(
+        (f for f in os.scandir(log_dir) if f.name.startswith("ingest_") and f.name.endswith(".log")),
+        key=lambda e: e.name,
+    )
+    for old in existing[:-MAX_LOG_FILES]:
+        try:
+            os.remove(old.path)
+        except OSError:
+            pass
 
 # ---------------------------------------------------------------------------
 # Config and profile loading
@@ -493,17 +505,16 @@ def score_listing_with_fallback(
 
         except RuntimeError as exc:
             if _is_auth_error(exc):
-                logger.warning(
-                    "Auth error from provider %s — removing from chain for this run: %s",
-                    name,
-                    exc,
-                )
                 dead_providers.add(name)
+                remaining = [_provider_name(p) for p in chain if _provider_name(p) not in dead_providers]
+                logger.warning(
+                    "Provider %s disabled for this run (auth error: %s). Remaining: %s",
+                    name, exc, remaining or ["none"],
+                )
             else:
                 logger.warning(
                     "Transient error from provider %s — trying next provider: %s",
-                    name,
-                    exc,
+                    name, exc,
                 )
 
     logger.warning(
@@ -572,6 +583,35 @@ def run(
     chain = build_provider_chain(providers)
     dead_providers: set[str] = set()
 
+    # --- Run start banner ---
+    logger.info("=" * 60)
+    logger.info("INGEST RUN STARTED")
+    logger.info(
+        "  Search: '%s' | max_pages: %d | max_days_old: %d",
+        config["search"].get("what", ""),
+        config["search"].get("max_pages", 0),
+        config["search"].get("max_days_old", 0),
+    )
+    pf = config.get("prefilter", {})
+    if pf:
+        logger.info(
+            "  Prefilter: title_include=%s | salary_floor=%s",
+            pf.get("title_include", []),
+            pf.get("salary_min") or config.get("search", {}).get("salary_min"),
+        )
+    logger.info(
+        "  Sources: %s",
+        ", ".join(c.SOURCE for c in sources),
+    )
+    if chain:
+        logger.info(
+            "  LLM providers: %s",
+            " | ".join(f"{_provider_name(p)}/{_provider_model(p)}" for p in chain),
+        )
+    else:
+        logger.warning("  No LLM providers configured — scoring will fail for all listings")
+    logger.info("=" * 60)
+
     # Counters.
     fetched = 0
     prefiltered = 0
@@ -584,6 +624,7 @@ def run(
     total_tokens_output = 0
     # Per-provider cost tracking: {provider_name: {input, output, cost}}
     provider_costs: dict[str, dict] = {}
+    source_fetch_counts: dict[str, int] = {}
 
     # Cutoff used for --hours filtering.
     hours_cutoff: datetime | None = None
@@ -596,6 +637,8 @@ def run(
         for page in client.pages():
             for listing in page:
                 fetched += 1
+                src_name = listing.get("source", client.SOURCE)
+                source_fetch_counts[src_name] = source_fetch_counts.get(src_name, 0) + 1
                 title = listing.get("title", "(no title)")
 
                 # --- Hours filter (created_at) ---
@@ -609,7 +652,8 @@ def run(
                             if created_dt < hours_cutoff:
                                 prefiltered += 1
                                 logger.info(
-                                    "FILTERED  %s — created_at older than %d hours", title, hours
+                                    "FILTERED  [%s] %s — created_at older than %d hours",
+                                    listing.get("source", "?"), title, hours,
                                 )
                                 continue
                         except (ValueError, TypeError):
@@ -619,7 +663,7 @@ def run(
                 reason = prefilter(listing, config)
                 if reason is not None:
                     prefiltered += 1
-                    logger.info("FILTERED  %s — %s", title, reason)
+                    logger.info("FILTERED  [%s] %s — %s", listing.get("source", "?"), title, reason)
                     continue
 
                 # --- Dedup ---
@@ -635,7 +679,7 @@ def run(
                             _is_dupe = db.listing_exists_by_url(_dedup_conn, redirect_url)
                 if _is_dupe:
                     deduped += 1
-                    logger.info("DUPE      %s", title)
+                    logger.info("DUPE      [%s] %s", listing.get("source", "?"), title)
                     continue
 
                 # --- Scrape ---
@@ -647,7 +691,7 @@ def run(
                     scraped_ok += 1
                 else:
                     scraped_fallback += 1
-                    logger.warning("SCRAPE FALLBACK  %s", title)
+                    logger.info("SCRAPE FALLBACK  [%s] %s", listing.get("source", "?"), title)
 
                 listing["description"] = description
 
@@ -661,7 +705,7 @@ def run(
 
                 if score_result is None:
                     score_failed += 1
-                    logger.warning("SCORE FAILED  %s", title)
+                    logger.warning("SCORE FAILED  [%s] %s", listing.get("source", "?"), title)
                     listing.update(
                         {
                             "score": None,
@@ -675,9 +719,16 @@ def run(
                 else:
                     scored += 1
                     logger.info(
-                        "SCORED %d/10  %s",
+                        "SCORED %d/10  [%s] %s",
                         score_result.get("score", 0),
+                        listing.get("source", "?"),
                         title,
+                    )
+                    logger.debug(
+                        "  verdict: %s | matched: %s | missing: %s",
+                        score_result.get("verdict", ""),
+                        ", ".join(score_result.get("matched_skills") or []) or "none",
+                        ", ".join(score_result.get("missing_skills") or []) or "none",
                     )
                     tok_in = score_result.get("tokens_input") or 0
                     tok_out = score_result.get("tokens_output") or 0
@@ -726,7 +777,10 @@ def run(
                 try:
                     db.insert_listing(listing, db_path=_DB_PATH)
                 except Exception as exc:  # noqa: BLE001
-                    logger.warning("DB insert failed for %s: %s", title, exc)
+                    logger.warning("DB insert failed  [%s] %s: %s", listing.get("source", "?"), title, exc)
+
+        source_count = source_fetch_counts.get(client.SOURCE, 0)
+        logger.info("Fetched %d listing(s) from %s", source_count, client.SOURCE)
 
     total_tokens = total_tokens_input + total_tokens_output
     run_cost = sum(b["cost"] for b in provider_costs.values())
@@ -742,6 +796,11 @@ def run(
             for name, b in provider_costs.items()
         )
         print(f"  Cost breakdown: {breakdown}")
+    if source_fetch_counts:
+        print("  Sources: " + " | ".join(f"{src}: {cnt}" for src, cnt in source_fetch_counts.items()))
+    logger.info("=" * 60)
+    logger.info("INGEST RUN COMPLETE")
+    logger.info("=" * 60)
 
 
 # ---------------------------------------------------------------------------
@@ -876,9 +935,17 @@ if __name__ == "__main__":
             "Overrides max_days_old in config."
         ),
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable DEBUG level logging (verbose output for troubleshooting).",
+    )
     args = parser.parse_args()
 
-    _configure_file_logging()   # <-- ADD THIS LINE
+    _configure_file_logging()
+
+    if args.debug:
+        logging.getLogger().setLevel(logging.DEBUG)
 
     if args.rescore:
         rescore(config_path=args.config, profile_path=args.profile)

@@ -177,7 +177,22 @@ class HimalayasClient(JobSource):
         if not raw_jobs:
             return []
 
-        return [self.normalise(r) for r in raw_jobs]
+        results: list[dict] = []
+        for raw in raw_jobs:
+            listing = self.normalise(raw)
+            if not listing.get("redirect_url"):
+                title = listing.get("title") or ""
+                source_id = raw.get("id") or ""
+                identifier = (
+                    f"{title} (ID: {source_id})" if title and source_id
+                    else title or source_id or "<unknown>"
+                )
+                logger.warning(
+                    "Himalayas: skipping listing with no redirect_url — %s", identifier
+                )
+                continue
+            results.append(listing)
+        return results
 
     def total_pages(self) -> int:
         """Return the total number of pages for the current search.
@@ -249,6 +264,13 @@ class HimalayasClient(JobSource):
             "contract_type": None,
             "contract_time": _map_job_type(raw.get("jobType")),
             "description": description,
-            "redirect_url": raw.get("applicationUrl", "") or "",
+            "redirect_url": (
+                raw.get("applicationUrl")
+                or (
+                    f"https://himalayas.app/jobs/{raw.get('slug')}"
+                    if raw.get("slug")
+                    else ""
+                )
+            ),
             "created_at": _parse_created_at(raw.get("createdAt")),
         }

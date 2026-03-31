@@ -182,6 +182,25 @@
     .source-toggle input[type="checkbox"]:checked ~ .source-toggle-label::before {
       content: "Enabled";
     }
+
+    /* Disabled toggle (source has required credentials not yet filled) */
+    .source-toggle input[type="checkbox"]:disabled ~ .source-toggle-track {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .source-toggle input[type="checkbox"]:disabled ~ .source-toggle-label {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .source-toggle:has(input:disabled) {
+      cursor: not-allowed;
+    }
+    .toggle-hint {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-left: 0.5rem;
+      font-style: italic;
+    }
   </style>
 </head>
 <body>
@@ -319,7 +338,8 @@
     <form class="settings-form" method="post" action="/settings">
       <input type="hidden" name="tab" value="sources">
 
-      {% for source_key, schema, has_values, is_enabled in source_schemas %}
+      {% for source_key, schema, has_values, is_enabled, credentials_required in source_schemas %}
+        {% set toggle_disabled = credentials_required and not has_values %}
         <div class="provider-row">
           <div class="provider-header">
             <span class="provider-name">{{ schema.display_name }}</span>
@@ -337,12 +357,16 @@
                 type="checkbox"
                 name="{{ source_key }}__enabled"
                 aria-label="Enable {{ schema.display_name }}"
-                {% if is_enabled %}checked{% endif %}>
+                {% if is_enabled and not toggle_disabled %}checked{% endif %}
+                {% if toggle_disabled %}disabled{% endif %}>
               <span class="source-toggle-label"></span>
               <span class="source-toggle-track">
                 <span class="source-toggle-knob"></span>
               </span>
             </label>
+            {% if toggle_disabled %}
+              <span class="toggle-hint">Add credentials to enable</span>
+            {% endif %}
           </div>
 
           {% for field in schema.fields %}

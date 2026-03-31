@@ -1111,7 +1111,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  max-width: 600px;
+  max-width: var(--max-width);
 }
 
 .provider-row {
@@ -1252,7 +1252,7 @@ body {
    Settings page — section wrapper
    ------------------------------------------------------------ */
 .settings-section {
-  max-width: 600px;
+  max-width: var(--max-width);
   margin-bottom: 32px;
 }
 
@@ -1355,7 +1355,7 @@ body {
    ------------------------------------------------------------ */
 .validate-section {
   margin-top: 24px;
-  max-width: 600px;
+  max-width: var(--max-width);
 }
 
 .btn-validate {

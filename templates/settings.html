@@ -128,7 +128,7 @@
       width: 36px;
       height: 20px;
       border-radius: 10px;
-      background: var(--border-mid);
+      background: var(--border-mid, #2a2e3a);
       border: 1px solid var(--border-strong, #525c72);
       transition: background 0.2s, border-color 0.2s;
     }
@@ -147,11 +147,12 @@
 
     /* Checked state — amber track, knob slides right and brightens */
     .source-toggle input[type="checkbox"]:checked + .source-toggle-track {
-      background: var(--text-accent);
-      border-color: var(--text-accent);
+      background: var(--text-accent, #f9e2af);
+      border-color: var(--text-accent, #f9e2af);
     }
     .source-toggle input[type="checkbox"]:checked + .source-toggle-track .source-toggle-knob {
-      transform: translateX(16px);
+      /* Track(36px) - knob(14px) - left-pad(2px) - borders(2px) - right-space(2px) = 16px */
+      transform: translateX(calc(36px - 14px - 6px));
       background: #fff;
     }
 
@@ -310,10 +311,11 @@
             {% else %}
               <span class="key-status configured">&#9679; no credentials required</span>
             {% endif %}
-            <label class="source-toggle" aria-label="Enable {{ schema.display_name }}">
+            <label class="source-toggle">
               <input
                 type="checkbox"
                 name="{{ source_key }}__enabled"
+                aria-label="Enable {{ schema.display_name }}"
                 {% if is_enabled %}checked{% endif %}>
               <span class="source-toggle-track">
                 <span class="source-toggle-knob"></span>

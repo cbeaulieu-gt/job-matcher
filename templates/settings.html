@@ -146,20 +146,41 @@
     }
 
     /* Checked state — amber track, knob slides right and brightens */
-    .source-toggle input[type="checkbox"]:checked + .source-toggle-track {
+    .source-toggle input[type="checkbox"]:checked ~ .source-toggle-track {
       background: var(--text-accent, #f9e2af);
       border-color: var(--text-accent, #f9e2af);
     }
-    .source-toggle input[type="checkbox"]:checked + .source-toggle-track .source-toggle-knob {
+    .source-toggle input[type="checkbox"]:checked ~ .source-toggle-track .source-toggle-knob {
       /* Track(36px) - knob(14px) - left-pad(2px) - borders(2px) - right-space(2px) = 16px */
       transform: translateX(calc(36px - 14px - 6px));
       background: #fff;
     }
 
     /* Focus ring for keyboard accessibility */
-    .source-toggle input[type="checkbox"]:focus-visible + .source-toggle-track {
+    .source-toggle input[type="checkbox"]:focus-visible ~ .source-toggle-track {
       outline: 2px solid var(--text-accent);
       outline-offset: 2px;
+    }
+
+    /* State label — "Disabled" by default, "Enabled" when checked */
+    .source-toggle-label {
+      font-family: var(--font-mono);
+      font-size: 0.70rem;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-right: 8px;
+      user-select: none;
+      min-width: 4.5rem;
+      text-align: right;
+    }
+    .source-toggle-label::before {
+      content: "Disabled";
+    }
+    .source-toggle input[type="checkbox"]:checked ~ .source-toggle-label {
+      color: var(--text-accent);
+    }
+    .source-toggle input[type="checkbox"]:checked ~ .source-toggle-label::before {
+      content: "Enabled";
     }
   </style>
 </head>
@@ -317,6 +338,7 @@
                 name="{{ source_key }}__enabled"
                 aria-label="Enable {{ schema.display_name }}"
                 {% if is_enabled %}checked{% endif %}>
+              <span class="source-toggle-label"></span>
               <span class="source-toggle-track">
                 <span class="source-toggle-knob"></span>
               </span>

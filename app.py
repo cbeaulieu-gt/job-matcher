@@ -89,11 +89,12 @@ def _is_localhost_request() -> bool:
 
 @app.before_request
 def csrf_localhost_guard():
-    """Reject state-mutating requests that do not originate from localhost.
+    """Reject state-mutating requests that do not originate from a private network.
 
-    This tool is designed for local use only.  Any POST, PUT, PATCH, or DELETE
-    request whose ``Origin`` or ``Referer`` header points to a non-localhost
-    host is rejected with 403 to prevent cross-site request forgery.
+    This tool is designed for local/LAN use only.  Any POST, PUT, PATCH, or
+    DELETE request whose ``Origin`` or ``Referer`` header resolves to a
+    publicly-routable host is rejected with 403 to prevent cross-site request
+    forgery.  Private addresses (localhost, RFC 1918, link-local) are allowed.
 
     Requests with no Origin/Referer (e.g. curl, test clients) are allowed
     through so that automated scripts and the pytest test suite are unaffected.

@@ -230,6 +230,24 @@ class TestMalformedBody:
         )
         assert resp.status_code == 400
 
+    def test_non_boolean_enabled_returns_400(self, client, tmp_providers_path):
+        """String 'false' should be rejected, not coerced to bool."""
+        resp = client.post(
+            "/api/job-sources/adzuna/toggle",
+            data=json.dumps({"enabled": "false"}),
+            content_type="application/json",
+        )
+        assert resp.status_code == 400
+
+    def test_numeric_enabled_returns_400(self, client, tmp_providers_path):
+        """Numeric 0/1 should be rejected, not coerced to bool."""
+        resp = client.post(
+            "/api/job-sources/adzuna/toggle",
+            data=json.dumps({"enabled": 0}),
+            content_type="application/json",
+        )
+        assert resp.status_code == 400
+
 
 # ---------------------------------------------------------------------------
 # 500 — write failure

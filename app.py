@@ -408,7 +408,7 @@ def feed():
     )
     job_types = db.get_job_types(db_path=DB_PATH)
     last_fetch_time = db.get_last_fetch_time(db_path=DB_PATH)
-    new_count = sum(1 for l in listings if l["opened_at"] is None)
+    new_count = sum(1 for listing in listings if listing["opened_at"] is None)
     return render_template(
         "index.html",
         listings=listings,

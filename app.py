@@ -25,6 +25,53 @@ from job_sources import SOURCES
 app = Flask(__name__)
 
 DB_PATH: str = os.environ.get("DB_PATH", "jobs.db")
+
+
+# ---------------------------------------------------------------------------
+# CSRF guard — localhost-only Origin/Referer check
+# ---------------------------------------------------------------------------
+
+_LOCALHOST_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]"}
+
+
+def _is_localhost_request() -> bool:
+    """Return True if the request originates from localhost.
+
+    Checks the ``Origin`` header first (set by most browsers on same-origin
+    XHR/fetch), then falls back to ``Referer``.  If neither header is present
+    the request is allowed through — curl and other CLI tools do not send
+    Origin/Referer, so blocking headerless requests would break admin scripts
+    and testing.
+    """
+    for header in ("Origin", "Referer"):
+        value = request.headers.get(header, "").strip()
+        if not value:
+            continue
+        # Parse just the host portion — e.g. "http://localhost:5000/path" → "localhost"
+        # The IPv6 alternative captures "[::1]" (brackets included) from "http://[::1]:5000".
+        match = re.match(r"https?://(\[[^\]]+\]|[^/:]+)", value)
+        if match:
+            host = match.group(1).lower()
+            if host in _LOCALHOST_HOSTS:
+                return True
+        return False  # Header present but host is not localhost
+    return True  # No Origin/Referer header — allow (CLI tools, tests)
+
+
+@app.before_request
+def csrf_localhost_guard():
+    """Reject state-mutating requests that do not originate from localhost.
+
+    This tool is designed for local use only.  Any POST, PUT, PATCH, or DELETE
+    request whose ``Origin`` or ``Referer`` header points to a non-localhost
+    host is rejected with 403 to prevent cross-site request forgery.
+
+    Requests with no Origin/Referer (e.g. curl, test clients) are allowed
+    through so that automated scripts and the pytest test suite are unaffected.
+    """
+    if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+        if not _is_localhost_request():
+            return jsonify({"error": "Forbidden: requests must originate from localhost"}), 403
 _CONFIG_DIR: str = os.path.join(os.path.dirname(__file__), "config")
 _KEYS_PATH: str = os.path.join(_CONFIG_DIR, "keys.json")
 _CONFIG_PATH: str = os.path.join(_CONFIG_DIR, "config.json")
@@ -71,6 +118,56 @@ def load_config(path: str = "config/config.json") -> dict:
 
 CONFIG = load_config()
 db.init_db(db_path=DB_PATH)
+
+
+# ---------------------------------------------------------------------------
+# Config validation (mirrors ingest.load_config requirements)
+# ---------------------------------------------------------------------------
+
+# These mirror ingest._REQUIRED_SEARCH and ingest._REQUIRED_SCORING so that
+# the profile editor rejects a save that would crash the next ingest run.
+_PROFILE_REQUIRED_SEARCH = ("country", "what", "results_per_page", "max_pages")
+_PROFILE_REQUIRED_SCORING = ("threshold",)
+
+
+def _validate_config_dict(data: dict) -> list[str]:
+    """Return a list of missing required key paths in *data*.
+
+    Validates the same structural requirements that ``ingest.load_config()``
+    checks before running the pipeline:
+
+    * ``scoring.threshold`` must be present (no env-var fallback exists).
+    * If a ``search`` block is present, all four Adzuna search keys must be
+      there too — submitting a partial ``search`` block would break the next
+      Adzuna ingest run.
+
+    Top-level Adzuna credential keys (``adzuna_app_id``, ``adzuna_app_key``)
+    are intentionally excluded from this check because they can be satisfied
+    via ``ADZUNA_APP_ID``/``ADZUNA_APP_KEY`` environment variables and are
+    optional when using non-Adzuna sources.
+
+    Returns an empty list when the config is valid.
+    """
+    missing: list[str] = []
+
+    scoring = data.get("scoring")
+    if not isinstance(scoring, dict):
+        missing.append("scoring (must be an object)")
+    else:
+        for key in _PROFILE_REQUIRED_SCORING:
+            if key not in scoring:
+                missing.append(f"scoring.{key}")
+        if "threshold" in scoring and not isinstance(scoring["threshold"], (int, float)):
+            missing.append("scoring.threshold (must be a number)")
+
+    # Only validate search sub-keys when the caller has included a search block.
+    search = data.get("search")
+    if isinstance(search, dict):
+        for key in _PROFILE_REQUIRED_SEARCH:
+            if key not in search:
+                missing.append(f"search.{key}")
+
+    return missing
 
 
 # ---------------------------------------------------------------------------
@@ -753,12 +850,12 @@ def profile():
           ``*_app_key``, ``*_app_id``), pretty-prints the result as JSON, and
           renders it in a ``<textarea>`` for editing.
 
-    POST: Validates the submitted JSON. If parsing fails, returns a 400 with an
-          inline error and leaves config.json untouched. If the JSON is valid,
-          overwrites config.json and shows a success notice. Masked values
-          (``"***"``) are never written back to disk — if the submitted JSON
-          still contains ``"***"`` for a sensitive field, the original value
-          from the current config is preserved.
+    POST: Validates the submitted JSON. If parsing fails or required keys are
+          missing, returns a 400/422 with an inline error and leaves config.json
+          untouched. If the JSON is valid, overwrites config.json and shows a
+          success notice. Masked values (``"***"``) are never written back to
+          disk — if the submitted JSON still contains ``"***"`` for a sensitive
+          field, the original value from the current config is preserved.
     """
     saved = False
     error = None
@@ -772,6 +869,14 @@ def profile():
             error = f"Invalid JSON: {exc}"
             status_code = 400
             submitted = None
+
+        if submitted is not None:
+            # Validate required keys before touching disk.
+            missing_keys = _validate_config_dict(submitted)
+            if missing_keys:
+                error = "Missing required config key(s): " + ", ".join(missing_keys)
+                status_code = 422
+                submitted = None
 
         if submitted is not None:
             # Merge: if a sensitive field still holds the masked sentinel,

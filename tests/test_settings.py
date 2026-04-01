@@ -442,12 +442,21 @@ class TestSettingsConfigPost:
 
     def test_masked_sentinel_not_written_to_disk(self, client, tmp_config_path):
         """If a sensitive field still contains '***', the original value is preserved."""
-        original = {"adzuna_app_id": "keep-this-id", "adzuna_app_key": "keep-this-key"}
+        original = {
+            "adzuna_app_id": "keep-this-id",
+            "adzuna_app_key": "keep-this-key",
+            "scoring": {"threshold": 7.0},
+        }
         with open(tmp_config_path, "w") as f:
             json.dump(original, f)
 
         # Submit with the masked sentinel values (as the browser would receive them).
-        masked_submission = json.dumps({"adzuna_app_id": "***", "adzuna_app_key": "***"})
+        # scoring.threshold must be included so the new validation gate allows the save.
+        masked_submission = json.dumps({
+            "adzuna_app_id": "***",
+            "adzuna_app_key": "***",
+            "scoring": {"threshold": 7.0},
+        })
         resp = client.post("/profile", data={"config_json": masked_submission})
         assert resp.status_code == 200
 

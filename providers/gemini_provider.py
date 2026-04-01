@@ -92,6 +92,11 @@ class GeminiProvider(LLMProvider):
                     "type": "text",
                     "required": True,
                     "default": "gemini-1.5-flash",
+                    "choices": [
+                        "gemini-2.0-flash",
+                        "gemini-1.5-flash",
+                        "gemini-1.5-pro",
+                    ],
                 },
             ],
         }

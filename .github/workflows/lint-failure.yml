@@ -27,7 +27,7 @@ jobs:
 
       - name: Run lint-failure action
         if: steps.pr.outputs.number != ''
-        uses: cbeaulieu-gt/github-actions/lint-failure@2d3c49a595ad5bf4795c704951348bb6c9fbc821
+        uses: cbeaulieu-gt/github-actions/lint-failure@v1.4.4
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           gh_pat: ${{ secrets.GH_PAT }}

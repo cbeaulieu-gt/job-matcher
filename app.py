@@ -936,120 +936,80 @@ def settings_config_redirect():
 # Key validation
 # ---------------------------------------------------------------------------
 
-def _validate_anthropic(api_key: str, model: str) -> str:
-    """Send a 1-token test call to Anthropic and return a state string.
+_VALIDATE_TIMEOUT_SECONDS = 5
+"""Per-provider timeout for key validation API calls."""
 
-    Returns one of: 'valid', 'invalid_key', 'unknown_model', 'unreachable'.
-    The api_key is never logged or included in any return value.
+
+def _validate_with_timeout(validator, api_key: str, model: str) -> str:
+    """Run *validator(api_key, model)* in a daemon thread with a fixed timeout.
+
+    Returns the validator's state string, or ``'unreachable'`` if the call
+    does not complete within ``_VALIDATE_TIMEOUT_SECONDS``.
+
+    Args:
+        validator: Callable ``(api_key, model) -> str``.
+        api_key:   Provider API key string.
+        model:     Provider model name string.
+
+    Returns:
+        One of: ``'valid'``, ``'invalid_key'``, ``'unknown_model'``,
+        ``'unreachable'``.
     """
-    import anthropic as _anthropic
-    try:
-        client = _anthropic.Anthropic(api_key=api_key)
-        client.messages.create(
-            model=model,
-            max_tokens=1,
-            messages=[{"role": "user", "content": "hi"}],
-        )
-        return "valid"
-    except _anthropic.AuthenticationError:
-        return "invalid_key"
-    except _anthropic.PermissionDeniedError:
-        return "invalid_key"
-    except _anthropic.NotFoundError:
-        return "unknown_model"
-    except Exception:
+    result_holder: list[str] = []
+
+    def _target() -> None:
+        try:
+            result_holder.append(validator(api_key, model))
+        except Exception:
+            result_holder.append("unreachable")
+
+    t = threading.Thread(target=_target, daemon=True)
+    t.start()
+    t.join(timeout=_VALIDATE_TIMEOUT_SECONDS)
+    if t.is_alive():
+        # Thread is still blocked (network hang) — treat as unreachable.
         return "unreachable"
-
-
-def _validate_openai(api_key: str, model: str) -> str:
-    """Send a 1-token test call to OpenAI and return a state string.
-
-    Returns one of: 'valid', 'invalid_key', 'unknown_model', 'unreachable'.
-    The api_key is never logged or included in any return value.
-    """
-    import openai as _openai
-    try:
-        client = _openai.OpenAI(api_key=api_key)
-        client.chat.completions.create(
-            model=model,
-            max_tokens=1,
-            messages=[{"role": "user", "content": "hi"}],
-        )
-        return "valid"
-    except _openai.AuthenticationError:
-        return "invalid_key"
-    except _openai.PermissionDeniedError:
-        return "invalid_key"
-    except _openai.NotFoundError:
-        return "unknown_model"
-    except Exception:
-        return "unreachable"
-
-
-def _validate_gemini(api_key: str, model: str) -> str:
-    """Send a 1-token test call to Google Gemini and return a state string.
-
-    Returns one of: 'valid', 'invalid_key', 'unknown_model', 'unreachable'.
-    The api_key is never logged or included in any return value.
-
-    Google's SDK raises varied exception types depending on failure mode; we
-    inspect the lowercased message string to distinguish auth vs model errors.
-    """
-    from google import genai as _genai
-    try:
-        _client = _genai.Client(api_key=api_key)
-        _client.models.generate_content(
-            model=model,
-            contents="hi",
-        )
-        return "valid"
-    except Exception as exc:
-        exc_str = str(exc).lower()
-        # Google signals auth failures with specific keywords in the message.
-        if any(kw in exc_str for kw in ("api_key_invalid", "invalid api key", "unauthenticated", "permission denied")):
-            return "invalid_key"
-        # Model-not-found errors include "not found" or "404" in the message.
-        if "not found" in exc_str or "404" in exc_str:
-            return "unknown_model"
-        return "unreachable"
+    return result_holder[0] if result_holder else "unreachable"
 
 
 @app.route("/api/validate-keys", methods=["POST"])
 def validate_keys():
     """Validate each configured LLM provider by making a minimal 1-token test call.
 
+    Loops ``_PROVIDER_CLASS_MAP`` so new providers are included automatically
+    without any template or route changes.
+
     Returns an HTML partial (not JSON) intended for HTMX to swap into the page.
     Each provider gets one of five states: valid, invalid_key, unknown_model,
-    unreachable, not_configured.
+    unreachable, not_configured.  Each provider call is bounded to
+    ``_VALIDATE_TIMEOUT_SECONDS`` seconds; a timeout maps to ``unreachable``.
 
     No API key values are logged or returned in the response.
     """
     providers_data = _load_providers_safe()
     llm_section: dict = providers_data.get("llm") or {}
-    results = {}
 
-    _validators = {
-        "anthropic": _validate_anthropic,
-        "openai":    _validate_openai,
-        "gemini":    _validate_gemini,
-    }
+    providers_list = []
+    for provider_key, cls in _PROVIDER_CLASS_MAP.items():
+        schema = cls.settings_schema()
+        display_name: str = schema.get("display_name", provider_key.title())
 
-    for provider, validator in _validators.items():
-        cfg = llm_section.get(provider, {})
+        cfg = llm_section.get(provider_key, {})
         api_key = cfg.get("api_key", "").strip()
         model   = cfg.get("model", "").strip()
 
         if not api_key:
-            results[provider] = "not_configured"
-            continue
+            state = "not_configured"
+        else:
+            state = _validate_with_timeout(cls.validate_credentials, api_key, model)
 
-        try:
-            results[provider] = validator(api_key, model)
-        except Exception:
-            # Belt-and-suspenders: a failure in one provider must not block others.
-            results[provider] = "unreachable"
+        providers_list.append({
+            "key":          provider_key,
+            "display_name": display_name,
+            "state":        state,
+        })
 
-    return render_template("_validation_results.html", results=results)
+    return render_template("_validation_results.html", providers=providers_list)
 
 
 @app.route("/api/providers/reorder", methods=["POST"])

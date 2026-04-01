@@ -331,6 +331,10 @@
         </div>
       {% endfor %}
 
+      <div class="save-bar" id="save-bar-llm">
+        <span class="save-bar-label">Unsaved changes</span>
+        <button type="button" class="btn btn-save" onclick="this.closest('form').requestSubmit()">Save</button>
+      </div>
       <button type="submit" class="btn btn-save">Save</button>
     </form>
 
@@ -429,6 +433,10 @@
         </div>
       {% endfor %}
 
+      <div class="save-bar" id="save-bar-sources">
+        <span class="save-bar-label">Unsaved changes</span>
+        <button type="button" class="btn btn-save" onclick="this.closest('form').requestSubmit()">Save</button>
+      </div>
       <button type="submit" class="btn btn-save">Save</button>
     </form>
   </div>
@@ -464,6 +472,30 @@
   if (tabParam && document.getElementById('pane-' + tabParam)) {
     activateTab(tabParam);
   }
+}());
+
+// Dirty-state tracking for credential forms
+(function () {
+  [
+    { formSelector: '#pane-llm form',     barId: 'save-bar-llm' },
+    { formSelector: '#pane-sources form', barId: 'save-bar-sources' }
+  ].forEach(function (cfg) {
+    var form = document.querySelector(cfg.formSelector);
+    var bar  = document.getElementById(cfg.barId);
+    if (!form || !bar) return;
+
+    form.addEventListener('input', function (e) {
+      var t = e.target;
+      if (t.tagName === 'INPUT' && (t.type === 'text' || t.type === 'password')) {
+        bar.classList.add('save-bar--visible');
+      }
+    });
+
+    // Hide bar on successful form submission
+    form.addEventListener('submit', function () {
+      bar.classList.remove('save-bar--visible');
+    });
+  });
 }());
 </script>
 {# ── SortableJS drag-to-reorder ──────────────────────────────── #}

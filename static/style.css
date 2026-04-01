@@ -1260,6 +1260,34 @@ body {
   margin-top: 4px;
 }
 
+/* Sticky unsaved-changes bar */
+.save-bar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  margin-top: 1rem;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border-mid);
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(4px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.save-bar--visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+.save-bar-label {
+  font-size: 0.8rem;
+  color: var(--score-mid-text);
+  font-family: var(--font-mono);
+}
+
 @keyframes notice-fade-out {
   0%, 75% { opacity: 1; }
   100%    { opacity: 0; pointer-events: none; }

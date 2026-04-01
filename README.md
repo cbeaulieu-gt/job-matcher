@@ -153,6 +153,11 @@ python app.py
 
 Then open `http://localhost:5000` in your browser.
 
+> **Security note:** Job Matcher is a localhost-only tool. All state-mutating
+> requests (POST/PUT/PATCH/DELETE) are rejected with 403 if the `Origin` or
+> `Referer` header does not point to `localhost` or `127.0.0.1`. Do not expose
+> port 5000 to the public internet or an untrusted network.
+
 - **Feed** (`/`) — listings scored at or above `scoring.threshold`, sorted by score descending, with dismissed listings hidden. Filterable by score, job type, remote-only, and title/company search.
 - **Bookmarks** (`/bookmarks`) — listings you have saved for later review
 - **Applied** (`/applied`) — listings you have marked as applied; excluded from the main feed

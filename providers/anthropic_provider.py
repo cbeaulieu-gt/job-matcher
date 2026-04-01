@@ -100,9 +100,9 @@ class AnthropicProvider(LLMProvider):
                     "default": "claude-haiku-4-5-20251001",
                     "choices": [
                         "claude-haiku-4-5-20251001",
-                        "claude-3-5-haiku-20241022",
                         "claude-sonnet-4-5",
-                        "claude-3-5-sonnet-20241022",
+                        "claude-sonnet-4-6",
+                        "claude-opus-4-6",
                     ],
                 },
             ],

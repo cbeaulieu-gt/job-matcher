@@ -1459,3 +1459,9 @@ body {
   background: var(--bg-raised);
   border-color: var(--border-subtle);
 }
+
+.validation-detail {
+  font-family: var(--font-body);
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}

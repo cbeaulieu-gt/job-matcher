@@ -34,12 +34,15 @@ DB_PATH: str = os.environ.get("DB_PATH", "jobs.db")
 
 
 def _is_trusted_host(host: str) -> bool:
-    """Return True if *host* is localhost or any RFC 1918 / loopback address.
+    """Return True if *host* is localhost or any private/non-routable address.
+
+    Uses ``ipaddress.is_private`` which covers RFC 1918 (10.x, 172.16–31.x,
+    192.168.x), loopback (127.x.x.x, ::1), link-local (169.254.x.x,
+    fe80::/10), and other non-routable ranges — all stdlib, no new dependency.
 
     ``host`` is the bare hostname or IP string extracted from a URL — brackets
     have already been stripped from IPv6 addresses (e.g. ``::1``, not
-    ``[::1]``).  The ``ipaddress`` module is stdlib so no new dependency is
-    introduced.
+    ``[::1]``).
     """
     if host == "localhost":
         return True
@@ -97,7 +100,7 @@ def csrf_localhost_guard():
     """
     if request.method in ("POST", "PUT", "PATCH", "DELETE"):
         if not _is_localhost_request():
-            return jsonify({"error": "Forbidden: requests must originate from localhost"}), 403
+            return jsonify({"error": "Forbidden: requests must originate from a private network"}), 403
 _CONFIG_DIR: str = os.path.join(os.path.dirname(__file__), "config")
 _KEYS_PATH: str = os.path.join(_CONFIG_DIR, "keys.json")
 _CONFIG_PATH: str = os.path.join(_CONFIG_DIR, "config.json")

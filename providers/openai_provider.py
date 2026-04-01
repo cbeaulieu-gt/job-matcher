@@ -92,6 +92,11 @@ class OpenAIProvider(LLMProvider):
                     "type": "text",
                     "required": True,
                     "default": "gpt-4o-mini",
+                    "choices": [
+                        "gpt-4o-mini",
+                        "gpt-4o",
+                        "gpt-4-turbo",
+                    ],
                 },
             ],
         }

@@ -317,7 +317,15 @@
                 name="{{ provider_key }}__{{ field.name }}"
                 autocomplete="off"
                 value="{{ current_values.get(field.name, field.default or '') }}"
-                placeholder="{{ field.default if field.default is defined else '' }}">
+                placeholder="{{ field.default if field.default is defined else '' }}"
+                {% if field.choices %}list="datalist-{{ provider_key }}-{{ field.name }}"{% endif %}>
+              {% if field.choices %}
+              <datalist id="datalist-{{ provider_key }}-{{ field.name }}">
+                {% for choice in field.choices %}
+                <option value="{{ choice }}">
+                {% endfor %}
+              </datalist>
+              {% endif %}
             {% endif %}
           {% endfor %}
         </div>

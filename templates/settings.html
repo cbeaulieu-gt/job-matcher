@@ -331,9 +331,9 @@
         </div>
       {% endfor %}
 
-      <div class="save-bar" id="save-bar-llm">
+      <div class="save-bar" id="save-bar-llm" aria-live="polite">
         <span class="save-bar-label">Unsaved changes</span>
-        <button type="button" class="btn btn-save" onclick="this.closest('form').requestSubmit()">Save</button>
+        <button type="button" class="btn btn-save">Save</button>
       </div>
       <button type="submit" class="btn btn-save">Save</button>
     </form>
@@ -433,9 +433,9 @@
         </div>
       {% endfor %}
 
-      <div class="save-bar" id="save-bar-sources">
+      <div class="save-bar" id="save-bar-sources" aria-live="polite">
         <span class="save-bar-label">Unsaved changes</span>
-        <button type="button" class="btn btn-save" onclick="this.closest('form').requestSubmit()">Save</button>
+        <button type="button" class="btn btn-save">Save</button>
       </div>
       <button type="submit" class="btn btn-save">Save</button>
     </form>
@@ -489,6 +489,10 @@
       if (t.tagName === 'INPUT' && (t.type === 'text' || t.type === 'password')) {
         bar.classList.add('save-bar--visible');
       }
+    });
+
+    bar.querySelector('.btn-save').addEventListener('click', function () {
+      form.requestSubmit();
     });
 
     // Hide bar on successful form submission

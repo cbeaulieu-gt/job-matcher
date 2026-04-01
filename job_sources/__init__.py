@@ -45,6 +45,8 @@ from .remoteok import RemoteOKClient
 from .usajobs import USAJobsClient
 from .the_muse import TheMuseClient
 from .remotive import RemotiveClient
+from .jobicy import JobicyClient
+from .jooble import JoobleClient
 
 __all__ = [
     "JobSource",
@@ -55,6 +57,8 @@ __all__ = [
     "USAJobsClient",
     "TheMuseClient",
     "RemotiveClient",
+    "JobicyClient",
+    "JoobleClient",
     "SOURCES",
     "make_source",
     "make_enabled_sources",
@@ -72,6 +76,8 @@ SOURCES: dict[str, type[JobSource]] = {
     "usajobs": USAJobsClient,
     "the_muse": TheMuseClient,
     "remotive": RemotiveClient,
+    "jobicy": JobicyClient,
+    "jooble": JoobleClient,
 }
 
 

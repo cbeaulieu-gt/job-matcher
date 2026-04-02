@@ -218,15 +218,15 @@ All buttons extend `.btn` (base). Add a modifier class for semantic variants.
 A sticky bar that slides up from the bottom of the form when the user edits a credential field. Dismisses on form submit. HTMX checkbox toggles do **not** trigger it — only `<input type="text">` and `<input type="password">` changes do.
 
 ```html
-<div class="save-bar" id="save-bar-llm">
+<div class="save-bar" id="save-bar-llm" aria-live="polite" aria-hidden="true">
   <span class="save-bar-label">Unsaved changes</span>
-  <button type="button" class="btn btn-save" onclick="this.closest('form').requestSubmit()">Save</button>
+  <button type="button" class="btn btn-save">Save</button>
 </div>
 ```
 
 Place this `<div>` **just before** the existing `<button type="submit" class="btn btn-save">Save</button>` inside the form. The original submit button is kept as a non-JS fallback.
 
-Visibility is controlled by toggling `.save-bar--visible` via a delegated `input` listener scoped to `type === 'text' || type === 'password'`. The bar is hidden again on the form's `submit` event.
+Visibility is controlled by toggling `.save-bar--visible` via a delegated `input` listener scoped to `type === 'text' || type === 'password'`. The bar's Save button click handler is attached via `addEventListener` in the dirty-state IIFE — no inline `onclick`. `aria-hidden` is toggled alongside the CSS class (removed when showing, restored when hiding) so `aria-live="polite"` correctly announces the bar to screen readers when it appears.
 
 | Class | Element | Notes |
 |---|---|---|

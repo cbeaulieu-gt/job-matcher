@@ -200,6 +200,50 @@ body {
 }
 
 /* ------------------------------------------------------------
+   Feed sub-navigation (listings / snippets tabs)
+   Renders only on feed pages (/ and /snippets), below the
+   site-header and above page content.
+   ------------------------------------------------------------ */
+.feed-sub-nav {
+  display: flex;
+  gap: 2px;
+  align-items: flex-end;
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: 20px;
+  padding-top: 8px;
+}
+
+.feed-sub-tab {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  text-decoration: none;
+  color: var(--text-muted);
+  padding: 5px 12px 6px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  transition: color 120ms ease, background-color 120ms ease, border-color 120ms ease;
+}
+
+.feed-sub-tab:hover {
+  color: var(--text-secondary);
+  background-color: var(--bg-surface);
+  border-color: var(--border-subtle);
+}
+
+.feed-sub-tab.active {
+  color: var(--text-accent);
+  background-color: var(--bg-surface);
+  border-color: var(--border-subtle);
+  border-bottom-color: var(--bg-surface);
+  position: relative;
+  bottom: -1px;
+}
+
+/* ------------------------------------------------------------
    Feed subtitle bar
    ------------------------------------------------------------ */
 .feed-meta {

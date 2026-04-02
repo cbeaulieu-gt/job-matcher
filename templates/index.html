@@ -18,13 +18,11 @@
     <span class="site-logo">job<span>_</span>matcher</span>
     <nav class="site-nav">
       <a href="/"
-         class="nav-tab{% if view == 'feed' %} active{% endif %}">listings</a>
+         class="nav-tab{% if view in ('feed', 'snippets') %} active{% endif %}">feed</a>
       <a href="/bookmarks"
          class="nav-tab{% if view == 'bookmarks' %} active{% endif %}">bookmarks</a>
       <a href="/applied"
          class="nav-tab{% if view == 'applied' %} active{% endif %}">applied</a>
-      <a href="/snippets"
-         class="nav-tab{% if view == 'snippets' %} active{% endif %}">snippets</a>
       <a href="/stats"
          class="nav-tab{% if view == 'stats' %} active{% endif %}">stats</a>
       <a href="/profile"
@@ -33,6 +31,16 @@
          class="nav-tab{% if view == 'settings' %} active{% endif %}">settings</a>
     </nav>
   </header>
+
+  {# ── Feed sub-navigation ─────────────────────────────────────── #}
+  {% if view in ('feed', 'snippets') %}
+  <nav class="feed-sub-nav">
+    <a href="/"
+       class="feed-sub-tab{% if view == 'feed' %} active{% endif %}">listings</a>
+    <a href="/snippets"
+       class="feed-sub-tab{% if view == 'snippets' %} active{% endif %}">snippets</a>
+  </nav>
+  {% endif %}
 
   {# ── Feed subtitle ───────────────────────────────────────────── #}
   {% if view == "feed" %}

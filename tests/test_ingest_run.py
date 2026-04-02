@@ -19,6 +19,7 @@ that ``app.py``'s ``_INGEST_SUMMARY_RE`` uses, ensuring the two stay in sync.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import sys
@@ -266,7 +267,6 @@ class TestIngestRunHappyPath:
 
     def test_summary_line_matches_app_regex(self, tmp_path, caplog):
         """The logged summary line matches ``app._INGEST_SUMMARY_RE``."""
-        import logging
         db_path = str(tmp_path / "jobs.db")
         config_path = _make_temp_config(tmp_path)
         profile_path = _make_temp_profile(tmp_path)
@@ -414,7 +414,6 @@ class TestIngestRunScoringFailure:
 
     def test_score_failure_summary_reports_one_failed(self, tmp_path, caplog):
         """The summary line records score_failed=1 when one listing fails scoring."""
-        import logging
         db_path = str(tmp_path / "jobs.db")
         config_path = _make_temp_config(tmp_path)
         profile_path = _make_temp_profile(tmp_path)
@@ -484,7 +483,6 @@ class TestIngestRunDedup:
 
     def test_duplicate_reflected_in_summary(self, tmp_path, caplog):
         """Second run reports 2 dupes skipped in its summary line."""
-        import logging
         db_path = str(tmp_path / "jobs.db")
         config_path = _make_temp_config(tmp_path)
         profile_path = _make_temp_profile(tmp_path)
@@ -603,7 +601,6 @@ class TestIngestRunSkipScrape:
 
     def test_skip_scrape_logs_scrape_skip(self, tmp_path, caplog):
         """A listing with skip_scrape=True logs 'SCRAPE SKIP' instead of 'SCRAPE FALLBACK'."""
-        import logging
         db_path = str(tmp_path / "jobs.db")
         config_path = _make_temp_config(tmp_path)
         profile_path = _make_temp_profile(tmp_path)

@@ -21,6 +21,7 @@ from flask import Flask, render_template, make_response, request, jsonify, redir
 import db
 from credentials import CredentialError, load_providers, save_providers
 from providers import _PROVIDER_CLASS_MAP
+from providers.base import _sanitise_detail
 from job_sources import SOURCES
 
 app = Flask(__name__)
@@ -1037,7 +1038,7 @@ def _validate_with_timeout(validator, api_key: str, model: str) -> tuple[str, st
         try:
             result_holder.append(validator(api_key, model))
         except Exception as exc:
-            result_holder.append(("unreachable", str(exc)[:200]))
+            result_holder.append(("unreachable", _sanitise_detail(str(exc), api_key)))
 
     t = threading.Thread(target=_target, daemon=True)
     t.start()

@@ -90,7 +90,7 @@ def _configure_file_logging() -> None:
 # Config and profile loading
 # ---------------------------------------------------------------------------
 
-_REQUIRED_TOP_LEVEL = ("adzuna_app_id", "adzuna_app_key")
+_REQUIRED_TOP_LEVEL: tuple[()] = ()  # No top-level required keys remain; source credentials are in providers.json
 _REQUIRED_SEARCH = ("country", "what", "results_per_page", "max_pages")
 _REQUIRED_SCORING = ("threshold",)
 
@@ -111,18 +111,6 @@ def load_config(path: str = _DEFAULT_CONFIG_PATH) -> dict:
         raise SystemExit(f"Config file not found: {path}")
     except json.JSONDecodeError as exc:
         raise SystemExit(f"Config file is not valid JSON: {exc}")
-
-    # Environment variables override config.json values for containerised deployments.
-    # Applied before the missing-key check so env vars can satisfy required key validation.
-    # LLM provider keys (ANTHROPIC_API_KEY etc.) are intentionally excluded here —
-    # they are handled by load_keys().
-    for env_var, config_key in (
-        ("ADZUNA_APP_ID",  "adzuna_app_id"),
-        ("ADZUNA_APP_KEY", "adzuna_app_key"),
-    ):
-        val = os.environ.get(env_var)
-        if val:
-            config[config_key] = val
 
     missing: list[str] = []
 
@@ -571,6 +559,18 @@ def run(
         logger.error("Credential error: %s", exc)
         import sys as _sys
         _sys.exit(1)
+
+    # Inject ADZUNA_APP_ID / ADZUNA_APP_KEY env vars into the providers dict so
+    # they reach AdzunaClient via the credentials= path.  This preserves the
+    # containerised deployment override without polluting config.json.
+    adzuna_env_id  = os.environ.get("ADZUNA_APP_ID",  "")
+    adzuna_env_key = os.environ.get("ADZUNA_APP_KEY", "")
+    if adzuna_env_id or adzuna_env_key:
+        adzuna_src = providers.setdefault("job_sources", {}).setdefault("adzuna", {})
+        if adzuna_env_id:
+            adzuna_src.setdefault("app_id", adzuna_env_id)
+        if adzuna_env_key:
+            adzuna_src.setdefault("app_key", adzuna_env_key)
 
     sources = make_enabled_sources(providers, config)
     if not sources:

@@ -261,12 +261,23 @@ RUNTIME_VERSIONS: list[dict] = get_runtime_versions()
 # ---------------------------------------------------------------------------
 
 def _config_warnings() -> list[str]:
-    """Return a list of human-readable warnings for missing/empty config."""
+    """Return a list of human-readable warnings for missing/empty config.
+
+    Adzuna credentials are now read from providers.json (via load_providers)
+    rather than config.json, consistent with how make_enabled_sources resolves them.
+    Env var overrides (ADZUNA_APP_ID / ADZUNA_APP_KEY) are also checked so that
+    containerised deployments do not show a spurious warning.
+    """
     warnings = []
-    cfg = load_config()
-    adzuna_id  = cfg.get("adzuna_app_id", "").strip()
-    adzuna_key = cfg.get("adzuna_app_key", "").strip()
-    # Also check env vars (ingest.py can override via env)
+    try:
+        providers = load_providers()
+    except CredentialError:
+        providers = {}
+
+    adzuna_src: dict = (providers.get("job_sources") or {}).get("adzuna") or {}
+    adzuna_id  = str(adzuna_src.get("app_id",  "") or "").strip()
+    adzuna_key = str(adzuna_src.get("app_key", "") or "").strip()
+    # Also honour env var overrides (used in containerised / CI deployments).
     if not adzuna_id:
         adzuna_id = os.environ.get("ADZUNA_APP_ID", "").strip()
     if not adzuna_key:

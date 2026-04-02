@@ -30,14 +30,16 @@ class RemotiveClient(JobSource):
 
     SOURCE = "remotive"
 
-    def __init__(self, config: dict) -> None:
+    def __init__(self, config: dict, credentials: dict | None = None) -> None:
         """Read Remotive-specific settings from config.
 
         Args:
-            config: Full config dict. Reads ``config["remotive"]["category"]``
-                    (default ``"software-dev"``) and ``config["remotive"]["limit"]``
-                    (default 100). The ``"remotive"`` key is optional — if absent,
-                    defaults are used.
+            config:      Full config dict. Reads ``config["remotive"]["category"]``
+                         (default ``"software-dev"``) and ``config["remotive"]["limit"]``
+                         (default 100). The ``"remotive"`` key is optional — if absent,
+                         defaults are used.
+            credentials: Unused — Remotive requires no credentials.  Accepted
+                         so the factory can pass ``credentials=src_cfg`` uniformly.
         """
         remotive_cfg = config.get("remotive") or {}
         self._category: str = remotive_cfg.get("category", "software-dev")

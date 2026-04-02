@@ -38,41 +38,50 @@ class USAJobsClient(JobSource):
 
     SOURCE = "usajobs"
 
-    def __init__(self, config: dict) -> None:
-        """Extract USAJobs credentials and search params from config.
+    def __init__(self, config: dict, credentials: dict | None = None) -> None:
+        """Extract USAJobs credentials and search params from credentials / config.
+
+        Credentials are read from *credentials* first (the providers.json entry
+        passed by ``make_enabled_sources``).  As a backward-compat fallback the
+        constructor also accepts a ``config["usajobs"]`` sub-dict — installs that
+        have not yet migrated to providers.json will continue to work.
 
         Args:
-            config: Full config dict.  Must contain a ``"usajobs"`` sub-dict
-                    with at least ``api_key`` and ``user_agent``.
+            config:      Full config dict.  A ``"usajobs"`` sub-dict is used as a
+                         fallback source for credentials and search params.
+            credentials: Per-source credentials dict from providers.json.
+                         Expected keys: ``api_key``, ``user_agent``.
 
         Raises:
-            ValueError: If ``config["usajobs"]`` is missing, or if
-                        ``api_key`` or ``user_agent`` are absent within it.
+            ValueError: If ``api_key`` or ``user_agent`` cannot be resolved
+                        from either source.
         """
-        usajobs_cfg: dict | None = config.get("usajobs")
-        if not usajobs_cfg:
-            raise ValueError(
-                "USAJobs config block is absent. "
-                "Add a 'usajobs' section to config.json with 'api_key' and 'user_agent'."
-            )
+        creds: dict = credentials or {}
+        # Legacy fallback: read from config["usajobs"] if present.
+        legacy_cfg: dict = config.get("usajobs") or {}
 
-        api_key: str | None = usajobs_cfg.get("api_key")
+        api_key: str = creds.get("api_key") or legacy_cfg.get("api_key") or ""
         if not api_key:
             raise ValueError(
-                "USAJobs 'api_key' is required but missing from config['usajobs']."
+                "USAJobs 'api_key' is required but was not found in credentials "
+                "or config['usajobs']."
             )
 
-        user_agent: str | None = usajobs_cfg.get("user_agent")
+        user_agent: str = creds.get("user_agent") or legacy_cfg.get("user_agent") or ""
         if not user_agent:
             raise ValueError(
-                "USAJobs 'user_agent' (contact email) is required but missing "
-                "from config['usajobs']."
+                "USAJobs 'user_agent' (contact email) is required but was not found "
+                "in credentials or config['usajobs']."
             )
 
         self._api_key = api_key
         self._user_agent = user_agent
-        self._keyword: str = usajobs_cfg.get("keyword", "software engineer")
-        self._results_per_page: int = int(usajobs_cfg.get("results_per_page", 25))
+        self._keyword: str = (
+            creds.get("keyword") or legacy_cfg.get("keyword") or "software engineer"
+        )
+        self._results_per_page: int = int(
+            creds.get("results_per_page") or legacy_cfg.get("results_per_page") or 25
+        )
 
     # ------------------------------------------------------------------
     # JobSource interface

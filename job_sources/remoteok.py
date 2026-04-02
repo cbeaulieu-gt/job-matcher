@@ -39,13 +39,15 @@ class RemoteOKClient(JobSource):
 
     SOURCE = "remoteok"
 
-    def __init__(self, config: dict) -> None:
+    def __init__(self, config: dict, credentials: dict | None = None) -> None:
         """Initialise the client from the application config.
 
         Args:
-            config: Full config dict.  If a ``"remoteok"`` sub-dict is present
-                    its ``"user_agent"`` key is used; otherwise the default
-                    user-agent string is used.
+            config:      Full config dict.  If a ``"remoteok"`` sub-dict is present
+                         its ``"user_agent"`` key is used; otherwise the default
+                         user-agent string is used.
+            credentials: Unused — RemoteOK requires no credentials.  Accepted
+                         so the factory can pass ``credentials=src_cfg`` uniformly.
         """
         remoteok_cfg: dict = config.get("remoteok") or {}
         self._user_agent: str = remoteok_cfg.get("user_agent", _DEFAULT_USER_AGENT)

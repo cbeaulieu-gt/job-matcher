@@ -32,24 +32,34 @@ class AdzunaClient(JobSource):
     def __init__(
         self,
         config: dict,
+        credentials: dict | None = None,
         app_id: str | None = None,
         app_key: str | None = None,
     ) -> None:
         """Extract credentials and search parameters from config.
 
-        Reads ``adzuna_app_id`` and ``adzuna_app_key`` from *config* so that
-        the factory can pass ``config=config`` uniformly for all sources.
-        The optional *app_id* and *app_key* parameters are accepted for
-        backward compatibility but config is the canonical source.
+        Credentials are read from *credentials* first (the providers.json entry
+        passed by ``make_enabled_sources``), then fall back to the top-level
+        ``adzuna_app_id`` / ``adzuna_app_key`` keys in *config* for installs
+        that have not yet migrated to providers.json.  The legacy *app_id* and
+        *app_key* positional parameters are still accepted for backward compat.
 
         Args:
-            config:  Full config dict.  Must contain ``adzuna_app_id``,
-                     ``adzuna_app_key``, and a ``search`` sub-dict.
-            app_id:  Deprecated — pass credentials via config instead.
-            app_key: Deprecated — pass credentials via config instead.
+            config:      Full config dict.  Must contain a ``search`` sub-dict.
+            credentials: Per-source credentials dict from providers.json.
+                         Expected keys: ``app_id``, ``app_key``.
+            app_id:      Deprecated — pass credentials via providers.json instead.
+            app_key:     Deprecated — pass credentials via providers.json instead.
         """
-        self._app_id: str = app_id if app_id is not None else config["adzuna_app_id"]
-        self._app_key: str = app_key if app_key is not None else config["adzuna_app_key"]
+        creds = credentials or {}
+        if app_id is not None:
+            self._app_id: str = app_id
+        else:
+            self._app_id = creds.get("app_id") or config.get("adzuna_app_id", "")
+        if app_key is not None:
+            self._app_key: str = app_key
+        else:
+            self._app_key = creds.get("app_key") or config.get("adzuna_app_key", "")
         self._search = config["search"]
 
     # ------------------------------------------------------------------

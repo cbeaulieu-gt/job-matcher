@@ -48,12 +48,12 @@ Results include a `model_used` field stored as `"provider/model"` per listing. S
 
 ### Config & profile
 
-- **`config/config.json`** — Adzuna credentials (`adzuna_app_id`, `adzuna_app_key`), search params (`country`, `what`, `where`, `distance`, `max_days_old`, `results_per_page`, `max_pages`), scoring threshold, and optional `prefilter` block (title include/exclude patterns, contract type/time).
+- **`config/config.json`** — Search params (`country`, `what`, `where`, `distance`, `max_days_old`, `results_per_page`, `max_pages`), scoring threshold, and optional `prefilter` block (title include/exclude patterns, contract type/time). Adzuna credentials have moved to `config/providers.json`.
 - **`config/keys.json`** — LLM provider API keys and model selection. Each provider entry has `api_key` and `model`. Dict insertion order defines fallback sequence; `preferred_provider` names the first-choice provider. Managed via the `/settings` UI. Gitignored — copy from `config/keys.example.json` to get started. If absent, `load_keys()` constructs a keys dict from env vars (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`) for backward compatibility.
 - **`config/profile.json`** — Candidate skills and preferences injected verbatim into the scoring prompt. Fields: `primary_skills`, `anti_preferences`, `seniority`, `preferred_industries`, `location_preference`, `scoring_notes`.
-- **`config/providers.json`** — Unified credential store (replaces `config/keys.json`). Managed via the `/settings` UI. Gitignored — copy from `config/providers.example.json` to get started.
+- **`config/providers.json`** — Unified credential store for all sources, including Adzuna (`job_sources.adzuna.app_id` / `app_key`), Jooble, and USAJobs, as well as LLM providers (replaces `config/keys.json`). Managed via the `/settings` UI. Gitignored — copy from `config/providers.example.json` to get started.
 - All files are gitignored. Copy from `*.example.json` to get started.
-- Adzuna credentials and `DB_PATH` can be overridden via env vars: `ADZUNA_APP_ID`, `ADZUNA_APP_KEY`. `DB_PATH` defaults to `./jobs.db`.
+- `DB_PATH` defaults to `./jobs.db`. Adzuna credentials can be overridden via env vars `ADZUNA_APP_ID` / `ADZUNA_APP_KEY`; at runtime these are injected into the providers dict so they flow to `AdzunaClient` via the same `credentials=` path as providers.json.
 
 ### Database schema notes
 

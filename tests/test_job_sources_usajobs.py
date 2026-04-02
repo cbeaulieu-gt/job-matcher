@@ -99,13 +99,13 @@ class TestUSAJobsClientInit:
         assert isinstance(client, JobSource)
 
     def test_missing_usajobs_block_raises_value_error(self):
-        """ValueError is raised when 'usajobs' key is absent from config."""
-        with pytest.raises(ValueError, match="config block is absent"):
+        """ValueError is raised when 'usajobs' key is absent from config and no credentials given."""
+        with pytest.raises(ValueError, match="api_key"):
             USAJobsClient(config={})
 
     def test_empty_usajobs_block_raises_value_error(self):
-        """ValueError is raised when 'usajobs' dict is empty / falsy."""
-        with pytest.raises(ValueError, match="config block is absent"):
+        """ValueError is raised when 'usajobs' dict is empty and no credentials given."""
+        with pytest.raises(ValueError, match="api_key"):
             USAJobsClient(config={"usajobs": {}})
 
     def test_missing_api_key_raises_value_error(self):

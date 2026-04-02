@@ -69,7 +69,7 @@
       gap: 0.75rem;
       padding: 0.5rem 0.75rem;
       margin-bottom: 0.3rem;
-      background: var(--card-bg, #1e1e2e);
+      background: var(--bg-raised);
       border: 1px solid var(--border-mid);
       border-radius: 6px;
       cursor: grab;
@@ -99,7 +99,7 @@
     .order-error {
       margin-top: 0.5rem;
       font-size: 0.85rem;
-      color: var(--danger, #f38ba8);
+      color: var(--score-low-text);
     }
     .sortable-ghost { opacity: 0.3; }
     .sortable-drag  { opacity: 0.9; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
@@ -129,8 +129,8 @@
       width: 36px;
       height: 20px;
       border-radius: 10px;
-      background: var(--border-mid, #2a2e3a);
-      border: 1px solid var(--border-strong, #525c72);
+      background: var(--border-mid);
+      border: 1px solid var(--border-strong);
       transition: background 0.2s, border-color 0.2s;
     }
 
@@ -142,19 +142,19 @@
       width: 14px;
       height: 14px;
       border-radius: 50%;
-      background: var(--text-muted, #7a8599);
+      background: var(--text-muted);
       transition: transform 0.2s, background 0.2s;
     }
 
     /* Checked state — amber track, knob slides right and brightens */
     .source-toggle input[type="checkbox"]:checked ~ .source-toggle-track {
-      background: var(--text-accent, #f9e2af);
-      border-color: var(--text-accent, #f9e2af);
+      background: var(--text-accent);
+      border-color: var(--text-accent);
     }
     .source-toggle input[type="checkbox"]:checked ~ .source-toggle-track .source-toggle-knob {
       /* Track(36px) - knob(14px) - left-pad(2px) - borders(2px) - right-space(2px) = 16px */
       transform: translateX(calc(36px - 14px - 6px));
-      background: #fff;
+      background: var(--color-white);
     }
 
     /* Focus ring for keyboard accessibility */

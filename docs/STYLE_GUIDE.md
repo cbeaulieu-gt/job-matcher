@@ -210,6 +210,30 @@ All buttons extend `.btn` (base). Add a modifier class for semantic variants.
 | `.filter-toggle` | `<label>` | Checkbox label wrapper in filter bar |
 | `.provider-home-link` | `<a>` | External link icon (↗) placed next to provider names on the Settings → Job Sources tab; `font-size: 0.8rem`, `var(--text-muted)` at rest, `var(--text-accent)` on hover, `transition: color 0.15s` |
 | `.source-description` | `<p>` | Short blurb below `.provider-header` on each source card; `--font-body` 0.82rem, `--text-muted`, `line-height: 1.5`; rendered only when `schema.description` is set |
+| `.save-bar` | `<div>` | Sticky unsaved-changes bar; see §5 Save Bar below |
+| `.save-bar--visible` | modifier on `.save-bar` | Added by JS when a text/password input changes; animates in via opacity + translateY |
+| `.save-bar-label` | `<span>` | "Unsaved changes" text; `--font-mono` 0.8rem, `--score-mid-text` (amber — warning semantics) |
+
+### Save Bar
+
+A sticky bar that slides up from the bottom of the form when the user edits a credential field. Dismisses on form submit. HTMX checkbox toggles do **not** trigger it — only `<input type="text">` and `<input type="password">` changes do.
+
+```html
+<div class="save-bar" id="save-bar-llm" aria-live="polite" aria-hidden="true">
+  <span class="save-bar-label">Unsaved changes</span>
+  <button type="button" class="btn btn-save">Save</button>
+</div>
+```
+
+Place this `<div>` **just before** the existing `<button type="submit" class="btn btn-save">Save</button>` inside the form. The original submit button is kept as a non-JS fallback.
+
+Visibility is controlled by toggling `.save-bar--visible` via a delegated `input` listener scoped to `type === 'text' || type === 'password'`. The bar's Save button click handler is attached via `addEventListener` in the dirty-state IIFE — no inline `onclick`. `aria-hidden` is toggled alongside the CSS class (removed when showing, restored when hiding) so `aria-live="polite"` correctly announces the bar to screen readers when it appears.
+
+| Class | Element | Notes |
+|---|---|---|
+| `.save-bar` | `<div>` | `position: sticky; bottom: 0`; hidden at rest (`opacity: 0`, `pointer-events: none`, `translateY(4px)`) |
+| `.save-bar--visible` | modifier | Makes bar fully opaque and interactive; added/removed by JS |
+| `.save-bar-label` | `<span>` | `--font-mono`, `--score-mid-text`; amber signals a pending-action state |
 
 ### Toggle Switch
 

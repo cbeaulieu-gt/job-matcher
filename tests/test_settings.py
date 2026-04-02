@@ -1087,6 +1087,18 @@ class TestValidateWithTimeout:
             )
             assert result == (state, None)
 
+    def test_api_key_redacted_when_exception_escapes_thread(self):
+        """An API key that leaks into an exception message is redacted in the detail string."""
+        secret_key = "sk-super-secret-12345"
+
+        def _leaky_validator(k, m):
+            raise RuntimeError(f"Connection failed: key={secret_key}")
+
+        state, detail = app_module._validate_with_timeout(_leaky_validator, secret_key, "model")
+        assert state == "unreachable"
+        assert secret_key not in detail
+        assert "[REDACTED]" in detail
+
 
 # ---------------------------------------------------------------------------
 # Timeout integration — endpoint maps timed-out providers to unreachable

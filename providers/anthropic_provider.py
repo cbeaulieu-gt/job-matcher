@@ -33,10 +33,10 @@ def _sanitise_detail(raw: str, api_key: str) -> str:
     Returns:
         Sanitised detail string (at most 200 characters).
     """
-    detail = raw.replace("\n", " ").replace("\r", " ").strip()[:200]
+    detail = raw.replace("\n", " ").replace("\r", " ").strip()
     if api_key and api_key in detail:
         detail = detail.replace(api_key, "[REDACTED]")
-    return detail
+    return detail[:200]
 
 
 # ---------------------------------------------------------------------------

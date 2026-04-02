@@ -1282,6 +1282,33 @@ class TestValidateHelpers:
         assert secret_key not in (detail or "")
         assert "[REDACTED]" in (detail or "")
 
+    def test_anthropic_detail_redacts_key_after_200_chars(self, monkeypatch):
+        """Key appearing after char 200 must still be fully redacted after truncation."""
+        import anthropic as _anthropic
+
+        secret_key = "sk-ant-supersecret"
+        prefix = "A" * 185  # push key past the 200-char mark
+
+        class _FakeAuthError(Exception):
+            pass
+
+        class _FakeMessages:
+            def create(self, **kwargs):
+                raise _FakeAuthError(f"{prefix} key={secret_key}")
+
+        class _FakeClient:
+            messages = _FakeMessages()
+
+        monkeypatch.setattr(_anthropic, "Anthropic", lambda api_key: _FakeClient())
+        monkeypatch.setattr(_anthropic, "AuthenticationError", _FakeAuthError)
+        monkeypatch.setattr(_anthropic, "PermissionDeniedError", type("_NeverRaised", (Exception,), {}))
+        monkeypatch.setattr(_anthropic, "NotFoundError", type("_NeverRaised2", (Exception,), {}))
+        state, detail = AnthropicProvider.validate_credentials(secret_key, "claude-haiku-4-5-20251001")
+        assert state == "invalid_key"
+        assert secret_key not in (detail or "")
+        assert "[REDACTED]" in (detail or "")
+        assert len(detail or "") <= 200
+
     # ------------------------------------------------------------------
     # OpenAI
     # ------------------------------------------------------------------
@@ -1400,6 +1427,36 @@ class TestValidateHelpers:
         assert secret_key not in (detail or "")
         assert "[REDACTED]" in (detail or "")
 
+    def test_openai_detail_redacts_key_after_200_chars(self, monkeypatch):
+        """Key appearing after char 200 must still be fully redacted after truncation."""
+        import openai as _openai
+
+        secret_key = "sk-oai-supersecret"
+        prefix = "A" * 185  # push key past the 200-char mark
+
+        class _FakeAuthError(Exception):
+            pass
+
+        class _FakeCompletions:
+            def create(self, **kwargs):
+                raise _FakeAuthError(f"{prefix} key={secret_key}")
+
+        class _FakeChat:
+            completions = _FakeCompletions()
+
+        class _FakeClient:
+            chat = _FakeChat()
+
+        monkeypatch.setattr(_openai, "OpenAI", lambda api_key: _FakeClient())
+        monkeypatch.setattr(_openai, "AuthenticationError", _FakeAuthError)
+        monkeypatch.setattr(_openai, "PermissionDeniedError", type("_NeverRaised", (Exception,), {}))
+        monkeypatch.setattr(_openai, "NotFoundError", type("_NeverRaised2", (Exception,), {}))
+        state, detail = OpenAIProvider.validate_credentials(secret_key, "gpt-4o-mini")
+        assert state == "invalid_key"
+        assert secret_key not in (detail or "")
+        assert "[REDACTED]" in (detail or "")
+        assert len(detail or "") <= 200
+
     # ------------------------------------------------------------------
     # Gemini
     # ------------------------------------------------------------------
@@ -1484,3 +1541,23 @@ class TestValidateHelpers:
         assert state == "invalid_key"
         assert secret_key not in (detail or "")
         assert "[REDACTED]" in (detail or "")
+
+    def test_gemini_detail_redacts_key_after_200_chars(self, monkeypatch):
+        """Key appearing after char 200 must still be fully redacted after truncation."""
+        from google import genai as _genai
+
+        secret_key = "gm-supersecret"
+        prefix = "A" * 185  # push key past the 200-char mark
+
+        class _FakeModels:
+            def generate_content(self, model, contents):
+                raise Exception(f"{prefix} key={secret_key}")
+
+        class _FakeClient:
+            models = _FakeModels()
+
+        monkeypatch.setattr(_genai, "Client", lambda api_key: _FakeClient())
+        state, detail = GeminiProvider.validate_credentials(secret_key, "gemini-1.5-flash")
+        assert secret_key not in (detail or "")
+        assert "[REDACTED]" in (detail or "")
+        assert len(detail or "") <= 200

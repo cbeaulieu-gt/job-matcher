@@ -67,35 +67,51 @@ class JoobleClient(JobSource):
 
     SOURCE = "jooble"
 
-    def __init__(self, config: dict) -> None:
-        """Extract Jooble credentials and search params from config.
+    def __init__(self, config: dict, credentials: dict | None = None) -> None:
+        """Extract Jooble credentials and search params from credentials / config.
+
+        Credentials are read from *credentials* first (the providers.json entry
+        passed by ``make_enabled_sources``).  As a backward-compat fallback the
+        constructor also accepts a ``config["jooble"]`` sub-dict — installs that
+        have not yet migrated to providers.json will continue to work.
+
+        Search parameters (``keywords``, ``location``, ``results_per_page``,
+        ``max_pages``) are read from *credentials* when present, otherwise from
+        ``config["jooble"]``, otherwise from defaults.
 
         Args:
-            config: Full config dict.  Must contain a ``"jooble"`` sub-dict
-                    with at least ``api_key``.
+            config:      Full config dict.  A ``"jooble"`` sub-dict is used as a
+                         fallback source for credentials and search params.
+            credentials: Per-source credentials dict from providers.json.
+                         Expected key: ``api_key``.  May also carry search params.
 
         Raises:
-            ValueError: If ``config["jooble"]`` is absent or ``api_key`` is
-                        missing within it.
+            ValueError: If ``api_key`` cannot be resolved from either source.
         """
-        jooble_cfg: dict | None = config.get("jooble")
-        if not jooble_cfg:
-            raise ValueError(
-                "Jooble config block is absent. "
-                "Add a 'jooble' section to config.json with 'api_key'."
-            )
+        creds: dict = credentials or {}
+        # Legacy fallback: read from config["jooble"] if present.
+        legacy_cfg: dict = config.get("jooble") or {}
 
-        api_key: str | None = jooble_cfg.get("api_key")
+        api_key: str = str(creds.get("api_key") or legacy_cfg.get("api_key") or "")
         if not api_key:
             raise ValueError(
-                "Jooble 'api_key' is required but missing from config['jooble']."
+                "Jooble 'api_key' is required but was not found in credentials "
+                "or config['jooble']."
             )
 
         self._api_key: str = api_key
-        self._keywords: str = jooble_cfg.get("keywords", "software engineer")
-        self._location: str = jooble_cfg.get("location", "")
-        self._results_per_page: int = max(1, int(jooble_cfg.get("results_per_page", 20)))
-        self._max_pages: int = max(1, int(jooble_cfg.get("max_pages", 5)))
+        self._keywords: str = (
+            creds.get("keywords") or legacy_cfg.get("keywords") or "software engineer"
+        )
+        self._location: str = (
+            creds.get("location") or legacy_cfg.get("location") or ""
+        )
+        self._results_per_page: int = max(
+            1, int(creds.get("results_per_page") or legacy_cfg.get("results_per_page") or 20)
+        )
+        self._max_pages: int = max(
+            1, int(creds.get("max_pages") or legacy_cfg.get("max_pages") or 5)
+        )
         self._url: str = _JOOBLE_BASE_URL.format(api_key=self._api_key)
 
         # Cache for total_pages() / first-page results to avoid duplicate requests.

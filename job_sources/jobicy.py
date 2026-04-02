@@ -30,15 +30,17 @@ class JobicyClient(JobSource):
 
     SOURCE = "jobicy"
 
-    def __init__(self, config: dict) -> None:
+    def __init__(self, config: dict, credentials: dict | None = None) -> None:
         """Read Jobicy-specific settings from config.
 
         Args:
-            config: Full config dict.  Reads ``config["jobicy"]["tag"]``
-                    (default ``"software engineer"``), ``config["jobicy"]["geo"]``
-                    (default ``"usa"``), and ``config["jobicy"]["count"]``
-                    (default ``50``).  The ``"jobicy"`` key is optional — if
-                    absent, defaults are used.
+            config:      Full config dict.  Reads ``config["jobicy"]["tag"]``
+                         (default ``"software engineer"``), ``config["jobicy"]["geo"]``
+                         (default ``"usa"``), and ``config["jobicy"]["count"]``
+                         (default ``50``).  The ``"jobicy"`` key is optional — if
+                         absent, defaults are used.
+            credentials: Unused — Jobicy requires no credentials.  Accepted
+                         so the factory can pass ``credentials=src_cfg`` uniformly.
         """
         jobicy_cfg: dict = config.get("jobicy") or {}
         self._tag: str = jobicy_cfg.get("tag", "software engineer")

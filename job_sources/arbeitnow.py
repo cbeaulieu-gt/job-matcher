@@ -82,13 +82,15 @@ class ArbeitnowClient(JobSource):
 
     SOURCE = "arbeitnow"
 
-    def __init__(self, config: dict | None = None) -> None:
+    def __init__(self, config: dict | None = None, credentials: dict | None = None) -> None:
         """Initialise the client.
 
         Args:
-            config: Full application config dict.  The optional
-                    ``config["arbeitnow"]`` sub-dict can carry future overrides;
-                    no keys are currently required.
+            config:      Full application config dict.  The optional
+                         ``config["arbeitnow"]`` sub-dict can carry future overrides;
+                         no keys are currently required.
+            credentials: Unused — Arbeitnow requires no credentials.  Accepted
+                         so the factory can pass ``credentials=src_cfg`` uniformly.
         """
         self._config: dict = (config or {}).get("arbeitnow", {})
         self._cached_total_pages: int | None = None

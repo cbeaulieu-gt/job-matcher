@@ -34,12 +34,14 @@ class TheMuseClient(JobSource):
 
     SOURCE = "the_muse"
 
-    def __init__(self, config: dict) -> None:
+    def __init__(self, config: dict, credentials: dict | None = None) -> None:
         """Extract The Muse credentials and search parameters from config.
 
         Args:
-            config: Full config dict.  Reads from the ``the_muse`` sub-dict
-                    if present; all keys within that sub-dict are optional.
+            config:      Full config dict.  Reads from the ``the_muse`` sub-dict
+                         if present; all keys within that sub-dict are optional.
+            credentials: Unused — The Muse does not use providers.json credentials.
+                         Accepted so the factory can pass ``credentials=src_cfg`` uniformly.
         """
         muse_cfg: dict = config.get("the_muse") or {}
         self._api_key: str | None = muse_cfg.get("api_key") or None

@@ -90,7 +90,7 @@ def _configure_file_logging() -> None:
 # Config and profile loading
 # ---------------------------------------------------------------------------
 
-_REQUIRED_TOP_LEVEL = ("adzuna_app_id", "adzuna_app_key")
+_REQUIRED_TOP_LEVEL: tuple[str, ...] = ()  # No top-level required keys remain; source credentials are in providers.json
 _REQUIRED_SEARCH = ("country", "what", "results_per_page", "max_pages")
 _REQUIRED_SCORING = ("threshold",)
 
@@ -111,18 +111,6 @@ def load_config(path: str = _DEFAULT_CONFIG_PATH) -> dict:
         raise SystemExit(f"Config file not found: {path}")
     except json.JSONDecodeError as exc:
         raise SystemExit(f"Config file is not valid JSON: {exc}")
-
-    # Environment variables override config.json values for containerised deployments.
-    # Applied before the missing-key check so env vars can satisfy required key validation.
-    # LLM provider keys (ANTHROPIC_API_KEY etc.) are intentionally excluded here —
-    # they are handled by load_keys().
-    for env_var, config_key in (
-        ("ADZUNA_APP_ID",  "adzuna_app_id"),
-        ("ADZUNA_APP_KEY", "adzuna_app_key"),
-    ):
-        val = os.environ.get(env_var)
-        if val:
-            config[config_key] = val
 
     missing: list[str] = []
 
@@ -525,6 +513,36 @@ def score_listing_with_fallback(
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _inject_env_var_credentials(providers: dict) -> None:
+    """Inject ``ADZUNA_APP_ID`` / ``ADZUNA_APP_KEY`` env vars into *providers*.
+
+    When set, each env var is written into
+    ``providers["job_sources"]["adzuna"]["app_id"]`` /
+    ``providers["job_sources"]["adzuna"]["app_key"]`` using ``setdefault`` so
+    that an existing value in providers.json is never overwritten.
+
+    This allows containerised deployments to supply Adzuna credentials via the
+    environment without modifying providers.json, while still respecting any
+    value already present in the file.
+
+    Args:
+        providers: The providers dict loaded by ``load_providers()``.  Modified
+                   in-place; missing intermediate keys are created as needed.
+    """
+    adzuna_env_id  = os.environ.get("ADZUNA_APP_ID",  "")
+    adzuna_env_key = os.environ.get("ADZUNA_APP_KEY", "")
+    if adzuna_env_id or adzuna_env_key:
+        adzuna_src = providers.setdefault("job_sources", {}).setdefault("adzuna", {})
+        if adzuna_env_id:
+            adzuna_src.setdefault("app_id", adzuna_env_id)
+        if adzuna_env_key:
+            adzuna_src.setdefault("app_key", adzuna_env_key)
+
+
+# ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
 
@@ -540,6 +558,13 @@ def run(
     Loads config and profile, initialises the DB, pages through Adzuna
     results, pre-filters, deduplicates, scrapes, scores, and persists each
     listing.  Prints a summary line when complete.
+
+    After ``load_providers()`` returns, the env vars ``ADZUNA_APP_ID`` and
+    ``ADZUNA_APP_KEY`` are injected into the providers dict via
+    ``_inject_env_var_credentials()`` so that containerised deployments can
+    supply Adzuna credentials without modifying ``providers.json``.  Existing
+    values already present in the file are not overwritten (``setdefault`` is
+    used, not direct assignment).
 
     Args:
         config_path:    Path to config.json (default ``"config/config.json"``).
@@ -571,6 +596,8 @@ def run(
         logger.error("Credential error: %s", exc)
         import sys as _sys
         _sys.exit(1)
+
+    _inject_env_var_credentials(providers)
 
     sources = make_enabled_sources(providers, config)
     if not sources:

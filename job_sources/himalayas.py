@@ -99,12 +99,14 @@ class HimalayasClient(JobSource):
 
     SOURCE = "himalayas"
 
-    def __init__(self, config: dict) -> None:
+    def __init__(self, config: dict, credentials: dict | None = None) -> None:
         """Store pagination settings from config.
 
         Args:
-            config: Full config dict. Reads ``config["himalayas"]["limit"]``
-                    (default 100, max 100) to control page size.
+            config:      Full config dict. Reads ``config["himalayas"]["limit"]``
+                         (default 100, max 100) to control page size.
+            credentials: Unused — Himalayas requires no credentials.  Accepted
+                         so the factory can pass ``credentials=src_cfg`` uniformly.
         """
         himalayas_cfg = config.get("himalayas") or {}
         self._limit: int = int(himalayas_cfg.get("limit", 100))

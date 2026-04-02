@@ -15,6 +15,13 @@ import sqlite3
 
 _DEFAULT_DB_PATH: str = os.environ.get("DB_PATH", "jobs.db")
 
+# Explicit allowlist for user-supplied sort keys → safe SQL ORDER BY clauses.
+# Never interpolate a raw user value into SQL; look it up here instead.
+_ALLOWED_SORT_COLUMNS: dict[str, str] = {
+    "date_posted": "posted_at DESC",
+}
+_DEFAULT_SORT_CLAUSE = "score DESC"
+
 # ---------------------------------------------------------------------------
 # Pricing fallback constants — Haiku pricing used when the caller does not
 # supply per-model rates.  Kept here only for backward compatibility with
@@ -571,7 +578,7 @@ def update_score(
                 tokens_input       = :tokens_input,
                 tokens_output      = :tokens_output,
                 model_used         = :model_used,
-                description_source = COALESCE(:description_source, description_source)
+                description_source = COALESCE(:description_source, description_source)  -- Preserve on rescore
             WHERE source = :source AND source_id = :source_id
             """,
             {
@@ -654,10 +661,7 @@ def get_feed(
 
     where_clause = " AND ".join(conditions)
 
-    if sort == "date_posted":
-        order_clause = "posted_at DESC"
-    else:
-        order_clause = "score DESC"
+    order_clause = _ALLOWED_SORT_COLUMNS.get(sort, _DEFAULT_SORT_CLAUSE)
 
     conn = get_connection(db_path)
     try:
@@ -689,10 +693,7 @@ def get_snippet_feed(
                  any other value (or None) falls back to score DESC.
         db_path: Path to the SQLite database file.
     """
-    if sort == "date_posted":
-        order_clause = "posted_at DESC"
-    else:
-        order_clause = "score DESC"
+    order_clause = _ALLOWED_SORT_COLUMNS.get(sort, _DEFAULT_SORT_CLAUSE)
 
     conn = get_connection(db_path)
     try:

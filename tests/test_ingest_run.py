@@ -527,9 +527,6 @@ class TestIngestRunDedup:
 # _inject_env_var_credentials() — env var injection helper
 # ---------------------------------------------------------------------------
 
-import pytest  # noqa: E402 — imported here to avoid changing the existing test style above
-
-
 class TestInjectEnvVarCredentials:
     """Unit tests for ingest._inject_env_var_credentials()."""
 

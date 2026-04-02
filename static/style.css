@@ -67,6 +67,28 @@
   --star-filled:    #f5a623;
   --dismiss-hover:  #ff6b6b;
 
+  /* Amber-accented button states (view, ingest) */
+  --text-accent-bright:    #f5b040;
+  --btn-amber-border:      #3a2e10;
+  --btn-amber-hover-bg:    #221c08;
+  --btn-amber-hover-border:#5a4820;
+
+  /* Filled / active input state (amber tint) */
+  --input-active-bg:     #1e1500;
+  --input-active-border: #5a3a00;
+
+  /* Applied button hover (brighter green) */
+  --btn-apply-hover-color:  #2acc65;
+  --btn-apply-hover-bg:     #0a2215;
+  --btn-apply-hover-border: #1a5c36;
+
+  /* Dismiss button hover (dark red) */
+  --btn-dismiss-hover-bg:     #1a0808;
+  --btn-dismiss-hover-border: #3a1010;
+
+  /* Pure white — used for toggle knob */
+  --color-white: #fff;
+
   /* Typography — unchanged */
   --font-body:  "Georgia", "Times New Roman", serif;
   --font-mono:  "Menlo", "Consolas", "Cascadia Code", "Courier New", monospace;
@@ -468,13 +490,13 @@ body {
 /* "View listing" — slightly more prominent */
 .btn-view {
   color: var(--text-accent);
-  border-color: #3a2e10;
+  border-color: var(--btn-amber-border);
 }
 
 .btn-view:hover {
-  background: #221c08;
-  border-color: #5a4820;
-  color: #f5b040;
+  background: var(--btn-amber-hover-bg);
+  border-color: var(--btn-amber-hover-border);
+  color: var(--text-accent-bright);
 }
 
 /* Bookmark button */
@@ -484,13 +506,13 @@ body {
 
 .btn-bookmark:hover {
   color: var(--star-filled);
-  border-color: #5a3a00;
+  border-color: var(--input-active-border);
 }
 
 .btn-bookmark.bookmarked {
   color: var(--star-filled);
-  border-color: #5a3a00;
-  background: #1e1500;
+  border-color: var(--input-active-border);
+  background: var(--input-active-bg);
 }
 
 .btn-bookmark.bookmarked:hover {
@@ -517,9 +539,9 @@ body {
 }
 
 .btn-apply.applied:hover {
-  color: #2acc65;
-  background: #0a2215;
-  border-color: #1a5c36;
+  color: var(--btn-apply-hover-color);
+  background: var(--btn-apply-hover-bg);
+  border-color: var(--btn-apply-hover-border);
 }
 
 /* Spacer pushes dismiss to the right */
@@ -538,8 +560,8 @@ body {
 
 .btn-dismiss:hover {
   color: var(--dismiss-hover);
-  background: #1a0808;
-  border-color: #3a1010;
+  background: var(--btn-dismiss-hover-bg);
+  border-color: var(--btn-dismiss-hover-border);
 }
 
 /* HTMX request indicator — dim the card while request is in-flight */
@@ -756,13 +778,13 @@ body {
 }
 
 .filter-select:has(option:not([value=""]):checked) {
-  border-color: #5a3a00;
-  background-color: #1e1500;
+  border-color: var(--input-active-border);
+  background-color: var(--input-active-bg);
   color: var(--text-accent);
 }
 .filter-input:not(:placeholder-shown) {
-  border-color: #5a3a00;
-  background-color: #1e1500;
+  border-color: var(--input-active-border);
+  background-color: var(--input-active-bg);
   color: var(--text-accent);
 }
 .filter-toggle:has(input[type="checkbox"]:checked) {
@@ -1335,7 +1357,7 @@ body {
 }
 .setup-banner p { margin: 0.2rem 0; line-height: 1.6; }
 .setup-banner a { color: var(--text-accent); text-decoration: underline; }
-.setup-banner a:hover { color: #f5b040; }
+.setup-banner a:hover { color: var(--text-accent-bright); }
 
 /* ------------------------------------------------------------
    Settings page — section wrapper
@@ -1366,13 +1388,13 @@ body {
 /* Primary action button — amber accent to signal a write operation */
 .btn-ingest {
   color: var(--text-accent);
-  border-color: #3a2e10;
+  border-color: var(--btn-amber-border);
 }
 
 .btn-ingest:hover {
-  background: #221c08;
-  border-color: #5a4820;
-  color: #f5b040;
+  background: var(--btn-amber-hover-bg);
+  border-color: var(--btn-amber-hover-border);
+  color: var(--text-accent-bright);
 }
 
 /* Optional controls alongside the button */
@@ -1404,7 +1426,7 @@ body {
   letter-spacing: 0.06em;
   color: var(--text-accent);
   background: var(--bg-surface);
-  border: 1px solid #3a2e10;
+  border: 1px solid var(--btn-amber-border);
   border-radius: var(--radius-md);
   padding: 10px 20px;
   margin-bottom: 16px;

@@ -79,6 +79,51 @@ Applied to `.card-details` via `data-tier` attribute.
 | `--btn-hover` | `#262e3f` |
 | `--btn-border` | `#373e50` |
 
+### Amber-accented button states
+
+Used by `.btn-view`, `.btn-ingest`, and `.ingest-status-running` — amber-tinted interactive controls.
+
+| Token | Value | Use |
+|---|---|---|
+| `--text-accent-bright` | `#f5b040` | Hover color on amber-accented buttons; slightly brighter than `--text-accent` |
+| `--btn-amber-border` | `#3a2e10` | Border at rest for amber-accented buttons |
+| `--btn-amber-hover-bg` | `#221c08` | Hover background for amber-accented buttons |
+| `--btn-amber-hover-border` | `#5a4820` | Hover border for amber-accented buttons |
+
+### Active / filled input state
+
+Applied to `.filter-select` and `.filter-input` when they have a non-default value, and to `.btn-bookmark.bookmarked`.
+
+| Token | Value | Use |
+|---|---|---|
+| `--input-active-bg` | `#1e1500` | Background tint on active/filled inputs and bookmarked button |
+| `--input-active-border` | `#5a3a00` | Border on active/filled inputs and bookmarked button |
+
+### Applied button hover
+
+Used by `.btn-apply.applied:hover` — a brighter green to signal confirmed action.
+
+| Token | Value | Use |
+|---|---|---|
+| `--btn-apply-hover-color` | `#2acc65` | Hover text color for applied state |
+| `--btn-apply-hover-bg` | `#0a2215` | Hover background for applied state |
+| `--btn-apply-hover-border` | `#1a5c36` | Hover border for applied state |
+
+### Dismiss button hover
+
+Used by `.btn-dismiss:hover` — dark red tint.
+
+| Token | Value | Use |
+|---|---|---|
+| `--btn-dismiss-hover-bg` | `#1a0808` | Hover background for dismiss button |
+| `--btn-dismiss-hover-border` | `#3a1010` | Hover border for dismiss button |
+
+### Misc
+
+| Token | Value | Use |
+|---|---|---|
+| `--color-white` | `#fff` | Pure white; used for the toggle-switch knob |
+
 ### Typography
 
 | Token | Stack |

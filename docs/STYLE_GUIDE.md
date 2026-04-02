@@ -192,6 +192,21 @@ Used by `.btn-dismiss:hover` — dark red tint.
 | `.site-nav` | `<nav>` | Flex gap 2px |
 | `.nav-tab` | `<a>` | `--font-mono`, uppercase; add `.active` for current page |
 
+#### Feed sub-navigation
+
+A secondary tab bar that renders below the `<header>` only on feed pages (`/` and `/snippets`). It groups the two feed views under the single top-level **feed** nav tab.
+
+| Class | Element | Notes |
+|---|---|---|
+| `.feed-sub-nav` | `<nav>` | Flex row, gap 2px, border-bottom `--border-subtle`; placed after `</header>` and before page content |
+| `.feed-sub-tab` | `<a>` | `--font-mono` 0.68rem uppercase; lighter than `.nav-tab` (smaller font, less padding) to signal subordinate tier; add `.active` for current sub-page |
+
+**Active state rules:**
+- Top-level `feed` nav-tab gets `.active` when `view` is `'feed'` OR `'snippets'`
+- `.feed-sub-tab` for `listings` (href `/`) gets `.active` when `view == 'feed'`
+- `.feed-sub-tab` for `snippets` (href `/snippets`) gets `.active` when `view == 'snippets'`
+- Sub-nav is absent on all non-feed pages (bookmarks, applied, stats, profile, settings)
+
 ### Cards (collapsible)
 
 Cards use `<details>`/`<summary>` for native expand/collapse. Tier is set via `data-tier` on the outer element.

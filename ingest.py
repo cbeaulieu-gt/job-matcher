@@ -25,6 +25,7 @@ import logging
 import math
 import os
 import re
+import time
 from datetime import datetime, timezone
 import requests
 from bs4 import BeautifulSoup
@@ -249,6 +250,300 @@ def prefilter(listing: dict, config: dict) -> str | None:
         if actual_type and actual_type.lower() != require_type.lower():
             return f'contract_type: got "{actual_type}" expected "{require_type}"'
 
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Geospatial filter
+# ---------------------------------------------------------------------------
+
+# Keywords that indicate a listing is location-agnostic — always pass the
+# geospatial filter regardless of the configured radius.
+_REMOTE_KEYWORDS = ("remote", "worldwide")
+
+# Nominatim's usage policy requires a descriptive user-agent string and a
+# maximum request rate of 1 req/sec.  The geocache eliminates repeat calls
+# on subsequent runs, so this rate limit only applies to new locations.
+_GEOCODE_USER_AGENT = "job_matcher/1.0 (github.com/job-matcher)"
+_GEOCODE_MIN_INTERVAL_S = 1.0  # Nominatim policy: 1 req/sec max
+
+
+def _is_remote_location(location: str) -> bool:
+    """Return True if location text indicates a remote/global listing.
+
+    Listings containing "remote" or "worldwide" (case-insensitive) bypass the
+    geospatial radius check entirely.
+
+    Args:
+        location: Raw location string from a job listing.
+
+    Returns:
+        True when the location signals the role is remote or worldwide.
+    """
+    loc_lower = location.lower()
+    return any(kw in loc_lower for kw in _REMOTE_KEYWORDS)
+
+
+def _geocode_location(location_text: str, geolocator) -> tuple[float, float] | None:
+    """Resolve a location string to (lat, lon) via Nominatim.
+
+    The caller is responsible for enforcing rate limits between calls.
+
+    Args:
+        location_text: Human-readable location string to geocode.
+        geolocator:    Configured ``geopy.geocoders.Nominatim`` instance.
+
+    Returns:
+        ``(lat, lon)`` tuple on success, or ``None`` if Nominatim cannot
+        resolve the string.
+    """
+    try:
+        result = geolocator.geocode(location_text, timeout=10)
+    except Exception as exc:  # noqa: BLE001 — geopy can raise various errors
+        logger.debug("Geocoding error for %r: %s", location_text, exc)
+        return None
+
+    if result is None:
+        return None
+    return (result.latitude, result.longitude)
+
+
+class GeoFilter:
+    """Manages geospatial filtering for a single ingest run.
+
+    Encapsulates the per-run Nominatim geolocator instance, the in-memory
+    coordinate cache (layered on top of the DB geocache), rate-limit state,
+    and run statistics.  Instantiate once per ``run()`` call; call
+    :meth:`check` for each listing.
+
+    When ``profile`` does not contain both ``location_center`` and
+    ``location_radius_km``, :meth:`is_active` returns False and :meth:`check`
+    is always a no-op — no geocoding is attempted.
+
+    Attributes:
+        hits:           Number of lookups served from the DB geocache.
+        misses:         Number of Nominatim API calls made.
+        failed:         Number of locations that could not be geocoded.
+        geo_discarded:  Number of listings discarded by the radius check.
+    """
+
+    def __init__(self, profile: dict, db_path: str) -> None:
+        self._center_str: str | None = profile.get("location_center")
+        self._radius_km: float | None = profile.get("location_radius_km")
+        self._fallback: str = (profile.get("location_geocode_fallback") or "pass").lower()
+        self._db_path = db_path
+
+        # In-memory layer over the DB geocache — avoids repeated DB hits for
+        # the same location within a single run.
+        self._mem: dict[str, tuple[float, float] | None] = {}
+
+        # Rate-limit state for Nominatim (1 req/sec max).
+        self._last_geocode_ts: float = 0.0
+
+        # Lazy-initialised geolocator — only created when needed.
+        self._geolocator = None
+        self._geopy_missing = False
+
+        # Run statistics.
+        self.hits = 0
+        self.misses = 0
+        self.failed = 0
+        self.geo_discarded = 0
+
+        # Geocode the center up-front so :meth:`check` doesn't have to
+        # handle it per-listing.  Only done when the filter is active.
+        self._center_coords: tuple[float, float] | None = None
+        if self.is_active and self._center_str:
+            self._center_coords = self._resolve(self._center_str)
+            if self._center_coords is None:
+                logger.warning(
+                    "geo_filter: location_center %r could not be geocoded; "
+                    "geospatial filter will be skipped for this run",
+                    self._center_str,
+                )
+
+    @property
+    def is_active(self) -> bool:
+        """True when both ``location_center`` and ``location_radius_km`` are set."""
+        return bool(self._center_str) and self._radius_km is not None
+
+    def _geolocator_instance(self):
+        """Return (or lazily create) the Nominatim geolocator.
+
+        Returns None when geopy is not installed.
+        """
+        if self._geopy_missing:
+            return None
+        if self._geolocator is None:
+            try:
+                from geopy.geocoders import Nominatim
+                self._geolocator = Nominatim(user_agent=_GEOCODE_USER_AGENT)
+            except ImportError:
+                logger.warning(
+                    "geopy is not installed — location geocoding skipped. "
+                    "Run: uv pip install geopy==2.4.1"
+                )
+                self._geopy_missing = True
+                return None
+        return self._geolocator
+
+    def _resolve(self, location_text: str) -> tuple[float, float] | None:
+        """Return (lat, lon) for a location string, populating caches as a side effect.
+
+        Lookup order:
+        1. In-memory cache (free).
+        2. DB geocache (single row SELECT).
+        3. Nominatim API call (rate-limited to 1 req/sec).
+
+        Args:
+            location_text: The raw location string to resolve.
+
+        Returns:
+            ``(lat, lon)`` on success, or ``None`` if unresolvable.
+        """
+        # 1. In-memory hit.
+        if location_text in self._mem:
+            return self._mem[location_text]
+
+        # 2. DB cache hit.
+        with db.get_connection(self._db_path) as conn:
+            db_hits = db.geocache_get_many(conn, [location_text])
+        if location_text in db_hits:
+            self.hits += 1
+            coords = db_hits[location_text]
+            self._mem[location_text] = coords
+            return coords
+
+        # 3. Nominatim API call.
+        geolocator = self._geolocator_instance()
+        if geolocator is None:
+            self._mem[location_text] = None
+            return None
+
+        # Enforce 1 req/sec.
+        elapsed = time.monotonic() - self._last_geocode_ts
+        if elapsed < _GEOCODE_MIN_INTERVAL_S:
+            time.sleep(_GEOCODE_MIN_INTERVAL_S - elapsed)
+
+        coords = _geocode_location(location_text, geolocator)
+        self._last_geocode_ts = time.monotonic()
+        self.misses += 1
+
+        if coords is not None:
+            with db.get_connection(self._db_path) as conn:
+                db.geocache_put(conn, location_text, coords[0], coords[1])
+            self._mem[location_text] = coords
+        else:
+            self.failed += 1
+            logger.debug("Could not geocode location: %r", location_text)
+            self._mem[location_text] = None
+
+        return coords
+
+    def check(self, listing: dict) -> str | None:
+        """Return None if the listing passes the geospatial filter, or a reason string.
+
+        This method is a no-op (always returns None) when:
+        - The filter is not active (``location_center`` / ``location_radius_km`` absent).
+        - The center could not be geocoded.
+        - The listing location contains "remote" or "worldwide".
+
+        For listings whose location cannot be geocoded, the
+        ``location_geocode_fallback`` profile field controls the outcome:
+        - ``"pass"`` (default) → return None.
+        - ``"discard"`` → return a rejection reason string.
+
+        Args:
+            listing: Normalised listing dict.
+
+        Returns:
+            None to pass, or a descriptive string to reject.
+        """
+        if not self.is_active or self._center_coords is None:
+            return None
+
+        location = (listing.get("location") or "").strip()
+
+        # Remote/worldwide listings always pass.
+        if not location or _is_remote_location(location):
+            return None
+
+        listing_coords = self._resolve(location)
+
+        if listing_coords is None:
+            if self._fallback == "discard":
+                self.geo_discarded += 1
+                return f'geo_filter: location "{location}" could not be geocoded (fallback=discard)'
+            return None
+
+        try:
+            from geopy.distance import geodesic
+        except ImportError:
+            return None
+
+        distance_km = geodesic(self._center_coords, listing_coords).km
+
+        if distance_km > self._radius_km:
+            self.geo_discarded += 1
+            return (
+                f'geo_filter: "{location}" is {distance_km:.0f} km from '
+                f'"{self._center_str}" (radius {self._radius_km} km)'
+            )
+
+        return None
+
+
+# Backwards-compatible module-level helper for unit tests.
+def geo_filter(
+    listing: dict,
+    profile: dict,
+    geocache: dict[str, tuple[float, float] | None],
+) -> str | None:
+    """Thin wrapper around :class:`GeoFilter` for use in unit tests.
+
+    Accepts a pre-built geocache dict rather than the DB, so tests can inject
+    coordinates without touching the database.
+
+    Args:
+        listing:   Normalised listing dict.
+        profile:   Candidate profile dict.
+        geocache:  Mapping of location_text → (lat, lon) or None.
+
+    Returns:
+        None if the listing passes, or a rejection reason string.
+    """
+    center_str: str | None = profile.get("location_center")
+    radius_km: float | None = profile.get("location_radius_km")
+
+    if not center_str or radius_km is None:
+        return None
+
+    location = (listing.get("location") or "").strip()
+    if not location or _is_remote_location(location):
+        return None
+
+    listing_coords = geocache.get(location)
+    if listing_coords is None:
+        fallback = (profile.get("location_geocode_fallback") or "pass").lower()
+        if fallback == "discard":
+            return f'geo_filter: location "{location}" could not be geocoded (fallback=discard)'
+        return None
+
+    center_coords = geocache.get(center_str)
+    if center_coords is None:
+        return None  # Can't filter without center coords — skip silently.
+
+    try:
+        from geopy.distance import geodesic
+    except ImportError:
+        return None
+
+    distance_km = geodesic(center_coords, listing_coords).km
+    if distance_km > radius_km:
+        return (
+            f'geo_filter: "{location}" is {distance_km:.0f} km from '
+            f'"{center_str}" (radius {radius_km} km)'
+        )
     return None
 
 
@@ -590,6 +885,17 @@ def run(
 
     db.init_db(db_path=_DB_PATH)
 
+    # Initialise the geospatial filter.  Geocodes location_center up-front if
+    # location_center and location_radius_km are both set in the profile.
+    geo = GeoFilter(profile=profile, db_path=_DB_PATH)
+    if geo.is_active:
+        logger.info(
+            "  Geo filter: center=%r radius=%s km fallback=%s",
+            profile.get("location_center"),
+            profile.get("location_radius_km"),
+            profile.get("location_geocode_fallback", "pass"),
+        )
+
     try:
         providers = load_providers(
             providers_path=providers_path,
@@ -697,6 +1003,13 @@ def run(
                 if reason is not None:
                     prefiltered += 1
                     logger.info("FILTERED  [%s] %s — %s", src_name, title, reason)
+                    continue
+
+                # --- Geospatial filter ---
+                geo_reason = geo.check(listing)
+                if geo_reason is not None:
+                    prefiltered += 1
+                    logger.info("FILTERED  [%s] %s — %s", src_name, title, geo_reason)
                     continue
 
                 # --- Dedup ---
@@ -843,6 +1156,11 @@ def run(
         logger.info("  Cost breakdown: %s", breakdown)
     if source_fetch_counts:
         logger.info("  Sources: %s", " | ".join(f"{src}: {cnt}" for src, cnt in source_fetch_counts.items()))
+    if geo.is_active:
+        logger.info(
+            "  Geocache: %d hit(s) | %d miss(es) | %d failed | %d discarded by radius",
+            geo.hits, geo.misses, geo.failed, geo.geo_discarded,
+        )
     logger.info("=" * 60)
     logger.info("INGEST RUN COMPLETE")
     logger.info("=" * 60)

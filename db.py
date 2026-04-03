@@ -408,9 +408,74 @@ def init_db(db_path: str = _DEFAULT_DB_PATH) -> None:
             "CREATE INDEX IF NOT EXISTS idx_listings_redirect_url ON listings (redirect_url)"
         )
 
+        # Geocache table — stores resolved lat/lon for location strings so that
+        # repeated ingest runs do not re-call Nominatim for the same location.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS location_geocache (
+                location_text TEXT PRIMARY KEY,
+                lat REAL NOT NULL,
+                lon REAL NOT NULL,
+                cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         conn.commit()
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Geocache helpers
+# ---------------------------------------------------------------------------
+
+def geocache_get_many(
+    conn: sqlite3.Connection,
+    location_texts: list[str],
+) -> dict[str, tuple[float, float]]:
+    """Return cached (lat, lon) pairs for all location_text values that exist in the cache.
+
+    Uses a single query with an IN clause to minimise round-trips.
+
+    Args:
+        conn:            Open sqlite3 connection.
+        location_texts:  List of raw location strings to look up.
+
+    Returns:
+        Dict mapping location_text → (lat, lon) for cache hits only.
+        Absent keys are cache misses.
+    """
+    if not location_texts:
+        return {}
+    placeholders = ",".join("?" * len(location_texts))
+    rows = conn.execute(
+        f"SELECT location_text, lat, lon FROM location_geocache WHERE location_text IN ({placeholders})",
+        location_texts,
+    ).fetchall()
+    return {row["location_text"]: (row["lat"], row["lon"]) for row in rows}
+
+
+def geocache_put(
+    conn: sqlite3.Connection,
+    location_text: str,
+    lat: float,
+    lon: float,
+) -> None:
+    """Insert or replace a geocache entry.
+
+    Uses INSERT OR REPLACE so subsequent calls with the same location_text
+    update the cached_at timestamp rather than raising a UNIQUE conflict.
+
+    Args:
+        conn:           Open sqlite3 connection.
+        location_text:  Raw location string used as the cache key.
+        lat:            Latitude of the resolved location.
+        lon:            Longitude of the resolved location.
+    """
+    conn.execute(
+        "INSERT OR REPLACE INTO location_geocache (location_text, lat, lon) VALUES (?, ?, ?)",
+        (location_text, lat, lon),
+    )
+    conn.commit()
 
 
 # ---------------------------------------------------------------------------

@@ -18,7 +18,6 @@ GeoFilter integration tests use a temporary SQLite DB.
 
 import os
 import sys
-import sqlite3
 import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -372,7 +371,6 @@ class TestGeoFilterClass:
             "Fort Lauderdale, FL": _FORT_LAUDERDALE,
         })
         gf = GeoFilter(profile=_BASE_PROFILE, db_path=path)
-        hits_after_init = gf.hits
 
         # First check — reads from DB (1 hit for Fort Lauderdale).
         gf.check(_listing("Fort Lauderdale, FL"))

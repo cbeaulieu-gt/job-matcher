@@ -1149,14 +1149,22 @@ def profile():
                 updated_search.pop("distance", None)
             if salary_min_str:
                 try:
-                    updated_search["salary_min"] = int(salary_min_str)
+                    sal = int(salary_min_str)
+                    if sal >= 0:
+                        updated_search["salary_min"] = sal
+                    else:
+                        field_errors.append("search.salary_min must be 0 or greater")
                 except ValueError:
                     field_errors.append("search.salary_min must be a whole number")
             else:
                 updated_search.pop("salary_min", None)
             if max_days_str:
                 try:
-                    updated_search["max_days_old"] = int(max_days_str)
+                    days = int(max_days_str)
+                    if days > 0:
+                        updated_search["max_days_old"] = days
+                    else:
+                        field_errors.append("search.max_days_old must be greater than 0")
                 except ValueError:
                     field_errors.append("search.max_days_old must be a whole number")
             else:

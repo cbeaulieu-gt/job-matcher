@@ -671,3 +671,43 @@ class TestProfileNumericValidation:
         with open(tmp_config_path, encoding="utf-8") as f:
             cfg = json.load(f)
         assert cfg["search"]["distance"] == 0
+
+    # --- search_salary_min ---
+
+    def test_negative_salary_min_returns_422(
+        self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
+    ):
+        _write_config(tmp_config_path)
+        resp = self._post(client, search_salary_min="-1")
+        assert resp.status_code == 422
+
+    def test_non_numeric_salary_min_returns_422(
+        self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
+    ):
+        _write_config(tmp_config_path)
+        resp = self._post(client, search_salary_min="abc")
+        assert resp.status_code == 422
+
+    # --- search_max_days_old ---
+
+    def test_negative_max_days_old_returns_422(
+        self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
+    ):
+        _write_config(tmp_config_path)
+        resp = self._post(client, search_max_days_old="-1")
+        assert resp.status_code == 422
+
+    def test_zero_max_days_old_returns_422(
+        self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
+    ):
+        """Zero days old means no jobs would match — must be rejected."""
+        _write_config(tmp_config_path)
+        resp = self._post(client, search_max_days_old="0")
+        assert resp.status_code == 422
+
+    def test_non_numeric_max_days_old_returns_422(
+        self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
+    ):
+        _write_config(tmp_config_path)
+        resp = self._post(client, search_max_days_old="two")
+        assert resp.status_code == 422

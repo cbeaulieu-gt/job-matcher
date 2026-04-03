@@ -662,6 +662,51 @@ def update_score(
 
 
 # ---------------------------------------------------------------------------
+# Admin helpers
+# ---------------------------------------------------------------------------
+
+def get_listing_count(db_path: str = _DEFAULT_DB_PATH) -> int:
+    """Return the total number of rows in the listings table.
+
+    Used by the Clear Database UI to show the user how many records will be
+    deleted before they confirm.
+
+    Args:
+        db_path: Path to the SQLite database file.
+
+    Returns:
+        Integer row count (0 when the table is empty).
+    """
+    conn = get_connection(db_path)
+    try:
+        row = conn.execute("SELECT COUNT(*) FROM listings").fetchone()
+        return row[0] if row else 0
+    finally:
+        conn.close()
+
+
+def clear_all_listings(conn: sqlite3.Connection) -> int:
+    """Delete all rows from the listings table.  Schema and other tables are
+    left intact (e.g. ``location_geocache`` is not touched).
+
+    The DELETE is issued inside the caller-supplied connection so that the
+    caller controls transaction scope (e.g. can wrap this in a try/finally
+    that always commits).  ``conn.commit()`` is called here so that an
+    implicit transaction started by the DELETE is flushed.
+
+    Args:
+        conn: An open sqlite3 connection to the database.
+
+    Returns:
+        The number of rows deleted (equivalent to ``sqlite3.Cursor.rowcount``
+        after a DELETE without a WHERE clause).
+    """
+    cursor = conn.execute("DELETE FROM listings")
+    conn.commit()
+    return cursor.rowcount
+
+
+# ---------------------------------------------------------------------------
 # Read helpers
 # ---------------------------------------------------------------------------
 

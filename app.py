@@ -944,6 +944,8 @@ def settings():
     if request.method == "POST" and error:
         pass  # fall through to render with error
 
+    listing_count = db.get_listing_count(db_path=DB_PATH)
+
     return render_template(
         "settings.html",
         view="settings",
@@ -952,6 +954,7 @@ def settings():
         active_tab=active_tab,
         saved=saved,
         error=error,
+        listing_count=listing_count,
     )
 
 
@@ -1043,6 +1046,70 @@ def profile():
 @app.route("/settings/config")
 def settings_config_redirect():
     return redirect(url_for("profile"), code=301)
+
+
+# ---------------------------------------------------------------------------
+# Admin actions
+# ---------------------------------------------------------------------------
+
+@app.route("/admin/clear-db", methods=["POST"])
+def admin_clear_db():
+    """Delete all rows from the listings table.
+
+    Requires the ``confirmation`` form field to equal exactly ``"DELETE"``
+    (case-sensitive).  Any other value is rejected with 400 so that a
+    misconfigured HTMX request or stray form submit cannot wipe data silently.
+
+    On success the deleted row count is logged with a UTC timestamp and an
+    HTMX-compatible HTML fragment is returned so the caller can swap it into
+    the confirmation panel target.  The fragment includes the success notice
+    and resets the danger-zone panel to its collapsed initial state so the
+    user sees clear feedback without a full page reload.
+
+    Returns:
+        200 HTML fragment on success.
+        400 HTML fragment when the confirmation phrase is wrong.
+        500 HTML fragment on database error.
+    """
+    confirmation = request.form.get("confirmation", "").strip()
+
+    if confirmation != "DELETE":
+        html = (
+            '<p class="save-error" id="clear-db-result">'
+            "Confirmation phrase did not match — database was not cleared."
+            "</p>"
+        )
+        return make_response(html, 400)
+
+    try:
+        conn = db.get_connection(DB_PATH)
+        try:
+            deleted = db.clear_all_listings(conn)
+        finally:
+            conn.close()
+    except Exception as exc:  # pragma: no cover — DB errors are rare in tests
+        app.logger.error("clear_all_listings failed: %s", exc)
+        html = (
+            '<p class="save-error" id="clear-db-result">'
+            f"Database error — listings were not cleared: {exc}"
+            "</p>"
+        )
+        return make_response(html, 500)
+
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    app.logger.info("[%s] admin/clear-db: deleted %d listing(s).", ts, deleted)
+
+    # Return an HTML fragment that:
+    # 1. Replaces the confirmation panel with a success notice.
+    # 2. Hides the danger-zone panel (collapsed back to just the trigger button).
+    noun = "listing" if deleted == 1 else "listings"
+    html = (
+        f'<p class="save-notice" id="clear-db-result">'
+        f"{deleted} {noun} deleted successfully."
+        f"</p>"
+        f'<div id="clear-db-panel" style="display:none"></div>'
+    )
+    return make_response(html, 200)
 
 
 # ---------------------------------------------------------------------------

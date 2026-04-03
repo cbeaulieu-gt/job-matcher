@@ -352,6 +352,39 @@ Tab switching is handled by a small inline JS block (no library).
 | `.save-error` | Red (`--score-low-*`) | Persistent error |
 | `.setup-banner` | Amber (`--score-mid-*`) | Setup/configuration prompt; left border `--text-accent` |
 
+### Destructive Action / Confirmation Panel
+
+Used on the Settings page **Danger Zone** to gate irreversible operations (e.g. "Clear Database") behind an explicit typed confirmation. The pattern has three layers:
+
+1. **Trigger button (`.btn-danger`)** — at rest, sitting outside the confirmation panel. Red border/text (`--score-low-*`) against the neutral page background. Clicking it reveals the panel via JS toggle (no page reload).
+2. **Confirmation panel (`.clear-db-panel`)** — hidden by default (`display:none`); toggled to `.visible` by the trigger's click handler. Background `--score-low-bg`, border `--score-low-border`, `--radius-md`. Contains:
+   - A `<ul class="clear-db-warnings">` of consequence bullets (`--font-body`, `--score-low-text`).
+   - A `<p class="clear-db-count">` showing the current row count so the user knows what they are deleting (`--font-mono`, `--score-low-text`).
+   - A `<form class="clear-db-form">` containing the label, text input, submit, and cancel.
+3. **Confirmation input (`.clear-db-input`) + submit button (`.btn-danger-confirm`)** — the submit starts `disabled`; a vanilla `oninput` handler activates it only when the input value matches the required phrase exactly (e.g. `"DELETE"`). No framework required.
+
+**Cancel button (`.clear-db-cancel`)** — muted text-only button that collapses the panel and resets the input.
+
+**HTMX wiring** — the form posts via `hx-post`, targeting `#clear-db-result` (a `<div>` that sits above the trigger button). The route returns an HTML fragment; on success the fragment contains a `.save-notice` confirming the count deleted and a hidden `#clear-db-panel` div to collapse the panel.
+
+**Color rules** — use the full `--score-low-*` triplet (`--score-low-bg`, `--score-low-text`, `--score-low-border`) consistently across the panel, label, input border, and button. Do not mix in amber or neutral tier tokens inside the danger panel.
+
+**Section wrapper (`.danger-zone`)** — placed after the tabbed settings forms, separated by a `--border-subtle` top border. Contains a `.danger-zone-heading` (`--font-mono`, uppercase, `--score-low-text`).
+
+| Class | Element | Notes |
+|---|---|---|
+| `.danger-zone` | `<div>` | Section wrapper; `margin-top: 2.5rem`, `border-top: 1px solid var(--border-subtle)` |
+| `.danger-zone-heading` | `<h2>` | `--font-mono` 0.72rem uppercase 0.08em, `--score-low-text`; marks the section as destructive |
+| `.btn-danger` | `<button>` | Trigger to reveal the panel; `--bg-raised` bg, `--score-low-text` color, `--score-low-border` border; hover lifts to `--score-low-bg` |
+| `.clear-db-panel` | `<div>` | Confirmation panel; hidden until `.visible` added by JS; `--score-low-bg` / `--score-low-border` |
+| `.clear-db-warnings` | `<ul>` | Consequence list; `--font-body` 0.84rem, `--score-low-text`; `::before` content "⚠ " |
+| `.clear-db-count` | `<p>` | Row count display; `--font-mono` 0.76rem, `--score-low-text` |
+| `.clear-db-form` | `<form>` | Flex column, gap 0.5rem, max-width 380px; HTMX `hx-post` |
+| `.clear-db-label` | `<label>` | `--font-mono` 0.68rem uppercase 0.08em, `--score-low-text` |
+| `.clear-db-input` | `<input type="text">` | `--font-mono` 0.76rem; `--bg-raised` bg; `--score-low-border` border; focus border to `--score-low-text` |
+| `.btn-danger-confirm` | `<button type="submit">` | Starts `disabled`; enabled by `oninput` check; `--score-low-bg` / `--score-low-text` / `--score-low-text` border; hover inverts (text on `--score-low-text` bg) |
+| `.clear-db-cancel` | `<button type="button">` | Muted text-only; collapses panel and resets input |
+
 ### Empty State
 
 | Class | Notes |

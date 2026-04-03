@@ -24,6 +24,12 @@
     "fintech"
   ],
   "location_preference": "remote, or on-site / hybrid in [your city]",
+  "_location_center_help": "Optional. Set to your city/region to enable geospatial filtering. Listings outside location_radius_km are discarded before LLM scoring. Uses OpenStreetMap Nominatim — no API key needed.",
+  "location_center": "Miami, FL",
+  "_location_radius_km_help": "Optional. Radius in km around location_center. Listings outside this radius are discarded (after remote/worldwide listings are exempted). Only active when location_center is also set.",
+  "location_radius_km": 80,
+  "_location_geocode_fallback_help": "Optional. Controls what happens when a listing's location string cannot be geocoded. 'pass' (default) lets the listing through; 'discard' rejects it.",
+  "location_geocode_fallback": "pass",
   "_scoring_notes_help": "scoring_notes is injected verbatim into the LLM scoring prompt. Use it to give the model hard guidance that overrides or supplements the other fields — e.g. seniority weighting rules, industries to deprioritise, or any other scoring policy. Accepts a string or an array of strings.",
   "scoring_notes": [
     "Senior-level roles are strongly preferred. If two roles are otherwise equal, a Senior role should score 1-2 points higher than a Mid-level role.",

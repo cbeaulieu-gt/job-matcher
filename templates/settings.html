@@ -853,16 +853,12 @@
   trigger.addEventListener('click', showPanel);
   if (cancel) cancel.addEventListener('click', hidePanel);
 
-  // After a successful HTMX clear, collapse the panel and hide the trigger
-  // so the UI reflects the empty state without a page reload.
+  // After a successful HTMX clear, reload the page so the listing count
+  // and button state are refreshed from the server.
   if (form) {
     form.addEventListener('htmx:afterRequest', function (evt) {
       if (evt.detail.successful) {
-        hidePanel();
-        // Dim the trigger to signal the DB is now empty
-        trigger.disabled = true;
-        trigger.style.opacity = '0.5';
-        trigger.style.pointerEvents = 'none';
+        window.location.reload();
       }
     });
   }

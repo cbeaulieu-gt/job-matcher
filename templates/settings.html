@@ -215,6 +215,143 @@
     .provider-home-link:hover {
       color: var(--text-accent);
     }
+
+    /* ── Danger Zone / destructive confirmation panel ────────────── */
+    .danger-zone {
+      margin-top: 2.5rem;
+      border-top: 1px solid var(--border-subtle);
+      padding-top: 1.5rem;
+    }
+    .danger-zone-heading {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      font-weight: normal;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--score-low-text);
+      margin: 0 0 1rem;
+    }
+    .btn-danger {
+      background: var(--bg-raised);
+      color: var(--score-low-text);
+      border: 1px solid var(--score-low-border);
+      border-radius: var(--radius-md);
+      font-family: var(--font-mono);
+      font-size: 0.76rem;
+      letter-spacing: 0.04em;
+      padding: 0.45rem 1rem;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .btn-danger:hover {
+      background: var(--score-low-bg);
+      border-color: var(--score-low-text);
+    }
+    .btn-danger:focus-visible {
+      outline: 2px solid var(--score-low-text);
+      outline-offset: 2px;
+    }
+    /* Confirmation panel — hidden by default, revealed via JS toggle */
+    .clear-db-panel {
+      display: none;
+      margin-top: 1rem;
+      background: var(--score-low-bg);
+      border: 1px solid var(--score-low-border);
+      border-radius: var(--radius-md);
+      padding: 1rem 1.25rem;
+    }
+    .clear-db-panel.visible {
+      display: block;
+    }
+    .clear-db-warnings {
+      list-style: none;
+      margin: 0 0 1rem;
+      padding: 0;
+    }
+    .clear-db-warnings li {
+      font-family: var(--font-body);
+      font-size: 0.84rem;
+      color: var(--score-low-text);
+      padding: 0.15rem 0;
+    }
+    .clear-db-warnings li::before {
+      content: "⚠ ";
+      opacity: 0.7;
+    }
+    .clear-db-count {
+      font-family: var(--font-mono);
+      font-size: 0.76rem;
+      color: var(--score-low-text);
+      margin-bottom: 1rem;
+    }
+    .clear-db-form {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      max-width: 380px;
+    }
+    .clear-db-label {
+      font-family: var(--font-mono);
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--score-low-text);
+    }
+    .clear-db-input {
+      font-family: var(--font-mono);
+      font-size: 0.76rem;
+      background: var(--bg-raised);
+      color: var(--text-primary);
+      border: 1px solid var(--score-low-border);
+      border-radius: var(--radius-md);
+      padding: 0.4rem 0.6rem;
+      width: 100%;
+    }
+    .clear-db-input:focus {
+      outline: none;
+      border-color: var(--score-low-text);
+      color: var(--text-primary);
+    }
+    .btn-danger-confirm {
+      background: var(--score-low-bg);
+      color: var(--score-low-text);
+      border: 1px solid var(--score-low-text);
+      border-radius: var(--radius-md);
+      font-family: var(--font-mono);
+      font-size: 0.76rem;
+      letter-spacing: 0.04em;
+      padding: 0.45rem 1rem;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+      align-self: flex-start;
+    }
+    .btn-danger-confirm:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+      pointer-events: none;
+    }
+    .btn-danger-confirm:not(:disabled):hover {
+      background: var(--score-low-text);
+      color: var(--bg-base);
+    }
+    .btn-danger-confirm:focus-visible {
+      outline: 2px solid var(--score-low-text);
+      outline-offset: 2px;
+    }
+    .clear-db-cancel {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 0.3rem 0;
+      align-self: flex-start;
+      transition: color 0.15s;
+    }
+    .clear-db-cancel:hover {
+      color: var(--text-secondary);
+    }
   </style>
 </head>
 <body>
@@ -444,6 +581,69 @@
     </form>
   </div>
 
+  {# ── Danger Zone ──────────────────────────────────────────────── #}
+  <div class="danger-zone">
+    <h2 class="danger-zone-heading">Danger Zone</h2>
+
+    {# Result target — HTMX swaps success/error notices here #}
+    <div id="clear-db-result"></div>
+
+    <button
+      type="button"
+      class="btn-danger"
+      id="clear-db-trigger"
+      aria-expanded="false"
+      aria-controls="clear-db-panel">
+      Clear Database
+    </button>
+
+    <div class="clear-db-panel" id="clear-db-panel" role="region" aria-label="Clear database confirmation">
+      <ul class="clear-db-warnings">
+        <li>All job listings will be permanently deleted.</li>
+        <li>This cannot be undone.</li>
+        <li>Bookmarked and applied listings will also be lost.</li>
+      </ul>
+      <p class="clear-db-count">
+        Current record count:
+        <strong>{{ listing_count }}</strong>
+        {{ "listing" if listing_count == 1 else "listings" }}
+      </p>
+
+      <form
+        class="clear-db-form"
+        hx-post="/admin/clear-db"
+        hx-target="#clear-db-result"
+        hx-swap="innerHTML"
+        id="clear-db-form">
+        <label class="clear-db-label" for="clear-db-confirmation">
+          Type DELETE to confirm
+        </label>
+        <input
+          type="text"
+          id="clear-db-confirmation"
+          name="confirmation"
+          class="clear-db-input"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="DELETE"
+          oninput="document.getElementById('clear-db-submit').disabled = (this.value !== 'DELETE');">
+        <button
+          type="submit"
+          id="clear-db-submit"
+          class="btn-danger-confirm"
+          disabled>
+          Delete All Listings
+        </button>
+        <button
+          type="button"
+          class="clear-db-cancel"
+          id="clear-db-cancel">
+          Cancel
+        </button>
+      </form>
+    </div>
+  </div>
+
 </div>
 
 {# ── Tab switching script ──────────────────────────────────────── #}
@@ -621,6 +821,47 @@
   }
 
   var sortable = initSortable(listEl);
+}());
+</script>
+{# ── Danger Zone script ───────────────────────────────────────── #}
+<script>
+(function () {
+  var trigger  = document.getElementById('clear-db-trigger');
+  var panel    = document.getElementById('clear-db-panel');
+  var cancel   = document.getElementById('clear-db-cancel');
+  var form     = document.getElementById('clear-db-form');
+  var input    = document.getElementById('clear-db-confirmation');
+  var resultEl = document.getElementById('clear-db-result');
+
+  if (!trigger || !panel) return;
+
+  function showPanel() {
+    panel.classList.add('visible');
+    trigger.setAttribute('aria-expanded', 'true');
+    if (input) input.focus();
+  }
+
+  function hidePanel() {
+    panel.classList.remove('visible');
+    trigger.setAttribute('aria-expanded', 'false');
+    // Reset confirmation input and submit button state for next open
+    if (input) input.value = '';
+    var submit = document.getElementById('clear-db-submit');
+    if (submit) submit.disabled = true;
+  }
+
+  trigger.addEventListener('click', showPanel);
+  if (cancel) cancel.addEventListener('click', hidePanel);
+
+  // After a successful HTMX clear, reload the page so the listing count
+  // and button state are refreshed from the server.
+  if (form) {
+    form.addEventListener('htmx:afterRequest', function (evt) {
+      if (evt.detail.successful) {
+        window.location.reload();
+      }
+    });
+  }
 }());
 </script>
 </body>

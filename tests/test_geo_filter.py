@@ -39,11 +39,13 @@ _FORT_LAUDERDALE = (26.1224, -80.1373)
 # Orlando, FL — ~380 km from Miami (outside 80 km radius)
 _ORLANDO = (28.5383, -81.3792)
 
-# A profile dict with geospatial filter enabled.
+# A profile dict with geospatial filter enabled (nested schema).
 _BASE_PROFILE = {
-    "location_center": "Miami, FL",
-    "location_radius_km": 80,
-    "location_geocode_fallback": "pass",
+    "location": {
+        "center": "Miami, FL",
+        "radius_km": 80,
+        "geocode_fallback": "pass",
+    },
 }
 
 
@@ -96,16 +98,16 @@ def test_is_remote_location_empty_string_false():
 # ---------------------------------------------------------------------------
 
 def test_geo_filter_disabled_when_no_center():
-    """Filter is skipped entirely when location_center is absent."""
-    profile = {"location_radius_km": 80}
+    """Filter is skipped entirely when location.center is absent."""
+    profile = {"location": {"radius_km": 80}}
     listing = _listing("Orlando, FL")
     cache = {"Miami, FL": _MIAMI, "Orlando, FL": _ORLANDO}
     assert geo_filter(listing, profile, cache) is None
 
 
 def test_geo_filter_disabled_when_no_radius():
-    """Filter is skipped entirely when location_radius_km is absent."""
-    profile = {"location_center": "Miami, FL"}
+    """Filter is skipped entirely when location.radius_km is absent."""
+    profile = {"location": {"center": "Miami, FL"}}
     listing = _listing("Orlando, FL")
     cache = {"Miami, FL": _MIAMI, "Orlando, FL": _ORLANDO}
     assert geo_filter(listing, profile, cache) is None
@@ -210,16 +212,16 @@ def test_geo_filter_rejection_message_contains_radius():
 # ---------------------------------------------------------------------------
 
 def test_geo_filter_ungeocoded_fallback_pass():
-    """Ungeocoded location passes when fallback='pass' (the default)."""
-    profile = {**_BASE_PROFILE, "location_geocode_fallback": "pass"}
+    """Ungeocoded location passes when geocode_fallback='pass'."""
+    profile = {"location": {**_BASE_PROFILE["location"], "geocode_fallback": "pass"}}
     listing = _listing("Unknown Small Town, XY")
     cache = {"Miami, FL": _MIAMI}  # no entry for the listing location
     assert geo_filter(listing, profile, cache) is None
 
 
 def test_geo_filter_ungeocoded_fallback_discard():
-    """Ungeocoded location is rejected when fallback='discard'."""
-    profile = {**_BASE_PROFILE, "location_geocode_fallback": "discard"}
+    """Ungeocoded location is rejected when geocode_fallback='discard'."""
+    profile = {"location": {**_BASE_PROFILE["location"], "geocode_fallback": "discard"}}
     listing = _listing("Unknown Small Town, XY")
     cache = {"Miami, FL": _MIAMI}
     result = geo_filter(listing, profile, cache)
@@ -229,11 +231,13 @@ def test_geo_filter_ungeocoded_fallback_discard():
 
 
 def test_geo_filter_ungeocoded_fallback_defaults_to_pass():
-    """When location_geocode_fallback is absent, ungeocoded locations pass."""
+    """When location.geocode_fallback is absent, ungeocoded locations pass."""
     profile = {
-        "location_center": "Miami, FL",
-        "location_radius_km": 80,
-        # no location_geocode_fallback key
+        "location": {
+            "center": "Miami, FL",
+            "radius_km": 80,
+            # no geocode_fallback key
+        }
     }
     listing = _listing("Unknown Small Town, XY")
     cache = {"Miami, FL": _MIAMI}
@@ -279,12 +283,12 @@ class TestGeoFilterClass:
 
     def test_inactive_when_no_center(self):
         path = _make_temp_db()
-        gf = GeoFilter(profile={"location_radius_km": 80}, db_path=path)
+        gf = GeoFilter(profile={"location": {"radius_km": 80}}, db_path=path)
         assert gf.is_active is False
 
     def test_inactive_when_no_radius(self):
         path = _make_temp_db()
-        gf = GeoFilter(profile={"location_center": "Miami, FL"}, db_path=path)
+        gf = GeoFilter(profile={"location": {"center": "Miami, FL"}}, db_path=path)
         assert gf.is_active is False
 
     def test_check_returns_none_when_inactive(self):
@@ -335,20 +339,20 @@ class TestGeoFilterClass:
         assert gf.hits >= 1
 
     def test_ungeocoded_fallback_discard_via_class(self):
-        """GeoFilter.check() respects fallback=discard for unresolvable locations."""
+        """GeoFilter.check() respects geocode_fallback=discard for unresolvable locations."""
         path = _make_temp_db()
         _prepopulate_geocache(path, {"Miami, FL": _MIAMI})
-        profile = {**_BASE_PROFILE, "location_geocode_fallback": "discard"}
+        profile = {"location": {**_BASE_PROFILE["location"], "geocode_fallback": "discard"}}
         gf = GeoFilter(profile=profile, db_path=path)
         result = gf.check(_listing("Nonexistent Place, ZZ"))
         assert result is not None
         assert "could not be geocoded" in result
 
     def test_ungeocoded_fallback_pass_via_class(self):
-        """GeoFilter.check() lets unresolvable locations through when fallback=pass."""
+        """GeoFilter.check() lets unresolvable locations through when geocode_fallback=pass."""
         path = _make_temp_db()
         _prepopulate_geocache(path, {"Miami, FL": _MIAMI})
-        profile = {**_BASE_PROFILE, "location_geocode_fallback": "pass"}
+        profile = {"location": {**_BASE_PROFILE["location"], "geocode_fallback": "pass"}}
         gf = GeoFilter(profile=profile, db_path=path)
         assert gf.check(_listing("Nonexistent Place, ZZ")) is None
 
@@ -379,3 +383,96 @@ class TestGeoFilterClass:
         # Second check — reads from in-memory cache, no new DB hit.
         gf.check(_listing("Fort Lauderdale, FL"))
         assert gf.hits == hits_after_first  # no additional DB reads
+
+
+# ---------------------------------------------------------------------------
+# _generate_location_notes helper
+# ---------------------------------------------------------------------------
+
+from ingest import _generate_location_notes  # noqa: E402
+
+
+def test_generate_location_notes_with_center_and_radius():
+    """Auto-generated notes include both the radius and center."""
+    notes = _generate_location_notes("Miami, FL", 80)
+    assert notes is not None
+    assert "80" in notes
+    assert "Miami, FL" in notes
+
+
+def test_generate_location_notes_center_only():
+    """When radius is absent, notes include the center without a distance."""
+    notes = _generate_location_notes("Miami, FL", None)
+    assert notes is not None
+    assert "Miami, FL" in notes
+
+
+def test_generate_location_notes_neither_set():
+    """Returns None when neither center nor radius is given."""
+    assert _generate_location_notes(None, None) is None
+
+
+def test_generate_location_notes_radius_without_center():
+    """Returns None when only radius is set — no center to reference."""
+    assert _generate_location_notes(None, 80) is None
+
+
+# ---------------------------------------------------------------------------
+# Nested schema — new field reads
+# ---------------------------------------------------------------------------
+
+def test_geo_filter_nested_schema_passes_within_radius():
+    """geo_filter reads center/radius_km from nested location block."""
+    profile = {"location": {"center": "Miami, FL", "radius_km": 80}}
+    listing = _listing("Fort Lauderdale, FL")
+    cache = _geocache()
+    assert geo_filter(listing, profile, cache) is None
+
+
+def test_geo_filter_nested_schema_activates_filter():
+    """geo_filter is active (reads center + radius_km) from the nested block.
+
+    Rather than testing the radius rejection (which depends on geopy and is
+    already covered by pre-existing tests), this verifies that the nested
+    schema activates the filter — demonstrated by the fallback=discard path
+    which does not require geopy.
+    """
+    profile = {"location": {"center": "Miami, FL", "radius_km": 80, "geocode_fallback": "discard"}}
+    # Listing location present in profile but NOT in geocache → triggers fallback
+    listing = _listing("Unknown Place, ZZ")
+    cache = {"Miami, FL": _MIAMI}  # no entry for "Unknown Place, ZZ"
+    result = geo_filter(listing, profile, cache)
+    assert result is not None
+    assert "could not be geocoded" in result
+
+
+# ---------------------------------------------------------------------------
+# Old flat fields are no longer read
+# ---------------------------------------------------------------------------
+
+def test_flat_location_fields_ignored_by_geo_filter():
+    """A profile with only the old flat location fields disables the filter.
+
+    This verifies that the migration broke the old schema — callers must
+    update to the nested ``location`` block.
+    """
+    old_style_profile = {
+        "location_center": "Miami, FL",
+        "location_radius_km": 80,
+        "location_geocode_fallback": "discard",
+    }
+    listing = _listing("Orlando, FL")
+    cache = {"Miami, FL": _MIAMI, "Orlando, FL": _ORLANDO}
+    # With flat fields the filter is not active, so Orlando passes.
+    assert geo_filter(listing, old_style_profile, cache) is None
+
+
+def test_flat_fields_do_not_activate_geo_filter_class():
+    """GeoFilter.is_active is False when only old flat fields are present."""
+    path = _make_temp_db()
+    old_style_profile = {
+        "location_center": "Miami, FL",
+        "location_radius_km": 80,
+    }
+    gf = GeoFilter(profile=old_style_profile, db_path=path)
+    assert gf.is_active is False

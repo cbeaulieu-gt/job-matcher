@@ -316,8 +316,8 @@ class GeoFilter:
     and run statistics.  Instantiate once per ``run()`` call; call
     :meth:`check` for each listing.
 
-    When ``profile`` does not contain both ``location_center`` and
-    ``location_radius_km``, :meth:`is_active` returns False and :meth:`check`
+    When ``profile`` does not contain a ``location`` block with both ``center`` and
+    ``radius_km``, :meth:`is_active` returns ``False`` and :meth:`check`
     is always a no-op — no geocoding is attempted.
 
     Attributes:
@@ -328,9 +328,10 @@ class GeoFilter:
     """
 
     def __init__(self, profile: dict, db_path: str) -> None:
-        self._center_str: str | None = profile.get("location_center")
-        self._radius_km: float | None = profile.get("location_radius_km")
-        self._fallback: str = (profile.get("location_geocode_fallback") or "pass").lower()
+        loc = profile.get("location", {})
+        self._center_str: str | None = loc.get("center")
+        self._radius_km: float | None = loc.get("radius_km")
+        self._fallback: str = (loc.get("geocode_fallback") or "pass").lower()
         self._db_path = db_path
 
         # In-memory layer over the DB geocache — avoids repeated DB hits for
@@ -357,14 +358,14 @@ class GeoFilter:
             self._center_coords = self._resolve(self._center_str)
             if self._center_coords is None:
                 logger.warning(
-                    "geo_filter: location_center %r could not be geocoded; "
+                    "geo_filter: location.center %r could not be geocoded; "
                     "geospatial filter will be skipped for this run",
                     self._center_str,
                 )
 
     @property
     def is_active(self) -> bool:
-        """True when both ``location_center`` and ``location_radius_km`` are set."""
+        """True when both ``location.center`` and ``location.radius_km`` are set."""
         return bool(self._center_str) and self._radius_km is not None
 
     def _geolocator_instance(self):
@@ -444,12 +445,12 @@ class GeoFilter:
         """Return None if the listing passes the geospatial filter, or a reason string.
 
         This method is a no-op (always returns None) when:
-        - The filter is not active (``location_center`` / ``location_radius_km`` absent).
+        - The filter is not active (``location.center`` / ``location.radius_km`` absent).
         - The center could not be geocoded.
         - The listing location contains "remote" or "worldwide".
 
         For listings whose location cannot be geocoded, the
-        ``location_geocode_fallback`` profile field controls the outcome:
+        ``location.geocode_fallback`` profile field controls the outcome:
         - ``"pass"`` (default) → return None.
         - ``"discard"`` → return a rejection reason string.
 
@@ -512,8 +513,9 @@ def geo_filter(
     Returns:
         None if the listing passes, or a rejection reason string.
     """
-    center_str: str | None = profile.get("location_center")
-    radius_km: float | None = profile.get("location_radius_km")
+    loc = profile.get("location", {})
+    center_str: str | None = loc.get("center")
+    radius_km: float | None = loc.get("radius_km")
 
     if not center_str or radius_km is None:
         return None
@@ -524,7 +526,7 @@ def geo_filter(
 
     listing_coords = geocache.get(location)
     if listing_coords is None:
-        fallback = (profile.get("location_geocode_fallback") or "pass").lower()
+        fallback = (loc.get("geocode_fallback") or "pass").lower()
         if fallback == "discard":
             return f'geo_filter: location "{location}" could not be geocoded (fallback=discard)'
         return None
@@ -615,6 +617,32 @@ def scrape_description(url: str, fallback: str = "") -> tuple[str, bool]:
         return fallback, False
 
     return cleaned, True
+
+
+# ---------------------------------------------------------------------------
+# Location notes helper
+# ---------------------------------------------------------------------------
+
+
+def _generate_location_notes(center: str | None, radius_km: float | None) -> str | None:
+    """Auto-generate a human-readable location hint for the LLM scoring prompt.
+
+    Used when ``profile["location"]["notes"]`` is absent.  Returns ``None``
+    when neither *center* nor *radius_km* is set so callers can omit the
+    field entirely.
+
+    Args:
+        center:    Geocodable center string (e.g. ``"Miami, FL"``), or None.
+        radius_km: Filter radius in km, or None.
+
+    Returns:
+        A short description string, or ``None`` if no location config is set.
+    """
+    if center and radius_km is not None:
+        return f"Within {radius_km:.0f} km of {center}"
+    if center:
+        return f"Near {center}"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -770,8 +798,21 @@ def score_listing_with_fallback(
         Scoring result dict with an added ``"model_used"`` key, or ``None``
         if every provider in the chain failed.
     """
+    # Build the profile dict that is serialised into the LLM prompt.
+    # The nested ``location`` block is replaced with a flat ``location_notes``
+    # string so the model receives a clean, readable hint.  Internal fields
+    # (center, radius_km, geocode_fallback) that are irrelevant to scoring are
+    # stripped to avoid confusing the model.
+    loc = profile.get("location", {})
+    location_notes = loc.get("notes") or _generate_location_notes(
+        loc.get("center"), loc.get("radius_km")
+    )
+    scoring_profile = {k: v for k, v in profile.items() if k != "location"}
+    if location_notes:
+        scoring_profile["location_notes"] = location_notes
+
     prompt = _PROMPT_TEMPLATE.format(
-        profile_json=json.dumps(profile, indent=2),
+        profile_json=json.dumps(scoring_profile, indent=2),
         description=listing["description"],
     )
 
@@ -885,15 +926,16 @@ def run(
 
     db.init_db(db_path=_DB_PATH)
 
-    # Initialise the geospatial filter.  Geocodes location_center up-front if
-    # location_center and location_radius_km are both set in the profile.
+    # Initialise the geospatial filter.  Geocodes location.center up-front if
+    # location.center and location.radius_km are both set in the profile.
     geo = GeoFilter(profile=profile, db_path=_DB_PATH)
     if geo.is_active:
+        _loc = profile.get("location", {})
         logger.info(
             "  Geo filter: center=%r radius=%s km fallback=%s",
-            profile.get("location_center"),
-            profile.get("location_radius_km"),
-            profile.get("location_geocode_fallback", "pass"),
+            _loc.get("center"),
+            _loc.get("radius_km"),
+            _loc.get("geocode_fallback", "pass"),
         )
 
     try:

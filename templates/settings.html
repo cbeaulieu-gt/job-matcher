@@ -603,7 +603,7 @@
         </div>
 
         <label class="settings-label" for="search_results_per_page">Results Per Page</label>
-        <p style="font-family: var(--font-mono); font-size: 0.68rem; color: var(--text-muted); margin-top: 2px; margin-bottom: 0; line-height: 1.5;">
+        <p class="field-hint">
           Number of results fetched per page from Adzuna. Maximum is 50.
         </p>
         <input id="search_results_per_page" class="settings-input" type="number"
@@ -611,7 +611,7 @@
                value="{{ search_cfg.get('results_per_page', '') }}">
 
         <label class="settings-label" for="search_max_pages">Max Pages</label>
-        <p style="font-family: var(--font-mono); font-size: 0.68rem; color: var(--text-muted); margin-top: 2px; margin-bottom: 0; line-height: 1.5;">
+        <p class="field-hint">
           Maximum number of pages fetched per ingest run. Caps total listings processed.
         </p>
         <input id="search_max_pages" class="settings-input" type="number"

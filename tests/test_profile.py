@@ -578,3 +578,96 @@ class TestSettingsSearchTab:
         body = client.get("/settings?tab=search").data.decode()
         assert "results_per_page" in body
         assert "max_pages" in body
+
+
+# ===========================================================================
+# POST /profile — numeric field validation edge cases
+# ===========================================================================
+
+
+class TestProfileNumericValidation:
+    """Regression tests for the numeric field validation added in PR #327.
+
+    Covers: location.radius_km (must be > 0) and search.distance (must be >= 0,
+    whole number).  All invalid inputs must return 422 without touching disk.
+    """
+
+    def _post(self, client, **kwargs):
+        data = {
+            "scoring_threshold": "7.0",
+            "search_country": "us",
+            "search_what": "engineer",
+            "search_where": "miami",
+            "location_geocode_fallback": "pass",
+        }
+        data.update(kwargs)
+        return client.post("/profile", data=data)
+
+    # --- location_radius_km ---
+
+    def test_negative_radius_returns_422(
+        self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
+    ):
+        _write_config(tmp_config_path)
+        resp = self._post(client, location_radius_km="-1")
+        assert resp.status_code == 422
+
+    def test_zero_radius_returns_422(
+        self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
+    ):
+        _write_config(tmp_config_path)
+        resp = self._post(client, location_radius_km="0")
+        assert resp.status_code == 422
+
+    def test_non_numeric_radius_returns_422(
+        self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
+    ):
+        _write_config(tmp_config_path)
+        resp = self._post(client, location_radius_km="abc")
+        assert resp.status_code == 422
+
+    def test_valid_positive_radius_accepted(
+        self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
+    ):
+        """Positive radius must be saved without error."""
+        _write_config(tmp_config_path)
+        resp = self._post(client, location_radius_km="80")
+        assert resp.status_code == 200
+        with open(tmp_profile_path, encoding="utf-8") as f:
+            prof = json.load(f)
+        assert prof["location"]["radius_km"] == 80.0
+
+    def test_radius_validation_does_not_write_profile(
+        self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
+    ):
+        """On radius validation error, profile.json must not be created."""
+        _write_config(tmp_config_path)
+        self._post(client, location_radius_km="-5")
+        assert not os.path.exists(tmp_profile_path)
+
+    # --- search_distance ---
+
+    def test_non_numeric_distance_returns_422(
+        self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
+    ):
+        _write_config(tmp_config_path)
+        resp = self._post(client, search_distance="far")
+        assert resp.status_code == 422
+
+    def test_negative_distance_returns_422(
+        self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
+    ):
+        _write_config(tmp_config_path)
+        resp = self._post(client, search_distance="-10")
+        assert resp.status_code == 422
+
+    def test_zero_distance_accepted(
+        self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
+    ):
+        """Zero is a valid distance (Adzuna default — no radius constraint)."""
+        _write_config(tmp_config_path)
+        resp = self._post(client, search_distance="0")
+        assert resp.status_code == 200
+        with open(tmp_config_path, encoding="utf-8") as f:
+            cfg = json.load(f)
+        assert cfg["search"]["distance"] == 0

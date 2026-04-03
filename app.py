@@ -166,12 +166,12 @@ def _write_json_atomic(path: str, data: dict) -> None:
         with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
         os.replace(tmp_path, path)
-    except OSError:
+    finally:
         try:
-            os.unlink(tmp_path)
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
         except OSError:
             pass
-        raise
 
 
 def load_profile(path: str = _PROFILE_PATH) -> dict:
@@ -1086,6 +1086,9 @@ def profile():
             error = "; ".join(validation_errors)
             status_code = 422
         else:
+            # Collect any additional field-level validation errors.
+            field_errors: list[str] = []
+
             # Build profile.json dict from profile fields.
             location_block: dict = {}
             loc_center = request.form.get("location_center", "").strip()
@@ -1096,9 +1099,13 @@ def profile():
                 location_block["center"] = loc_center
             if loc_radius:
                 try:
-                    location_block["radius_km"] = float(loc_radius)
+                    radius = float(loc_radius)
+                    if radius > 0:
+                        location_block["radius_km"] = radius
+                    else:
+                        field_errors.append("location.radius_km must be greater than 0")
                 except ValueError:
-                    pass
+                    field_errors.append("location.radius_km must be a number")
             location_block["geocode_fallback"] = loc_fallback or "pass"
             if loc_notes:
                 location_block["notes"] = loc_notes
@@ -1131,52 +1138,62 @@ def profile():
             updated_search["where"] = request.form.get("search_where", "").strip()
             if distance_str:
                 try:
-                    updated_search["distance"] = int(distance_str)
+                    dist = int(distance_str)
+                    if dist >= 0:
+                        updated_search["distance"] = dist
+                    else:
+                        field_errors.append("search.distance must be 0 or greater")
                 except ValueError:
-                    updated_search["distance"] = 0
+                    field_errors.append("search.distance must be a whole number")
             else:
                 updated_search.pop("distance", None)
             if salary_min_str:
                 try:
                     updated_search["salary_min"] = int(salary_min_str)
                 except ValueError:
-                    updated_search.pop("salary_min", None)
+                    field_errors.append("search.salary_min must be a whole number")
             else:
                 updated_search.pop("salary_min", None)
             if max_days_str:
                 try:
                     updated_search["max_days_old"] = int(max_days_str)
                 except ValueError:
-                    updated_search.pop("max_days_old", None)
+                    field_errors.append("search.max_days_old must be a whole number")
             else:
                 updated_search.pop("max_days_old", None)
 
-            # scoring.threshold — parse is already validated above.
-            updated_scoring = dict(existing_scoring)
-            updated_scoring["threshold"] = float(threshold_str.strip())
+            # Bail out before touching disk if any field-level errors were found.
+            if field_errors:
+                error = "; ".join(field_errors)
+                status_code = 422
 
-            # prefilter fields.
-            require_contract_time_raw = request.form.get("prefilter_require_contract_time", "").strip()
-            require_contract_type_raw = request.form.get("prefilter_require_contract_type", "").strip()
-            updated_prefilter = dict(existing_prefilter)
-            updated_prefilter["title_include"] = _parse_repeating_rows(request.form, "prefilter_title_include")
-            updated_prefilter["title_exclude"] = _parse_repeating_rows(request.form, "prefilter_title_exclude")
-            updated_prefilter["require_contract_time"] = require_contract_time_raw or None
-            updated_prefilter["require_contract_type"] = require_contract_type_raw or None
+            if not field_errors:
+                # scoring.threshold — parse is already validated above.
+                updated_scoring = dict(existing_scoring)
+                updated_scoring["threshold"] = float(threshold_str.strip())
 
-            new_cfg = dict(existing_cfg)
-            new_cfg["search"] = updated_search
-            new_cfg["scoring"] = updated_scoring
-            new_cfg["prefilter"] = updated_prefilter
+                # prefilter fields.
+                require_contract_time_raw = request.form.get("prefilter_require_contract_time", "").strip()
+                require_contract_type_raw = request.form.get("prefilter_require_contract_type", "").strip()
+                updated_prefilter = dict(existing_prefilter)
+                updated_prefilter["title_include"] = _parse_repeating_rows(request.form, "prefilter_title_include")
+                updated_prefilter["title_exclude"] = _parse_repeating_rows(request.form, "prefilter_title_exclude")
+                updated_prefilter["require_contract_time"] = require_contract_time_raw or None
+                updated_prefilter["require_contract_type"] = require_contract_type_raw or None
 
-            # Write profile.json atomically.
-            try:
-                _write_json_atomic(_PROFILE_PATH, new_profile)
-                _write_json_atomic(_CONFIG_PATH, new_cfg)
-                saved = True
-            except OSError:
-                error = "Could not save — check file permissions."
-                status_code = 500
+                new_cfg = dict(existing_cfg)
+                new_cfg["search"] = updated_search
+                new_cfg["scoring"] = updated_scoring
+                new_cfg["prefilter"] = updated_prefilter
+
+                # Write profile.json atomically.
+                try:
+                    _write_json_atomic(_PROFILE_PATH, new_profile)
+                    _write_json_atomic(_CONFIG_PATH, new_cfg)
+                    saved = True
+                except OSError:
+                    error = "Could not save — check file permissions."
+                    status_code = 500
 
     # Load current values for the form (GET, or POST after error).
     cfg = load_config(_CONFIG_PATH)

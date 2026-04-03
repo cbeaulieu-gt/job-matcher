@@ -20,10 +20,24 @@
       Run Ingestion
     </button>
     <label class="filter-toggle ingest-opt">
-      <input type="checkbox" name="rescore" value="1">
+      <input type="checkbox" name="rescore" value="1" id="rescore-toggle"
+             onchange="(function(cb){
+               var periodLabel = document.getElementById('ingest-period-label');
+               var periodSelect = document.getElementById('ingest-hours');
+               if (cb.checked) {
+                 periodLabel.style.opacity = '0.4';
+                 periodLabel.style.pointerEvents = 'none';
+                 periodSelect.disabled = true;
+               } else {
+                 periodLabel.style.opacity = '';
+                 periodLabel.style.pointerEvents = '';
+                 periodSelect.disabled = false;
+               }
+             })(this)">
       Rescore all
     </label>
-    <label class="filter-toggle ingest-opt" for="ingest-hours">
+    <span class="ingest-rescore-hint">Re-scores existing listings against your current profile. Does not fetch new jobs.</span>
+    <label class="filter-toggle ingest-opt" for="ingest-hours" id="ingest-period-label">
       Period:&nbsp;<select id="ingest-hours" name="hours" class="filter-select ingest-period-select">
         <option value="25">Last 24 hours</option>
         <option value="73">Last 3 days</option>

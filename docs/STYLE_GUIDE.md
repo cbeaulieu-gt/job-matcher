@@ -453,6 +453,7 @@ Rendered via `templates/_ingest_trigger.html`, included in `index.html` inside a
 | `.ingest-form` | Flex row, `align-items: center`, `flex-wrap: wrap`, gap 12px |
 | `.btn-ingest` | Amber-tinted action button; `--text-accent` colour, dark amber border/hover |
 | `.ingest-opt` | Muted label for optional controls (checkboxes, selects) alongside the button |
+| `.ingest-rescore-hint` | Italic helper text (`--font-body` 0.78rem, `--text-muted`) rendered on a new row below the rescore checkbox via `flex-basis: 100%`; explains that rescore-only mode skips fetching |
 | `.ingest-last-run` | `--font-mono` 0.72rem; `--text-secondary`; summary of the most recent run |
 | `.ingest-run-time` | `--text-muted`; timestamp inside `.ingest-last-run` |
 

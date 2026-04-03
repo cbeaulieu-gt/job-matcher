@@ -1466,6 +1466,16 @@ body {
   color: var(--text-muted);
 }
 
+/* Helper text below the rescore checkbox explaining it skips fetching */
+.ingest-rescore-hint {
+  font-family: var(--font-body);
+  font-size: 0.78rem;
+  font-style: italic;
+  color: var(--text-muted);
+  flex-basis: 100%;
+  margin-top: -4px;
+}
+
 /* Last-run summary line */
 .ingest-last-run {
   font-family: var(--font-mono);

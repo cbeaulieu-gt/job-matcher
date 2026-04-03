@@ -1473,7 +1473,7 @@ body {
   font-style: italic;
   color: var(--text-muted);
   flex-basis: 100%;
-  margin-top: -4px;
+  margin-top: -4px; /* pulls hint up to close the flex gap between checkbox row and hint row */
 }
 
 /* Last-run summary line */

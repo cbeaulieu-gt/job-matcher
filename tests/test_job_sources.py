@@ -206,7 +206,7 @@ class TestAdzunaClientFetchPage:
         client = self._client()
         mock_resp = self._mock_response(200, {"results": [_RAW_ADZUNA_LISTING]})
 
-        with patch("job_sources.adzuna.requests.get", return_value=mock_resp):
+        with patch("job_sources._plugin_adzuna.requests.get", return_value=mock_resp):
             results = client.fetch_page(1)
 
         assert len(results) == 1
@@ -218,7 +218,7 @@ class TestAdzunaClientFetchPage:
         client = self._client()
         mock_resp = self._mock_response(200, {"results": []})
 
-        with patch("job_sources.adzuna.requests.get", return_value=mock_resp):
+        with patch("job_sources._plugin_adzuna.requests.get", return_value=mock_resp):
             results = client.fetch_page(1)
 
         assert results == []
@@ -228,7 +228,7 @@ class TestAdzunaClientFetchPage:
         client = self._client()
         mock_resp = self._mock_response(500, {})
 
-        with patch("job_sources.adzuna.requests.get", return_value=mock_resp):
+        with patch("job_sources._plugin_adzuna.requests.get", return_value=mock_resp):
             results = client.fetch_page(1)
 
         assert results == []
@@ -254,7 +254,7 @@ class TestAdzunaClientFetchPage:
         mock_resp.status_code = 200
         mock_resp.json.side_effect = ValueError("not json")
 
-        with patch("job_sources.adzuna.requests.get", return_value=mock_resp):
+        with patch("job_sources._plugin_adzuna.requests.get", return_value=mock_resp):
             results = client.fetch_page(1)
 
         assert results == []
@@ -264,8 +264,8 @@ class TestAdzunaClientFetchPage:
         client = self._client()
         mock_429 = self._mock_response(429, {})
 
-        with patch("job_sources.adzuna.requests.get", return_value=mock_429), \
-             patch("job_sources.adzuna.time.sleep"):  # skip actual sleep in tests
+        with patch("job_sources._plugin_adzuna.requests.get", return_value=mock_429), \
+             patch("job_sources._plugin_adzuna.time.sleep"):  # skip actual sleep in tests
             results = client.fetch_page(1)
 
         assert results == []

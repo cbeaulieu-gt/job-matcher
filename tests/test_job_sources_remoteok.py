@@ -72,7 +72,7 @@ class TestUserAgentHeader:
         client = _make_client()
         mock_resp = _mock_response(200, _REMOTEOK_RESPONSE)
 
-        with patch("job_sources.remoteok.requests.get", return_value=mock_resp) as mock_get:
+        with patch("job_sources._plugin_remoteok.requests.get", return_value=mock_resp) as mock_get:
             client.fetch_page(1)
 
         args, kwargs = mock_get.call_args
@@ -85,7 +85,7 @@ class TestUserAgentHeader:
         client = _make_client({"remoteok": {"user_agent": "my-app/2.0"}})
         mock_resp = _mock_response(200, _REMOTEOK_RESPONSE)
 
-        with patch("job_sources.remoteok.requests.get", return_value=mock_resp) as mock_get:
+        with patch("job_sources._plugin_remoteok.requests.get", return_value=mock_resp) as mock_get:
             client.fetch_page(1)
 
         args, kwargs = mock_get.call_args
@@ -102,7 +102,7 @@ class TestMetadataSkipping:
         client = _make_client()
         mock_resp = _mock_response(200, _REMOTEOK_RESPONSE)
 
-        with patch("job_sources.remoteok.requests.get", return_value=mock_resp):
+        with patch("job_sources._plugin_remoteok.requests.get", return_value=mock_resp):
             results = client.fetch_page(1)
 
         # Metadata object has no 'id'/'position', so it must not appear in results.
@@ -122,7 +122,7 @@ class TestMetadataSkipping:
         client = _make_client()
         mock_resp = _mock_response(200, data)
 
-        with patch("job_sources.remoteok.requests.get", return_value=mock_resp):
+        with patch("job_sources._plugin_remoteok.requests.get", return_value=mock_resp):
             results = client.fetch_page(1)
 
         assert len(results) == 1
@@ -271,7 +271,7 @@ class TestFetchPage:
         client = _make_client()
         mock_resp = _mock_response(200, _REMOTEOK_RESPONSE)
 
-        with patch("job_sources.remoteok.requests.get", return_value=mock_resp):
+        with patch("job_sources._plugin_remoteok.requests.get", return_value=mock_resp):
             results = client.fetch_page(1)
 
         assert len(results) == 1
@@ -282,7 +282,7 @@ class TestFetchPage:
         client = _make_client()
         mock_resp = _mock_response(500, {})
 
-        with patch("job_sources.remoteok.requests.get", return_value=mock_resp):
+        with patch("job_sources._plugin_remoteok.requests.get", return_value=mock_resp):
             results = client.fetch_page(1)
 
         assert results == []
@@ -308,7 +308,7 @@ class TestFetchPage:
         mock_resp.status_code = 200
         mock_resp.json.side_effect = ValueError("not json")
 
-        with patch("job_sources.remoteok.requests.get", return_value=mock_resp):
+        with patch("job_sources._plugin_remoteok.requests.get", return_value=mock_resp):
             results = client.fetch_page(1)
 
         assert results == []
@@ -318,7 +318,7 @@ class TestFetchPage:
         client = _make_client()
         mock_resp = _mock_response(200, {"error": "something went wrong"})
 
-        with patch("job_sources.remoteok.requests.get", return_value=mock_resp):
+        with patch("job_sources._plugin_remoteok.requests.get", return_value=mock_resp):
             results = client.fetch_page(1)
 
         assert results == []
@@ -328,7 +328,7 @@ class TestFetchPage:
         client = _make_client()
         mock_resp = _mock_response(200, _REMOTEOK_RESPONSE)
 
-        with patch("job_sources.remoteok.requests.get", return_value=mock_resp) as mock_get:
+        with patch("job_sources._plugin_remoteok.requests.get", return_value=mock_resp) as mock_get:
             client.fetch_page(99)
 
         # The URL should always be the single RemoteOK endpoint regardless of page.
@@ -340,7 +340,7 @@ class TestFetchPage:
         client = _make_client()
         mock_resp = _mock_response(200, _REMOTEOK_RESPONSE)
 
-        with patch("job_sources.remoteok.requests.get", return_value=mock_resp) as mock_get:
+        with patch("job_sources._plugin_remoteok.requests.get", return_value=mock_resp) as mock_get:
             client.fetch_page(1)
             client.fetch_page(1)
 

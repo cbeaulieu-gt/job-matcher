@@ -3,14 +3,14 @@ job_sources/jooble.py — Backward-compatibility shim.
 
 The JoobleClient implementation has moved to plugins/sources/jooble/plugin.py
 and is loaded into the SOURCES registry via the plugin loader.
-This module re-exports the class and private helpers, and ensures the mock patch
-target ``patch("job_sources.jooble.requests.post")`` resolves correctly.
+This module re-exports the class and private helpers for backward-compatible imports.
 """
 
-# NOTE: keep `import requests` at the top of this file.
-# Test mocks use patch("job_sources.jooble.requests.post") — if this import is removed,
-# those mock targets will stop resolving silently.
-import requests  # noqa: F401 — kept so patch("job_sources.jooble.requests.post") resolves
+# NOTE: tests now patch the real module directly:
+#   patch("job_sources._plugin_jooble.requests.post")
+# The import below is kept only to preserve the attribute chain for any
+# external code that may still reference job_sources.jooble.requests directly.
+import requests  # noqa: F401
 
 from job_sources import SOURCES as _SOURCES
 

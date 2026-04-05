@@ -229,7 +229,7 @@ class TestRemotiveFetchPage:
         client = _make_client()
         mock_resp = _mock_response(200, {"jobs": [_RAW_JOB], "job-count": 1})
 
-        with patch("job_sources.remotive.requests.get", return_value=mock_resp):
+        with patch("job_sources._plugin_remotive.requests.get", return_value=mock_resp):
             results = client.fetch_page(1)
 
         assert len(results) == 1
@@ -241,7 +241,7 @@ class TestRemotiveFetchPage:
         client = _make_client()
         mock_resp = _mock_response(200, {"jobs": [], "job-count": 0})
 
-        with patch("job_sources.remotive.requests.get", return_value=mock_resp):
+        with patch("job_sources._plugin_remotive.requests.get", return_value=mock_resp):
             results = client.fetch_page(1)
 
         assert results == []
@@ -251,7 +251,7 @@ class TestRemotiveFetchPage:
         client = _make_client()
         mock_resp = _mock_response(503, {})
 
-        with patch("job_sources.remotive.requests.get", return_value=mock_resp):
+        with patch("job_sources._plugin_remotive.requests.get", return_value=mock_resp):
             results = client.fetch_page(1)
 
         assert results == []
@@ -277,7 +277,7 @@ class TestRemotiveFetchPage:
         mock_resp.status_code = 200
         mock_resp.json.side_effect = ValueError("not json")
 
-        with patch("job_sources.remotive.requests.get", return_value=mock_resp):
+        with patch("job_sources._plugin_remotive.requests.get", return_value=mock_resp):
             results = client.fetch_page(1)
 
         assert results == []
@@ -287,7 +287,7 @@ class TestRemotiveFetchPage:
         client = _make_client({"remotive": {"category": "devops", "limit": 25}})
         mock_resp = _mock_response(200, {"jobs": [], "job-count": 0})
 
-        with patch("job_sources.remotive.requests.get", return_value=mock_resp) as mock_get:
+        with patch("job_sources._plugin_remotive.requests.get", return_value=mock_resp) as mock_get:
             client.fetch_page(1)
 
         call_kwargs = mock_get.call_args
@@ -300,7 +300,7 @@ class TestRemotiveFetchPage:
         client = _make_client({})
         mock_resp = _mock_response(200, {"jobs": [], "job-count": 0})
 
-        with patch("job_sources.remotive.requests.get", return_value=mock_resp) as mock_get:
+        with patch("job_sources._plugin_remotive.requests.get", return_value=mock_resp) as mock_get:
             client.fetch_page(1)
 
         call_kwargs = mock_get.call_args

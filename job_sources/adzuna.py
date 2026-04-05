@@ -3,15 +3,16 @@ job_sources/adzuna.py — Backward-compatibility shim.
 
 The AdzunaClient implementation has moved to plugins/sources/adzuna/plugin.py
 and is loaded into the SOURCES registry via the plugin loader.
-This module re-exports the class and ensures the mock patch target
-``patch("job_sources.adzuna.requests.get")`` resolves correctly.
+This module re-exports the class for backward-compatible imports.
 """
 
-# NOTE: keep `import requests` and `import time` at the top of this file.
-# Test mocks use patch("job_sources.adzuna.requests.get") — if this import is removed,
-# those mock targets will stop resolving silently.
-import requests  # noqa: F401 — kept so patch("job_sources.adzuna.requests.get") resolves
-import time  # noqa: F401 — kept so patch("job_sources.adzuna.time.sleep") resolves
+# NOTE: tests now patch the real module directly:
+#   patch("job_sources._plugin_adzuna.requests.get")
+#   patch("job_sources._plugin_adzuna.time.sleep")
+# The imports below are kept only to preserve the attribute chain for any
+# external code that may still reference job_sources.adzuna.requests directly.
+import requests  # noqa: F401
+import time  # noqa: F401
 
 from job_sources import SOURCES as _SOURCES
 

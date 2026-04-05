@@ -3,14 +3,14 @@ job_sources/remotive.py — Backward-compatibility shim.
 
 The RemotiveClient implementation has moved to plugins/sources/remotive/plugin.py
 and is loaded into the SOURCES registry via the plugin loader.
-This module re-exports the class and ensures the mock patch target
-``patch("job_sources.remotive.requests.get")`` resolves correctly.
+This module re-exports the class for backward-compatible imports.
 """
 
-# NOTE: keep `import requests` at the top of this file.
-# Test mocks use patch("job_sources.remotive.requests.get") — if this import is removed,
-# those mock targets will stop resolving silently.
-import requests  # noqa: F401 — kept so patch("job_sources.remotive.requests.get") resolves
+# NOTE: tests now patch the real module directly:
+#   patch("job_sources._plugin_remotive.requests.get")
+# The import below is kept only to preserve the attribute chain for any
+# external code that may still reference job_sources.remotive.requests directly.
+import requests  # noqa: F401
 
 from job_sources import SOURCES as _SOURCES
 

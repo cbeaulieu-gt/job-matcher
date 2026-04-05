@@ -315,7 +315,7 @@ class TestJoobleClientFetchPage:
         client = _client()
         mock_resp = _mock_response(200, {"totalCount": 1, "jobs": [_RAW_JOB]})
 
-        with patch("job_sources.jooble.requests.post", return_value=mock_resp):
+        with patch("job_sources._plugin_jooble.requests.post", return_value=mock_resp):
             results = client.fetch_page(1)
 
         assert len(results) == 1
@@ -327,7 +327,7 @@ class TestJoobleClientFetchPage:
         client = _client()
         mock_resp = _mock_response(200, {"totalCount": 0, "jobs": []})
 
-        with patch("job_sources.jooble.requests.post", return_value=mock_resp):
+        with patch("job_sources._plugin_jooble.requests.post", return_value=mock_resp):
             assert client.fetch_page(1) == []
 
     def test_missing_jobs_key_returns_empty_list(self):
@@ -335,7 +335,7 @@ class TestJoobleClientFetchPage:
         client = _client()
         mock_resp = _mock_response(200, {"totalCount": 0})
 
-        with patch("job_sources.jooble.requests.post", return_value=mock_resp):
+        with patch("job_sources._plugin_jooble.requests.post", return_value=mock_resp):
             assert client.fetch_page(1) == []
 
     def test_non_200_returns_empty_list(self):
@@ -343,7 +343,7 @@ class TestJoobleClientFetchPage:
         client = _client()
         mock_resp = _mock_response(500, {})
 
-        with patch("job_sources.jooble.requests.post", return_value=mock_resp):
+        with patch("job_sources._plugin_jooble.requests.post", return_value=mock_resp):
             assert client.fetch_page(1) == []
 
     def test_request_exception_returns_empty_list(self):
@@ -363,7 +363,7 @@ class TestJoobleClientFetchPage:
         mock_resp.status_code = 200
         mock_resp.json.side_effect = ValueError("not json")
 
-        with patch("job_sources.jooble.requests.post", return_value=mock_resp):
+        with patch("job_sources._plugin_jooble.requests.post", return_value=mock_resp):
             assert client.fetch_page(1) == []
 
     def test_page_number_sent_in_payload(self):
@@ -371,7 +371,7 @@ class TestJoobleClientFetchPage:
         client = _client()
         mock_resp = _mock_response(200, {"totalCount": 0, "jobs": []})
 
-        with patch("job_sources.jooble.requests.post", return_value=mock_resp) as mock_post:
+        with patch("job_sources._plugin_jooble.requests.post", return_value=mock_resp) as mock_post:
             client.fetch_page(3)
 
         _, kwargs = mock_post.call_args
@@ -388,7 +388,7 @@ class TestJoobleClientTotalPages:
         client = _client(results_per_page=20)
         mock_resp = _mock_response(200, {"totalCount": 45, "jobs": []})
 
-        with patch("job_sources.jooble.requests.post", return_value=mock_resp):
+        with patch("job_sources._plugin_jooble.requests.post", return_value=mock_resp):
             # ceil(45 / 20) = 3, capped at default max_pages=5
             assert client.total_pages() == 3
 
@@ -397,7 +397,7 @@ class TestJoobleClientTotalPages:
         client = _client(results_per_page=10, max_pages=3)
         mock_resp = _mock_response(200, {"totalCount": 1000, "jobs": []})
 
-        with patch("job_sources.jooble.requests.post", return_value=mock_resp):
+        with patch("job_sources._plugin_jooble.requests.post", return_value=mock_resp):
             assert client.total_pages() == 3
 
     def test_returns_1_on_request_failure(self):
@@ -415,7 +415,7 @@ class TestJoobleClientTotalPages:
         client = _client()
         mock_resp = _mock_response(200, {"totalCount": 0, "jobs": []})
 
-        with patch("job_sources.jooble.requests.post", return_value=mock_resp):
+        with patch("job_sources._plugin_jooble.requests.post", return_value=mock_resp):
             assert client.total_pages() == 1
 
     def test_returns_1_when_total_count_missing(self):
@@ -423,7 +423,7 @@ class TestJoobleClientTotalPages:
         client = _client()
         mock_resp = _mock_response(200, {"jobs": []})
 
-        with patch("job_sources.jooble.requests.post", return_value=mock_resp):
+        with patch("job_sources._plugin_jooble.requests.post", return_value=mock_resp):
             assert client.total_pages() == 1
 
     def test_result_is_cached(self):
@@ -431,7 +431,7 @@ class TestJoobleClientTotalPages:
         client = _client(results_per_page=20)
         mock_resp = _mock_response(200, {"totalCount": 40, "jobs": []})
 
-        with patch("job_sources.jooble.requests.post", return_value=mock_resp) as mock_post:
+        with patch("job_sources._plugin_jooble.requests.post", return_value=mock_resp) as mock_post:
             assert client.total_pages() == 2
             assert client.total_pages() == 2
             assert mock_post.call_count == 1  # second call hit the cache
@@ -441,7 +441,7 @@ class TestJoobleClientTotalPages:
         client = _client(results_per_page=20)
         mock_resp = _mock_response(200, {"totalCount": 20, "jobs": []})
 
-        with patch("job_sources.jooble.requests.post", return_value=mock_resp):
+        with patch("job_sources._plugin_jooble.requests.post", return_value=mock_resp):
             assert client.total_pages() == 1
 
 
@@ -462,7 +462,7 @@ class TestJoobleClientPages:
             {**_RAW_JOB, "id": "999", "title": "DevOps Engineer"},
         ]})
 
-        with patch("job_sources.jooble.requests.post", side_effect=[
+        with patch("job_sources._plugin_jooble.requests.post", side_effect=[
             total_count_resp,  # total_pages() call — also caches page-1 results
             page2_resp,        # fetch_page(2) — page 1 served from cache
         ]):
@@ -483,7 +483,7 @@ class TestJoobleClientPages:
         total_resp = _mock_response(200, {"totalCount": 30, "jobs": [_RAW_JOB]})
         empty_resp = _mock_response(200, {"totalCount": 30, "jobs": []})
 
-        with patch("job_sources.jooble.requests.post", side_effect=[
+        with patch("job_sources._plugin_jooble.requests.post", side_effect=[
             total_resp,  # total_pages() call — also caches page-1 results
             empty_resp,  # fetch_page(2) — triggers early stop; page 1 served from cache
         ]):

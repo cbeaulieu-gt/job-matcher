@@ -17,8 +17,11 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from job_sources import SOURCES, ArbeitnowClient, JobSource
+from job_sources import SOURCES, JobSource
 from job_sources.arbeitnow import _CONTRACT_TIME_MAP, _strip_html, _unix_to_iso
+
+# Resolve ArbeitnowClient from the plugin registry so identity checks pass.
+ArbeitnowClient = SOURCES["arbeitnow"]
 
 
 # ---------------------------------------------------------------------------

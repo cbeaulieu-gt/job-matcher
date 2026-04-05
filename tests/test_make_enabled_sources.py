@@ -20,7 +20,11 @@ import os
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from job_sources import make_enabled_sources, JobSource
+from job_sources import SOURCES, make_enabled_sources, JobSource
+
+# Resolve classes from the plugin registry.
+AdzunaClient = SOURCES["adzuna"]
+RemotiveClient = SOURCES["remotive"]
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +113,6 @@ class TestMakeEnabledSourcesDisabled:
         providers = _providers({"adzuna": {"enabled": False, "app_id": "x", "app_key": "y"}})
         result = make_enabled_sources(providers, _BASE_CONFIG)
         types = [type(s) for s in result]
-        from job_sources import AdzunaClient
         assert AdzunaClient not in types
 
     def test_missing_entry_defaults_to_enabled(self):
@@ -119,14 +122,12 @@ class TestMakeEnabledSourcesDisabled:
         Keyed sources (e.g. adzuna, jooble) will be skipped with a warning
         because required credentials are absent.
         """
-        from job_sources import RemotiveClient
         result = make_enabled_sources(_providers({}), _BASE_CONFIG)
         # Keyless sources like remotive should be enabled by default.
         assert any(isinstance(s, RemotiveClient) for s in result)
 
     def test_empty_providers_data_enables_keyless_sources(self):
         """Completely empty providers_data enables all keyless sources."""
-        from job_sources import RemotiveClient
         result = make_enabled_sources({}, _BASE_CONFIG)
         assert any(isinstance(s, RemotiveClient) for s in result)
 
@@ -139,14 +140,12 @@ class TestMakeEnabledSourcesEnabled:
         })
         config = {**_BASE_CONFIG, "adzuna_app_id": "real-id", "adzuna_app_key": "real-key"}
         result = make_enabled_sources(providers, config)
-        from job_sources import AdzunaClient
         assert any(isinstance(s, AdzunaClient) for s in result)
 
     def test_enabled_keyless_source_is_included(self):
         """enabled=True on a source with no required fields → always included."""
         providers = _providers({"remotive": {"enabled": True}})
         result = make_enabled_sources(providers, _BASE_CONFIG)
-        from job_sources import RemotiveClient
         assert any(isinstance(s, RemotiveClient) for s in result)
 
     def test_result_elements_are_job_source_instances(self):
@@ -166,7 +165,6 @@ class TestMakeEnabledSourcesMissingCredentials:
         with caplog.at_level(logging.WARNING, logger="ingest.sources"):
             result = make_enabled_sources(providers, _BASE_CONFIG)
 
-        from job_sources import AdzunaClient
         assert not any(isinstance(s, AdzunaClient) for s in result)
         assert any("missing required credentials" in rec.message for rec in caplog.records)
 
@@ -190,7 +188,6 @@ class TestMakeEnabledSourcesMissingCredentials:
         with caplog.at_level(logging.WARNING, logger="ingest.sources"):
             result = make_enabled_sources(providers, _BASE_CONFIG)
 
-        from job_sources import AdzunaClient
         assert not any(isinstance(s, AdzunaClient) for s in result)
 
 

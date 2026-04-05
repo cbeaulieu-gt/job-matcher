@@ -19,19 +19,17 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from job_sources import (
-    SOURCES,
-    AdzunaClient,
-    ArbeitnowClient,
-    HimalayasClient,
-    JobSource,
-    RemoteOKClient,
-    RemotiveClient,
-    TheMuseClient,
-    USAJobsClient,
-    make_source,
-)
+from job_sources import SOURCES, JobSource, make_source
 from job_sources.base import JobSource as JobSourceBase
+
+# Resolve classes from the plugin registry.
+AdzunaClient = SOURCES["adzuna"]
+ArbeitnowClient = SOURCES["arbeitnow"]
+HimalayasClient = SOURCES["himalayas"]
+RemoteOKClient = SOURCES["remoteok"]
+RemotiveClient = SOURCES["remotive"]
+TheMuseClient = SOURCES["the_muse"]
+USAJobsClient = SOURCES["usajobs"]
 
 
 # ---------------------------------------------------------------------------

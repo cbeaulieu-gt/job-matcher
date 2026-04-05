@@ -31,7 +31,7 @@ import requests
 from bs4 import BeautifulSoup
 
 import db
-from job_sources import make_source, AdzunaClient, make_enabled_sources  # noqa: F401 — AdzunaClient re-exported for backward compat
+from job_sources import make_source, make_enabled_sources
 from providers import build_provider_chain, LLMProvider
 from credentials import CredentialError, load_providers
 

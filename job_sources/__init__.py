@@ -4,14 +4,8 @@ job_sources/ — Pluggable job source provider package for Job Matcher.
 Public API
 ----------
 * ``JobSource``             — abstract base class; import from here or ``job_sources.base``
-* ``AdzunaClient``          — Adzuna Jobs API backend
-* ``ArbeitnowClient``       — Arbeitnow job board API backend
-* ``HimalayasClient``       — Himalayas Jobs API backend
-* ``RemoteOKClient``        — RemoteOK jobs API backend
-* ``USAJobsClient``         — USAJobs API backend
-* ``TheMuseClient``         — The Muse API backend
-* ``RemotiveClient``        — Remotive remote-jobs API backend
 * ``SOURCES``               — registry mapping source name strings to their classes
+                              (populated automatically from ``plugins/sources/``)
 * ``make_source()``         — factory that reads ``config["job_source"]`` and returns
                               the right ``JobSource`` instance
 * ``make_enabled_sources()``— factory that returns all enabled ``JobSource`` instances
@@ -38,47 +32,20 @@ from __future__ import annotations
 import logging
 
 from .base import JobSource
-from .adzuna import AdzunaClient
-from .arbeitnow import ArbeitnowClient
-from .himalayas import HimalayasClient
-from .remoteok import RemoteOKClient
-from .usajobs import USAJobsClient
-from .the_muse import TheMuseClient
-from .remotive import RemotiveClient
-from .jobicy import JobicyClient
-from .jooble import JoobleClient
+from .loader import load_plugins
 
 __all__ = [
     "JobSource",
-    "AdzunaClient",
-    "ArbeitnowClient",
-    "HimalayasClient",
-    "RemoteOKClient",
-    "USAJobsClient",
-    "TheMuseClient",
-    "RemotiveClient",
-    "JobicyClient",
-    "JoobleClient",
     "SOURCES",
     "make_source",
     "make_enabled_sources",
 ]
 
 # ---------------------------------------------------------------------------
-# Source registry — maps source name string → class
+# Source registry — populated automatically from plugins/sources/
 # ---------------------------------------------------------------------------
 
-SOURCES: dict[str, type[JobSource]] = {
-    "adzuna": AdzunaClient,
-    "arbeitnow": ArbeitnowClient,
-    "himalayas": HimalayasClient,
-    "remoteok": RemoteOKClient,
-    "usajobs": USAJobsClient,
-    "the_muse": TheMuseClient,
-    "remotive": RemotiveClient,
-    "jobicy": JobicyClient,
-    "jooble": JoobleClient,
-}
+SOURCES: dict[str, type[JobSource]] = load_plugins()
 
 
 def make_source(config: dict) -> JobSource:

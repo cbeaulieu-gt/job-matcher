@@ -18,8 +18,12 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from job_sources import SOURCES, AdzunaClient, JobSource, make_source
+from job_sources import SOURCES, JobSource, make_source
 from job_sources.base import JobSource as JobSourceBase
+
+# Resolve AdzunaClient from the plugin registry so we get the exact same class
+# object that SOURCES["adzuna"] holds — necessary for identity checks below.
+AdzunaClient = SOURCES["adzuna"]
 
 
 # ---------------------------------------------------------------------------

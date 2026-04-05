@@ -51,7 +51,7 @@ logger = logging.getLogger("ingest")
 
 # Set to True by --verbose / -v CLI flag. Used at scoring callsites to emit
 # the full breakdown (verdict, matched/missing skills, concerns) at INFO level.
-_verbose: bool = False
+_verbose = False
 
 
 def _configure_file_logging() -> None:

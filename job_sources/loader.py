@@ -36,7 +36,6 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from .base import JobSource
 

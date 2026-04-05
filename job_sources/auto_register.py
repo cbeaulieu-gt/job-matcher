@@ -13,7 +13,6 @@ Public API
 from __future__ import annotations
 
 import logging
-import os
 import sys
 
 from job_sources import SOURCES  # module-level so tests can monkeypatch it

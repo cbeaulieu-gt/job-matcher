@@ -10,8 +10,6 @@ from __future__ import annotations
 import json
 import os
 
-import pytest
-
 import job_sources.auto_register as _mod
 from job_sources.auto_register import ensure_plugins_registered
 

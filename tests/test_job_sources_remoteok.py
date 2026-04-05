@@ -23,7 +23,8 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from job_sources import SOURCES, JobSource, make_source
-from job_sources.remoteok import RemoteOKClient
+
+RemoteOKClient = SOURCES["remoteok"]
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
@@ -294,7 +295,7 @@ class TestFetchPage:
         client = _make_client()
 
         with patch(
-            "job_sources.remoteok.requests.get",
+            "job_sources._plugin_remoteok.requests.get",
             side_effect=req.RequestException("timeout"),
         ):
             results = client.fetch_page(1)

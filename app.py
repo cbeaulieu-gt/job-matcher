@@ -22,7 +22,7 @@ import db
 from credentials import CredentialError, load_providers, save_providers
 from providers import _PROVIDER_CLASS_MAP
 from providers.base import _sanitise_detail
-from job_sources import SOURCES
+from job_sources import get_sources
 
 app = Flask(__name__)
 
@@ -957,7 +957,7 @@ def settings():
                 updates["llm"][provider_key] = provider_updates
 
         # Job sources: save enabled flag for all; save credential fields for keyed sources.
-        for source_key, cls in SOURCES.items():
+        for source_key, cls in get_sources().items():
             schema = cls.settings_schema()
             source_updates: dict = {}
 
@@ -1016,7 +1016,7 @@ def settings():
     llm_schemas = _build_llm_schemas(llm_section, provider_order)
 
     source_schemas: list[tuple[str, dict, bool, bool, bool]] = []
-    for key, cls in SOURCES.items():
+    for key, cls in get_sources().items():
         schema = cls.settings_schema()
         cfg = sources_section.get(key) or {}
         required_fields = [f["name"] for f in schema["fields"] if f.get("required")]
@@ -1452,7 +1452,7 @@ def api_job_source_toggle(source_key: str):
         400 plain text for a malformed request body.
         500 plain text if the file cannot be written.
     """
-    if source_key not in SOURCES:
+    if source_key not in get_sources():
         return jsonify({"error": f"Unknown job source: {source_key!r}"}), 404
 
     body = request.get_json(silent=True)
@@ -1468,7 +1468,7 @@ def api_job_source_toggle(source_key: str):
 
     # When enabling, verify required credentials are already stored.
     if enabled:
-        cls = SOURCES[source_key]
+        cls = get_sources()[source_key]
         schema = cls.settings_schema()
         required_fields = [f for f in schema.get("fields", []) if f.get("required")]
 

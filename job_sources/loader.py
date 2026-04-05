@@ -117,6 +117,15 @@ def load_plugins(plugins_dir: Path | str | None = None) -> dict[str, type[JobSou
             )
             continue
 
+        # --- Validate source_key is a non-empty string ---
+        source_key_raw = schema.get("source_key")
+        if not isinstance(source_key_raw, str) or not source_key_raw.strip():
+            _log.warning(
+                "Plugin %s: source.json 'source_key' must be a non-empty string — skipping",
+                entry.name,
+            )
+            continue
+
         # --- Enforce source_key matches folder name ---
         if schema["source_key"] != entry.name:
             _log.warning(
@@ -135,6 +144,13 @@ def load_plugins(plugins_dir: Path | str | None = None) -> dict[str, type[JobSou
         for field in schema["fields"]:
             if not isinstance(field, dict):
                 _log.warning("Plugin %s: each field must be a dict — skipping", entry.name)
+                fields_valid = False
+                break
+            if not isinstance(field.get("name"), str):
+                _log.warning(
+                    "Plugin %s: each field must have a string 'name' key — skipping",
+                    entry.name,
+                )
                 fields_valid = False
                 break
             if field.get("name") in _RESERVED_FIELD_NAMES:

@@ -26,11 +26,12 @@ import requests as _req
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from job_sources import SOURCES, JobSource
-from job_sources.jooble import (
-    JoobleClient,
+from job_sources._plugin_jooble import (
     _CONTRACT_TIME_MAP,
     _normalise_contract_time,
 )
+
+JoobleClient = SOURCES["jooble"]
 from job_sources.utils import parse_salary as _parse_salary, strip_html as _strip_html
 
 
@@ -351,7 +352,7 @@ class TestJoobleClientFetchPage:
         client = _client()
 
         with patch(
-            "job_sources.jooble.requests.post",
+            "job_sources._plugin_jooble.requests.post",
             side_effect=_req.RequestException("timeout"),
         ):
             assert client.fetch_page(1) == []
@@ -405,7 +406,7 @@ class TestJoobleClientTotalPages:
         client = _client()
 
         with patch(
-            "job_sources.jooble.requests.post",
+            "job_sources._plugin_jooble.requests.post",
             side_effect=_req.RequestException("timeout"),
         ):
             assert client.total_pages() == 1

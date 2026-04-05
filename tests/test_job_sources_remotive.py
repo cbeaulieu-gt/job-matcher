@@ -20,8 +20,9 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from job_sources import SOURCES, JobSource, make_source
-from job_sources.remotive import RemotiveClient
 from job_sources.utils import parse_salary as _parse_salary, strip_html as _strip_html
+
+RemotiveClient = SOURCES["remotive"]
 
 
 # ---------------------------------------------------------------------------
@@ -263,7 +264,7 @@ class TestRemotiveFetchPage:
         client = _make_client()
 
         with patch(
-            "job_sources.remotive.requests.get",
+            "job_sources._plugin_remotive.requests.get",
             side_effect=req_module.RequestException("timeout"),
         ):
             results = client.fetch_page(1)

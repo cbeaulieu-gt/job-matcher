@@ -22,7 +22,8 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from job_sources import SOURCES, JobSource, make_source
-from job_sources.the_muse import TheMuseClient
+
+TheMuseClient = SOURCES["the_muse"]
 
 
 # ---------------------------------------------------------------------------
@@ -360,7 +361,7 @@ class TestTheMuseClientFetchPage:
         client = _make_client()
 
         with patch(
-            "job_sources.the_muse.requests.get",
+            "job_sources._plugin_the_muse.requests.get",
             side_effect=req.RequestException("connection refused"),
         ):
             results = client.fetch_page(1)

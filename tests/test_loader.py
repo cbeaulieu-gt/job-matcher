@@ -432,3 +432,64 @@ class TestLoadPlugins:
         _make_plugin(tmp_path, "reserved_field", source_key="reserved_field", fields=reserved_fields)
         result = load_plugins(tmp_path)
         assert "reserved_field" not in result
+
+    def test_field_name_not_a_string_skipped(self, tmp_path):
+        """source.json with a field whose 'name' key is not a string is skipped."""
+        import json
+
+        folder = tmp_path / "bad_name_type"
+        folder.mkdir()
+        schema = {
+            "source_key": "bad_name_type",
+            "display_name": "Test",
+            "description": "Test",
+            "home_url": "https://example.com",
+            "fields": [{"name": 42, "label": "Bad", "type": "text", "required": False}],
+        }
+        (folder / "source.json").write_text(json.dumps(schema), encoding="utf-8")
+        (folder / "plugin.py").write_text(_VALID_PLUGIN_PY, encoding="utf-8")
+
+        result = load_plugins(tmp_path)
+        assert "bad_name_type" not in result
+
+    # -----------------------------------------------------------------------
+    # Fix 6 — source_key non-empty string validation
+    # -----------------------------------------------------------------------
+
+    def test_source_key_empty_string_skipped(self, tmp_path):
+        """source.json with source_key='' (empty string) is skipped."""
+        import json
+
+        folder = tmp_path / "empty_key"
+        folder.mkdir()
+        schema = {
+            "source_key": "",
+            "display_name": "Test",
+            "description": "Test",
+            "home_url": "https://example.com",
+            "fields": [],
+        }
+        (folder / "source.json").write_text(json.dumps(schema), encoding="utf-8")
+        (folder / "plugin.py").write_text(_VALID_PLUGIN_PY, encoding="utf-8")
+
+        result = load_plugins(tmp_path)
+        assert "" not in result
+
+    def test_source_key_integer_skipped(self, tmp_path):
+        """source.json with source_key as an integer is skipped."""
+        import json
+
+        folder = tmp_path / "int_key"
+        folder.mkdir()
+        schema = {
+            "source_key": 123,
+            "display_name": "Test",
+            "description": "Test",
+            "home_url": "https://example.com",
+            "fields": [],
+        }
+        (folder / "source.json").write_text(json.dumps(schema), encoding="utf-8")
+        (folder / "plugin.py").write_text(_VALID_PLUGIN_PY, encoding="utf-8")
+
+        result = load_plugins(tmp_path)
+        assert not result

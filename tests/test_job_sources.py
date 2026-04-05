@@ -240,7 +240,7 @@ class TestAdzunaClientFetchPage:
         client = self._client()
 
         with patch(
-            "job_sources.adzuna.requests.get",
+            "job_sources._plugin_adzuna.requests.get",
             side_effect=requests.RequestException("timeout"),
         ):
             results = client.fetch_page(1)

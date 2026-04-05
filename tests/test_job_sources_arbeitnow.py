@@ -18,7 +18,7 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from job_sources import SOURCES, JobSource
-from job_sources.arbeitnow import _CONTRACT_TIME_MAP, _strip_html, _unix_to_iso
+from job_sources._plugin_arbeitnow import _CONTRACT_TIME_MAP, _strip_html, _unix_to_iso
 
 # Resolve ArbeitnowClient from the plugin registry so identity checks pass.
 ArbeitnowClient = SOURCES["arbeitnow"]
@@ -335,7 +335,7 @@ class TestArbeitnowClientTotalPages:
         client = _client()
 
         with patch(
-            "job_sources.arbeitnow.requests.get",
+            "job_sources._plugin_arbeitnow.requests.get",
             side_effect=_req.RequestException("timeout"),
         ):
             assert client.total_pages() == 1
@@ -400,7 +400,7 @@ class TestArbeitnowClientFetchPage:
         client = _client()
 
         with patch(
-            "job_sources.arbeitnow.requests.get",
+            "job_sources._plugin_arbeitnow.requests.get",
             side_effect=_req.RequestException("DNS failure"),
         ):
             assert client.fetch_page(1) == []

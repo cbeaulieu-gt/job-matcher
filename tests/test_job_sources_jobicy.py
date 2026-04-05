@@ -23,8 +23,9 @@ import requests as _req
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from job_sources import SOURCES, JobSource
-from job_sources.jobicy import JobicyClient
 from job_sources.utils import strip_html as _strip_html
+
+JobicyClient = SOURCES["jobicy"]
 
 
 # ---------------------------------------------------------------------------
@@ -255,7 +256,7 @@ class TestJobicyFetchPage:
         client = _client()
 
         with patch(
-            "job_sources.jobicy.requests.get",
+            "job_sources._plugin_jobicy.requests.get",
             side_effect=_req.RequestException("timeout"),
         ):
             assert client.fetch_page(1) == []

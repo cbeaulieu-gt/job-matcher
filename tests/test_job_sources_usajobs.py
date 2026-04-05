@@ -23,7 +23,9 @@ import requests as req_module
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from job_sources import SOURCES, JobSource, make_source
-from job_sources.usajobs import USAJobsClient, _parse_float
+from job_sources._plugin_usajobs import _parse_float
+
+USAJobsClient = SOURCES["usajobs"]
 
 
 # ---------------------------------------------------------------------------
@@ -224,7 +226,7 @@ class TestUSAJobsClientFetchPage:
         client = _make_client()
 
         with patch(
-            "job_sources.usajobs.requests.get",
+            "job_sources._plugin_usajobs.requests.get",
             side_effect=req_module.RequestException("connection refused"),
         ):
             results = client.fetch_page(1)
@@ -295,7 +297,7 @@ class TestUSAJobsClientTotalPages:
         client = _make_client()
 
         with patch(
-            "job_sources.usajobs.requests.get",
+            "job_sources._plugin_usajobs.requests.get",
             side_effect=req_module.RequestException("timeout"),
         ):
             with pytest.raises(RuntimeError, match="request failed"):

@@ -26,7 +26,7 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from job_sources import SOURCES, make_source
-from job_sources.himalayas import _parse_created_at, _strip_html, _map_job_type
+from job_sources._plugin_himalayas import _parse_created_at, _strip_html, _map_job_type
 
 # Resolve HimalayasClient from the plugin registry so identity checks pass.
 HimalayasClient = SOURCES["himalayas"]
@@ -383,7 +383,7 @@ class TestHimalayasClientFetchPage:
         client = self._client()
 
         with patch(
-            "job_sources.himalayas.requests.get",
+            "job_sources._plugin_himalayas.requests.get",
             side_effect=req_lib.RequestException("timeout"),
         ):
             results = client.fetch_page(1)
@@ -482,7 +482,7 @@ class TestHimalayasClientTotalPages:
         client = self._client()
 
         with patch(
-            "job_sources.himalayas.requests.get",
+            "job_sources._plugin_himalayas.requests.get",
             side_effect=req_lib.RequestException("network error"),
         ):
             pages = client.total_pages()

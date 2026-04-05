@@ -287,6 +287,34 @@ class _FailingSource(JobSource):
         return {"display_name": "Failing Test", "fields": []}
 
 
+class TestMakeEnabledSourcesEnabledButMissing:
+    """Fix 8 — warn when a source is enabled in providers.json but not in SOURCES."""
+
+    def test_enabled_but_missing_source_warns(self, monkeypatch, caplog):
+        """providers_data enables 'ghost' but SOURCES has no 'ghost' key → warning."""
+        monkeypatch.setattr("job_sources.SOURCES", {})
+
+        providers = _providers({"ghost": {"enabled": True}})
+        with caplog.at_level(logging.WARNING, logger="ingest.sources"):
+            result = make_enabled_sources(providers, _BASE_CONFIG)
+
+        assert result == []
+        assert any(
+            "ghost" in rec.message and "not loaded" in rec.message
+            for rec in caplog.records
+        )
+
+    def test_disabled_missing_source_does_not_warn(self, monkeypatch, caplog):
+        """A source not in SOURCES but with enabled=False does not warn."""
+        monkeypatch.setattr("job_sources.SOURCES", {})
+
+        providers = _providers({"ghost": {"enabled": False}})
+        with caplog.at_level(logging.WARNING, logger="ingest.sources"):
+            make_enabled_sources(providers, _BASE_CONFIG)
+
+        assert not any("ghost" in rec.message for rec in caplog.records)
+
+
 class TestMakeEnabledSourcesInitFailure:
     """Source raises ValueError during __init__ — should be skipped, not crash."""
 

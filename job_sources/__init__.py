@@ -45,6 +45,7 @@ __all__ = [
 # Source registry — populated automatically from plugins/sources/
 # ---------------------------------------------------------------------------
 
+# Scanned once at import time. Restart the process to pick up new plugins.
 SOURCES: dict[str, type[JobSource]] = load_plugins()
 
 
@@ -96,6 +97,16 @@ def make_enabled_sources(providers_data: dict, config: dict) -> list[JobSource]:
 
     sources_cfg: dict = providers_data.get("job_sources") or {}
     result: list[JobSource] = []
+
+    # Warn about sources enabled in providers.json that are not in the loaded registry.
+    loaded_keys = set(SOURCES.keys())
+    for key, src_cfg in sources_cfg.items():
+        if src_cfg.get("enabled") and key not in loaded_keys:
+            _log.warning(
+                "Source %r is enabled in providers.json but was not loaded "
+                "(plugin missing or failed to load) — skipping",
+                key,
+            )
 
     for key, cls in SOURCES.items():
         src_cfg = sources_cfg.get(key) or {}

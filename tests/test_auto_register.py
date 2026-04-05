@@ -226,6 +226,19 @@ def test_absent_providers_file_creates_file(tmp_path, monkeypatch):
     assert data["job_sources"]["keyless"] == {"enabled": True}
 
 
+def test_calling_twice_does_not_error(tmp_path, monkeypatch):
+    """Calling ensure_plugins_registered twice in sequence does not raise."""
+    providers_path = str(tmp_path / "providers.json")
+    _write_providers(providers_path, {"job_sources": {}})
+
+    monkeypatch.setattr(_mod, "SOURCES", {"keyless": _FakeKeyless})
+    ensure_plugins_registered(providers_path)
+    ensure_plugins_registered(providers_path)  # should not raise
+
+    data = _read_providers(providers_path)
+    assert data["job_sources"]["keyless"] == {"enabled": True}
+
+
 def test_no_sources_noop(tmp_path, monkeypatch):
     """When SOURCES is empty, providers.json is not modified."""
     providers_path = str(tmp_path / "providers.json")

@@ -21,6 +21,11 @@ Public API
 ``load_plugins(plugins_dir=None) -> dict[str, type[JobSource]]``
     Discover and load all valid plugins.  Returns a mapping of
     ``source_key -> JobSource subclass``.
+
+NOTE: load_plugins() is called at import time from job_sources/__init__.py
+(SOURCES = load_plugins()). This means the plugins/ directory is scanned once
+when the package is first imported. Plugins loaded after that point will not
+appear in SOURCES until the process restarts.
 """
 
 from __future__ import annotations
@@ -39,6 +44,9 @@ _log = logging.getLogger(__name__)
 
 # Required top-level keys every source.json must have.
 _REQUIRED_SCHEMA_KEYS = {"source_key", "display_name", "description", "home_url", "fields"}
+
+# Field names that are reserved by the framework and cannot be used in source.json.
+_RESERVED_FIELD_NAMES = {"enabled"}
 
 
 def load_plugins(plugins_dir: Path | str | None = None) -> dict[str, type[JobSource]]:
@@ -73,8 +81,12 @@ def load_plugins(plugins_dir: Path | str | None = None) -> dict[str, type[JobSou
         return {}
 
     for entry in entries:
-        # Skip hidden/private folders and non-directories (e.g. loose files).
-        if entry.name.startswith("_") or not entry.is_dir():
+        # Skip hidden/private folders (underscore prefix) and non-directories.
+        if entry.name.startswith("_"):
+            _log.debug("Plugin loader: skipping %s (underscore prefix)", entry.name)
+            continue
+        if not entry.is_dir():
+            _log.debug("Plugin loader: skipping %s (not a directory)", entry.name)
             continue
 
         plugin_dir = Path(entry.path)
@@ -104,6 +116,37 @@ def load_plugins(plugins_dir: Path | str | None = None) -> dict[str, type[JobSou
                 entry.name,
                 sorted(missing_keys),
             )
+            continue
+
+        # --- Enforce source_key matches folder name ---
+        if schema["source_key"] != entry.name:
+            _log.warning(
+                "Plugin %s: source_key %r does not match folder name — skipping",
+                entry.name, schema["source_key"],
+            )
+            continue
+
+        # --- Validate fields type ---
+        if not isinstance(schema.get("fields"), list):
+            _log.warning("Plugin %s: 'fields' must be a list — skipping", entry.name)
+            continue
+
+        # --- Validate each field entry ---
+        fields_valid = True
+        for field in schema["fields"]:
+            if not isinstance(field, dict):
+                _log.warning("Plugin %s: each field must be a dict — skipping", entry.name)
+                fields_valid = False
+                break
+            if field.get("name") in _RESERVED_FIELD_NAMES:
+                _log.warning(
+                    "Plugin %s: field name %r is reserved — skipping",
+                    entry.name, field["name"],
+                )
+                fields_valid = False
+                break
+
+        if not fields_valid:
             continue
 
         # --- Load plugin.py module ---
@@ -154,6 +197,15 @@ def load_plugins(plugins_dir: Path | str | None = None) -> dict[str, type[JobSou
             _log.warning("Plugin %s: %s", entry.name, exc)
             continue
 
+        # --- Check for duplicate source_key before registering ---
+        source_key: str = schema["source_key"]
+        if source_key in result:
+            _log.warning(
+                "Plugin %s: source_key %r already registered by another plugin — skipping",
+                entry.name, source_key,
+            )
+            continue
+
         # --- Attach schema and install settings_schema shim ---
         cls._plugin_schema = schema  # type: ignore[attr-defined]
 
@@ -163,13 +215,6 @@ def load_plugins(plugins_dir: Path | str | None = None) -> dict[str, type[JobSou
             lambda c, _schema=schema: {k: v for k, v in _schema.items() if k != "source_key"}
         )
 
-        # Remove settings_schema from __abstractmethods__ so the class becomes
-        # concrete and can be instantiated.  ABC computes this frozenset at class
-        # creation time and does not update it when attributes are later assigned.
-        if "settings_schema" in getattr(cls, "__abstractmethods__", frozenset()):
-            cls.__abstractmethods__ = cls.__abstractmethods__ - {"settings_schema"}
-
-        source_key: str = schema["source_key"]
         result[source_key] = cls
         _log.debug("Loaded plugin %r as source %r", entry.name, source_key)
 

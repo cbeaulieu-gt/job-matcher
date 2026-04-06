@@ -42,19 +42,23 @@ jobs:
 
   deploy:
     name: Deploy to Linux VM
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: build-and-push
+    permissions:
+      packages: read
 
     steps:
-      - name: SSH deploy
-        uses: appleboy/ssh-action@v1
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
         with:
-          host: ${{ secrets.DEPLOY_SSH_HOST }}
-          username: ${{ secrets.DEPLOY_SSH_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          script: |
-            cd /opt/job-matcher-pr || exit 1
-            docker compose pull || exit 1
-            docker compose up -d --remove-orphans || exit 1
-            docker compose ps --status running --services | grep -q "web" || { echo "ERROR: Web service not running" >&2; exit 1; }
-            docker image prune -f --filter "label=com.docker.compose.project=job-matcher-pr"
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Deploy stack
+        working-directory: /opt/job-matcher-pr
+        run: |
+          docker compose pull
+          docker compose up -d --remove-orphans
+          docker compose ps --status running --services | grep -q "web" || { echo "ERROR: Web service not running" >&2; exit 1; }
+          docker image prune -f --filter "label=com.docker.compose.project=job-matcher-pr"

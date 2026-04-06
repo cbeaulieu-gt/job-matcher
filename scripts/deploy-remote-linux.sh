@@ -189,7 +189,10 @@ ssh "${SSH_TARGET}" bash <<REMOTE
 set -euo pipefail
 
 if [[ ! -e "${REMOTE_PATH}" ]]; then
-    echo "  Directory not found -- cloning from ${REPO_URL}..."
+    echo "  Creating ${REMOTE_PATH}..."
+    sudo mkdir -p "${REMOTE_PATH}"
+    sudo chown "\$(id -un):\$(id -gn)" "${REMOTE_PATH}"
+    echo "  Cloning from ${REPO_URL}..."
     git clone "${REPO_URL}" "${REMOTE_PATH}"
     echo "  Clone complete."
 
@@ -249,6 +252,15 @@ echo ""
 if [[ "${RUN_SETUP}" =~ ^[Yy]$ ]]; then
     step "Launching docker-setup.sh on ${REMOTE_HOST} via interactive SSH..."
     echo ""
+
+    # Sanity check: verify the clone succeeded before attempting to run the script.
+    if ! ssh "${SSH_TARGET}" "[[ -f '${REMOTE_PATH}/scripts/docker-setup.sh' ]]" 2>/dev/null; then
+        fail "scripts/docker-setup.sh not found at ${REMOTE_PATH}/scripts/docker-setup.sh on the remote."
+        fail "The git clone may have failed (e.g. insufficient permissions on ${REMOTE_PATH})."
+        fail "Fix the clone step and re-run this script before attempting docker-setup.sh."
+        exit 1
+    fi
+
     # -t allocates a pseudo-TTY so that interactive prompts (read -p) work.
     ssh -t "${SSH_TARGET}" "cd '${REMOTE_PATH}' && sudo bash scripts/docker-setup.sh"
     ok "docker-setup.sh completed."

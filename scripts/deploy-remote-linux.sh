@@ -145,10 +145,10 @@ if docker compose version &>/dev/null 2>&1; then
     COMPOSE_VER="$(docker compose version --short 2>/dev/null || echo 'unknown')"
 fi
 
-echo "DOCKER_OK=${DOCKER_OK}"
-echo "COMPOSE_OK=${COMPOSE_OK}"
-echo "DOCKER_VER=${DOCKER_VER}"
-echo "COMPOSE_VER=${COMPOSE_VER}"
+echo "DOCKER_OK=\"${DOCKER_OK}\""
+echo "COMPOSE_OK=\"${COMPOSE_OK}\""
+echo "DOCKER_VER=\"${DOCKER_VER}\""
+echo "COMPOSE_VER=\"${COMPOSE_VER}\""
 REMOTE
 )
 

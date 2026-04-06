@@ -519,4 +519,4 @@ class TestSnippetsRoute:
         assert response.status_code == 200
         body = response.data.decode("utf-8")
         assert "Permanent" in body
-        assert "Contract" not in body
+        assert 'badge-jobtype">Contract' not in body

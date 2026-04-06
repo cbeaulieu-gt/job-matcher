@@ -20,7 +20,16 @@ python ingest.py -v                # Short form of --verbose
 # Run web UI (http://localhost:5000)
 python app.py
 
-# Run tests
+# Run tests (requires PostgreSQL — set DATABASE_URL before running)
+# Option A: use the docker-compose dev database
+
+# PowerShell
+#   $env:DATABASE_URL = "postgresql://jobmatcher:<password>@localhost:5432/jobmatcher"; pytest
+# Bash/zsh
+#   export DATABASE_URL="postgresql://jobmatcher:<password>@localhost:5432/jobmatcher" && pytest
+# (<password> is in .env.dev or docker-compose.dev.yml)
+
+# Option B: DATABASE_URL already exported in your shell
 pytest
 pytest tests/test_prefilter.py     # Single file
 pytest -k "test_title_include"     # By name pattern
@@ -28,11 +37,11 @@ pytest -k "test_title_include"     # By name pattern
 
 ## Architecture
 
-The app is two decoupled processes sharing a SQLite database (`jobs.db`):
+The app is two decoupled processes sharing a PostgreSQL database (connection via `DATABASE_URL`):
 
 - **`ingest.py`** — CLI pipeline: multiple job source APIs → pre-filter → scrape full JD → score with configured LLM provider → insert into DB. Runs on a schedule or manually.
 - **`app.py`** — Flask web server. Read-only views of scored listings plus HTMX write actions (bookmark, dismiss, apply). Talks to LLM providers only for key validation (`/api/validate-keys`); all scoring happens in `ingest.py`.
-- **`db.py`** — All SQLite access. JSON array columns (`matched_skills`, `missing_skills`, `concerns`) are serialized/deserialized here.
+- **`db.py`** — All PostgreSQL access via `psycopg2`. JSON array columns (`matched_skills`, `missing_skills`, `concerns`) are serialized/deserialized here.
 
 ### Ingestion pipeline (per listing)
 
@@ -88,7 +97,7 @@ All UI work must follow `docs/STYLE_GUIDE.md`. Read it before touching any HTML 
 |---|---|
 | Pre-filter before LLM | Each filtered listing saves a Haiku API call (~$0.001); meaningful at 500 listings/run |
 | Scrape full JD | Adzuna snippets (200–300 chars) are too short for accurate skill matching |
-| SQLite, no ORM | Schema is small and stable; avoids dependencies and migration tooling |
+| PostgreSQL, no ORM | Schema is small and stable; `psycopg2` is the only driver dependency |
 | HTMX, no JS framework | Zero build tooling for a read-mostly UI with two write actions |
 | Decouple ingest from serve | Ingest takes minutes (scraping + LLM); it cannot run inside a web request |
 | `config/profile.json` flat file | Edited manually as a whole unit; easier to version-control than a DB record |

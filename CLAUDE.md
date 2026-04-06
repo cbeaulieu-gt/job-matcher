@@ -69,7 +69,15 @@ Results include a `model_used` field stored as `"provider/model"` per listing. S
 
 ## Deployment
 
-**Windows native (active deployment path):**
+**Docker (active deployment path):**
+- Dev stack (port 5000): `docker compose -f docker-compose.dev.yml up -d`
+- Prod stack (port 5001): `docker compose -f docker-compose.prod.yml up -d`
+- Credentials: copy `.env.dev.example` → `.env.dev` and `.env.prod.example` → `.env.prod`
+- Config/logs: dev uses `./config-dev` and `./logs-dev`; prod uses `./config` and `./logs`
+- `scripts/docker-setup.sh` — one-time VM provisioning
+- `scripts/docker-status.sh` / `scripts/docker-teardown.sh` — ops helpers
+
+**Windows native (legacy):**
 - `scripts/setup.ps1` — Registers waitress as an NSSM Windows service and creates a Task Scheduler job for daily ingest.
 - `scripts/status.ps1` / `scripts/teardown.ps1` — Ops helpers.
 

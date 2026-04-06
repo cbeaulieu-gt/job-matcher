@@ -19,7 +19,7 @@ import json
 import os
 import sys
 import types
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 # ---------------------------------------------------------------------------
 # Stub psycopg2 and psycopg2.extras before any project import so that db.py
@@ -36,11 +36,11 @@ sys.modules.setdefault("psycopg2.extras", _psycopg2_stub.extras)
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import pytest
+import pytest  # noqa: E402
 
-import app as app_module
-from app import app as flask_app
-import db as db_module
+import app as app_module  # noqa: E402
+from app import app as flask_app  # noqa: E402
+import db as db_module  # noqa: E402
 
 
 # ---------------------------------------------------------------------------

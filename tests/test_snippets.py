@@ -468,8 +468,8 @@ class TestSnippetsRoute:
         response = self.client.get("/snippets?search=python")
         assert response.status_code == 200
         body = response.data.decode("utf-8")
-        assert "sn-search-match" in body
-        assert "sn-search-nomatch" not in body
+        assert "Python Developer" in body
+        assert "Java Architect" not in body
 
     def test_snippets_remote_only_query_param(self):
         db.insert_listing(
@@ -493,8 +493,8 @@ class TestSnippetsRoute:
         response = self.client.get("/snippets?remote_only=1")
         assert response.status_code == 200
         body = response.data.decode("utf-8")
-        assert "sn-remote-yes" in body
-        assert "sn-remote-no" not in body
+        assert "Remote" in body
+        assert "New York, NY" not in body
 
     def test_snippets_job_type_query_param(self):
         db.insert_listing(
@@ -518,5 +518,5 @@ class TestSnippetsRoute:
         response = self.client.get("/snippets?job_type=permanent")
         assert response.status_code == 200
         body = response.data.decode("utf-8")
-        assert "sn-jt-match" in body
-        assert "sn-jt-nomatch" not in body
+        assert "Permanent" in body
+        assert "Contract" not in body

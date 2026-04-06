@@ -18,7 +18,6 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import app as app_module
-import db
 from db import _lookup_pricing
 from app import app as flask_app
 from credentials import save_providers

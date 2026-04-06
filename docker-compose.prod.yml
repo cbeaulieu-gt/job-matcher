@@ -2,6 +2,7 @@ services:
   db:
     image: postgres:16-alpine
     container_name: job-matcher-prod-db
+    env_file: .env.prod
     volumes:
       - pgdata_prod:/var/lib/postgresql/data
     environment:
@@ -18,6 +19,7 @@ services:
   web:
     image: ghcr.io/cbeaulieu-gt/job-matcher-pr:latest
     container_name: job-matcher-prod-web
+    env_file: .env.prod
     depends_on:
       db:
         condition: service_healthy

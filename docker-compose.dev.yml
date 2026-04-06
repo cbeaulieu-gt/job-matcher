@@ -2,6 +2,7 @@ services:
   db:
     image: postgres:16-alpine
     container_name: job-matcher-dev-db
+    env_file: .env.dev
     volumes:
       - pgdata_dev:/var/lib/postgresql/data
     environment:
@@ -16,17 +17,17 @@ services:
     restart: unless-stopped
 
   web:
-    build: .
     image: ghcr.io/cbeaulieu-gt/job-matcher-pr:${APP_VERSION:-latest}
     container_name: job-matcher-dev-web
+    env_file: .env.dev
     depends_on:
       db:
         condition: service_healthy
     ports:
       - "5000:5000"
     volumes:
-      - ./config:/app/config:rw   # rw required: /settings UI writes providers.json
-      - ./logs:/app/logs:rw
+      - ./config-dev:/app/config:rw   # rw required: /settings UI writes providers.json
+      - ./logs-dev:/app/logs:rw
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/jobmatcher_dev
       FLASK_DEBUG: "0"

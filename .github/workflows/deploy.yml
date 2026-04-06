@@ -78,10 +78,13 @@ jobs:
         env:
           APP_VERSION: ${{ github.event.workflow_run.head_sha }}
         run: |
-          export APP_VERSION=${APP_VERSION::7}
+          APP_VERSION=$(echo "$APP_VERSION" | cut -c1-7)
           docker compose -f /opt/job-matcher-pr/docker-compose.dev.yml pull
           docker compose -f /opt/job-matcher-pr/docker-compose.dev.yml up -d --remove-orphans
           docker compose -f /opt/job-matcher-pr/docker-compose.dev.yml ps --status running --services | grep -q "web"
+
+      - name: Prune old images
+        run: docker image prune -f --filter "label=com.docker.compose.project=job-matcher-dev"
 
   deploy-prod:
     name: Deploy prod stack
@@ -106,7 +109,7 @@ jobs:
         env:
           APP_VERSION: ${{ github.event.workflow_run.head_sha }}
         run: |
-          export APP_VERSION=${APP_VERSION::7}
+          APP_VERSION=$(echo "$APP_VERSION" | cut -c1-7)
           docker compose -f /opt/job-matcher-pr/docker-compose.prod.yml pull
           docker compose -f /opt/job-matcher-pr/docker-compose.prod.yml up -d --remove-orphans
           docker compose -f /opt/job-matcher-pr/docker-compose.prod.yml ps --status running --services | grep -q "web"

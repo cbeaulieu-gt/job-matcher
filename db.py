@@ -1,19 +1,32 @@
 """
-db.py — SQLite database layer for Job Matcher.
+db.py — PostgreSQL database layer for Job Matcher.
 
-All interactions with jobs.db go through this module. No other module
-should import sqlite3 or open the database file directly.
+All interactions with the database go through this module. No other module
+should import psycopg2 or open a database connection directly.
 
 JSON array columns (matched_skills, missing_skills, concerns) are
 serialised to strings on write and deserialised to Python lists on read.
-Rows returned from read helpers are plain dicts, not sqlite3.Row objects.
+Rows returned from read helpers are plain dicts, not cursor row objects.
 """
 
 import json
 import os
-import sqlite3
 
-_DEFAULT_DB_PATH: str = os.environ.get("DB_PATH", "jobs.db")
+import psycopg2
+import psycopg2.extras
+
+_DATABASE_URL: str = os.environ.get(
+    "DATABASE_URL",
+    "postgresql://jobmatcher:jobmatcher@localhost:5432/jobmatcher"
+)
+_USING_DEFAULT_DATABASE_URL: bool = "DATABASE_URL" not in os.environ
+
+if _USING_DEFAULT_DATABASE_URL:
+    import logging as _logging
+    _logging.getLogger(__name__).warning(
+        "DATABASE_URL is not set — using default local development credentials. "
+        "Set DATABASE_URL in your environment or .env file for production."
+    )
 
 # Explicit allowlist for user-supplied sort keys → safe SQL ORDER BY clauses.
 # Never interpolate a raw user value into SQL; look it up here instead.
@@ -98,312 +111,113 @@ def _lookup_pricing(model_used: str | None) -> tuple[float, float] | None:
 
 
 # ---------------------------------------------------------------------------
+# Connection wrapper
+# ---------------------------------------------------------------------------
+
+class _Conn:
+    """Thin wrapper around a psycopg2 connection that mimics the sqlite3.Connection
+    interface used throughout this module (execute, commit, close, context manager).
+
+    This keeps all ~28 call sites unchanged while swapping the underlying driver.
+    """
+
+    def __init__(self, conn):
+        self._conn = conn
+        self._cursor = conn.cursor()
+
+    def execute(self, sql, params=None):
+        self._cursor.execute(sql, params or ())
+        return self._cursor
+
+    def commit(self):
+        self._conn.commit()
+
+    def close(self):
+        self._cursor.close()
+        self._conn.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        self.close()
+
+
+# ---------------------------------------------------------------------------
 # Connection
 # ---------------------------------------------------------------------------
 
-def get_connection(db_path: str = _DEFAULT_DB_PATH) -> sqlite3.Connection:
-    """Return an open sqlite3 connection with row_factory set to sqlite3.Row.
+def get_connection(db_path=None):  # db_path kept for signature compat, ignored
+    """Return an open database connection wrapping a psycopg2 connection.
+
+    The ``db_path`` parameter is accepted for API compatibility with call sites
+    that previously passed a SQLite file path; it is silently ignored.
+    The actual connection target is determined by the ``DATABASE_URL``
+    environment variable (default: ``postgresql://jobmatcher:jobmatcher@localhost:5432/jobmatcher``).
 
     The caller is responsible for closing the connection (or using it as a
     context manager for transactions).
     """
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    return conn
+    raw = psycopg2.connect(
+        _DATABASE_URL,
+        cursor_factory=psycopg2.extras.RealDictCursor,
+        connect_timeout=5,
+    )
+    return _Conn(raw)
 
 
 # ---------------------------------------------------------------------------
 # Schema
 # ---------------------------------------------------------------------------
 
-def init_db(db_path: str = _DEFAULT_DB_PATH) -> None:
-    """Create or migrate the listings table.
+def init_db(db_path=None) -> None:
+    """Create the listings and location_geocache tables if they do not exist.
 
-    Fresh databases get the current schema with ``source_id`` (no ``adzuna_id``
-    legacy column).  Existing databases are migrated via a table-copy so that
-    the ``adzuna_id`` column is effectively renamed to ``source_id`` and the
-    ``UNIQUE(source, source_id)`` constraint replaces the old per-column
-    ``UNIQUE`` on ``adzuna_id``.
+    This is a clean CREATE TABLE IF NOT EXISTS approach — no migration paths.
+    Data is disposable in the PostgreSQL deployment context. All calls are
+    idempotent and safe to run on every startup.
 
-    Migration strategy
-    ------------------
-    SQLite ``ALTER TABLE RENAME COLUMN`` was added in 3.25.0 (2018).  We use
-    the portable table-copy approach instead so the migration works on any
-    SQLite version:
-
-    1. If the table does not exist at all → create it with the current schema.
-    2. If it exists with ``adzuna_id`` (legacy) → copy into a new table that
-       uses ``source_id``, backfilling ``source='adzuna'`` for NULL rows, then
-       drop the old table and rename.
-    3. If it already has ``source_id`` (migrated or fresh) → apply any missing
-       ``ADD COLUMN`` migrations for columns added after the initial migration,
-       then ensure the unique index exists.
-
-    All paths are idempotent — safe to call on every startup.
+    The ``db_path`` parameter is accepted for API compatibility; it is ignored.
     """
     conn = get_connection(db_path)
     try:
-        # Inspect current schema to choose the migration path.
-        cols_info = conn.execute("PRAGMA table_info(listings)").fetchall()
-        existing_cols = {row["name"] for row in cols_info}
-
-        if not existing_cols:
-            # ------------------------------------------------------------
-            # Path A: fresh database — create canonical schema directly.
-            # ------------------------------------------------------------
-            conn.execute("""
-                CREATE TABLE listings (
-                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-                    source              TEXT NOT NULL DEFAULT 'adzuna',
-                    source_id           TEXT NOT NULL,
-                    title               TEXT,
-                    company             TEXT,
-                    location            TEXT,
-                    salary_min          REAL,
-                    salary_max          REAL,
-                    salary_is_predicted INTEGER,
-                    contract_type       TEXT,
-                    contract_time       TEXT,
-                    description         TEXT,
-                    redirect_url        TEXT,
-                    created_at          TEXT,
-                    fetched_at          TEXT,
-                    score               REAL,
-                    matched_skills      TEXT,
-                    missing_skills      TEXT,
-                    concerns            TEXT,
-                    verdict             TEXT,
-                    bookmarked          INTEGER DEFAULT 0,
-                    dismissed           INTEGER DEFAULT 0,
-                    seen                INTEGER DEFAULT 0,
-                    model_used          TEXT,
-                    tokens_input        INTEGER,
-                    tokens_output       INTEGER,
-                    applied             INTEGER DEFAULT 0,
-                    job_type            TEXT,
-                    posted_at           TEXT,
-                    opened_at           TEXT DEFAULT NULL,
-                    description_source  TEXT NOT NULL DEFAULT 'full',
-                    UNIQUE(source, source_id)
-                )
-            """)
-
-        elif "adzuna_id" in existing_cols and "source_id" not in existing_cols:
-            # ------------------------------------------------------------
-            # Path B: legacy database — table has adzuna_id but not source_id.
-            # Use table-copy migration to rename the column and add the new
-            # composite unique constraint.
-            # ------------------------------------------------------------
-            conn.execute("ALTER TABLE listings RENAME TO listings_legacy")
-
-            conn.execute("""
-                CREATE TABLE listings (
-                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-                    source              TEXT NOT NULL DEFAULT 'adzuna',
-                    source_id           TEXT NOT NULL,
-                    title               TEXT,
-                    company             TEXT,
-                    location            TEXT,
-                    salary_min          REAL,
-                    salary_max          REAL,
-                    salary_is_predicted INTEGER,
-                    contract_type       TEXT,
-                    contract_time       TEXT,
-                    description         TEXT,
-                    redirect_url        TEXT,
-                    created_at          TEXT,
-                    fetched_at          TEXT,
-                    score               REAL,
-                    matched_skills      TEXT,
-                    missing_skills      TEXT,
-                    concerns            TEXT,
-                    verdict             TEXT,
-                    bookmarked          INTEGER DEFAULT 0,
-                    dismissed           INTEGER DEFAULT 0,
-                    seen                INTEGER DEFAULT 0,
-                    model_used          TEXT,
-                    tokens_input        INTEGER,
-                    tokens_output       INTEGER,
-                    applied             INTEGER DEFAULT 0,
-                    job_type            TEXT,
-                    posted_at           TEXT,
-                    opened_at           TEXT DEFAULT NULL,
-                    description_source  TEXT NOT NULL DEFAULT 'full',
-                    UNIQUE(source, source_id)
-                )
-            """)
-
-            # Determine which optional columns exist in the legacy table so
-            # we can safely SELECT them (columns added later may be absent).
-            legacy_cols = {
-                row["name"] for row in
-                conn.execute("PRAGMA table_info(listings_legacy)").fetchall()
-            }
-
-            def _col(name: str, default: str = "NULL") -> str:
-                """Return the column expression for the INSERT … SELECT."""
-                return name if name in legacy_cols else default
-
-            conn.execute(f"""
-                INSERT INTO listings (
-                    source, source_id, title, company, location,
-                    salary_min, salary_max, salary_is_predicted,
-                    contract_type, contract_time,
-                    description, redirect_url,
-                    created_at, fetched_at,
-                    score, matched_skills, missing_skills, concerns, verdict,
-                    bookmarked, dismissed, seen,
-                    model_used, tokens_input, tokens_output, applied, job_type,
-                    posted_at
-                )
-                SELECT
-                    COALESCE({_col('source')}, 'adzuna'),
-                    {_col('adzuna_id', "''")},
-                    {_col('title')}, {_col('company')}, {_col('location')},
-                    {_col('salary_min')}, {_col('salary_max')},
-                    {_col('salary_is_predicted')},
-                    {_col('contract_type')}, {_col('contract_time')},
-                    {_col('description')}, {_col('redirect_url')},
-                    {_col('created_at')}, {_col('fetched_at')},
-                    {_col('score')},
-                    {_col('matched_skills')}, {_col('missing_skills')},
-                    {_col('concerns')}, {_col('verdict')},
-                    COALESCE({_col('bookmarked')}, 0),
-                    COALESCE({_col('dismissed')}, 0),
-                    COALESCE({_col('seen')}, 0),
-                    {_col('model_used')},
-                    {_col('tokens_input')}, {_col('tokens_output')},
-                    COALESCE({_col('applied')}, 0),
-                    {_col('job_type')},
-                    {_col('posted_at')}
-                FROM listings_legacy
-            """)
-
-            conn.execute("DROP TABLE listings_legacy")
-
-        elif "adzuna_id" in existing_cols and "source_id" in existing_cols:
-            # ------------------------------------------------------------
-            # Path C: partially migrated database — both columns exist.
-            # Backfill source_id from adzuna_id where still NULL, then
-            # do a full table-copy to drop adzuna_id cleanly.
-            # ------------------------------------------------------------
-            conn.execute(
-                "UPDATE listings SET source = 'adzuna', source_id = adzuna_id "
-                "WHERE source IS NULL OR source_id IS NULL"
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS listings (
+                id                  SERIAL PRIMARY KEY,
+                source              TEXT NOT NULL DEFAULT 'adzuna',
+                source_id           TEXT NOT NULL,
+                title               TEXT,
+                company             TEXT,
+                location            TEXT,
+                salary_min          REAL,
+                salary_max          REAL,
+                salary_is_predicted INTEGER,
+                contract_type       TEXT,
+                contract_time       TEXT,
+                description         TEXT,
+                redirect_url        TEXT,
+                created_at          TEXT,
+                fetched_at          TEXT,
+                score               REAL,
+                matched_skills      TEXT,
+                missing_skills      TEXT,
+                concerns            TEXT,
+                verdict             TEXT,
+                bookmarked          INTEGER DEFAULT 0,
+                dismissed           INTEGER DEFAULT 0,
+                seen                INTEGER DEFAULT 0,
+                model_used          TEXT,
+                tokens_input        INTEGER,
+                tokens_output       INTEGER,
+                applied             INTEGER DEFAULT 0,
+                job_type            TEXT,
+                posted_at           TEXT,
+                opened_at           TEXT DEFAULT NULL,
+                description_source  TEXT NOT NULL DEFAULT 'full',
+                UNIQUE(source, source_id)
             )
+        """)
 
-            conn.execute("ALTER TABLE listings RENAME TO listings_legacy")
-
-            conn.execute("""
-                CREATE TABLE listings (
-                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-                    source              TEXT NOT NULL DEFAULT 'adzuna',
-                    source_id           TEXT NOT NULL,
-                    title               TEXT,
-                    company             TEXT,
-                    location            TEXT,
-                    salary_min          REAL,
-                    salary_max          REAL,
-                    salary_is_predicted INTEGER,
-                    contract_type       TEXT,
-                    contract_time       TEXT,
-                    description         TEXT,
-                    redirect_url        TEXT,
-                    created_at          TEXT,
-                    fetched_at          TEXT,
-                    score               REAL,
-                    matched_skills      TEXT,
-                    missing_skills      TEXT,
-                    concerns            TEXT,
-                    verdict             TEXT,
-                    bookmarked          INTEGER DEFAULT 0,
-                    dismissed           INTEGER DEFAULT 0,
-                    seen                INTEGER DEFAULT 0,
-                    model_used          TEXT,
-                    tokens_input        INTEGER,
-                    tokens_output       INTEGER,
-                    applied             INTEGER DEFAULT 0,
-                    job_type            TEXT,
-                    posted_at           TEXT,
-                    opened_at           TEXT DEFAULT NULL,
-                    description_source  TEXT NOT NULL DEFAULT 'full',
-                    UNIQUE(source, source_id)
-                )
-            """)
-
-            legacy_cols = {
-                row["name"] for row in
-                conn.execute("PRAGMA table_info(listings_legacy)").fetchall()
-            }
-
-            def _col(name: str, default: str = "NULL") -> str:  # type: ignore[misc]
-                return name if name in legacy_cols else default
-
-            conn.execute(f"""
-                INSERT INTO listings (
-                    source, source_id, title, company, location,
-                    salary_min, salary_max, salary_is_predicted,
-                    contract_type, contract_time,
-                    description, redirect_url,
-                    created_at, fetched_at,
-                    score, matched_skills, missing_skills, concerns, verdict,
-                    bookmarked, dismissed, seen,
-                    model_used, tokens_input, tokens_output, applied, job_type,
-                    posted_at
-                )
-                SELECT
-                    COALESCE(source, 'adzuna'),
-                    source_id,
-                    {_col('title')}, {_col('company')}, {_col('location')},
-                    {_col('salary_min')}, {_col('salary_max')},
-                    {_col('salary_is_predicted')},
-                    {_col('contract_type')}, {_col('contract_time')},
-                    {_col('description')}, {_col('redirect_url')},
-                    {_col('created_at')}, {_col('fetched_at')},
-                    {_col('score')},
-                    {_col('matched_skills')}, {_col('missing_skills')},
-                    {_col('concerns')}, {_col('verdict')},
-                    COALESCE({_col('bookmarked')}, 0),
-                    COALESCE({_col('dismissed')}, 0),
-                    COALESCE({_col('seen')}, 0),
-                    {_col('model_used')},
-                    {_col('tokens_input')}, {_col('tokens_output')},
-                    COALESCE({_col('applied')}, 0),
-                    {_col('job_type')},
-                    {_col('posted_at')}
-                FROM listings_legacy
-            """)
-
-            conn.execute("DROP TABLE listings_legacy")
-
-        else:
-            # ------------------------------------------------------------
-            # Path D: already-migrated database with source_id (no adzuna_id).
-            # Apply any ADD COLUMN migrations for columns added after the
-            # initial migration landed.
-            # NOTE: ALTER TABLE raises OperationalError if the column already
-            # exists; we suppress it to keep this idempotent.  A genuine DB
-            # error (e.g. disk full) during ALTER would also be swallowed —
-            # acceptable for a single-user local tool.
-            # ------------------------------------------------------------
-            for column, typedef in (
-                ("tokens_input",       "INTEGER"),
-                ("tokens_output",      "INTEGER"),
-                ("applied",            "INTEGER DEFAULT 0"),
-                ("job_type",           "TEXT"),
-                ("model_used",         "TEXT"),
-                ("posted_at",          "TEXT"),
-                ("opened_at",          "TEXT"),
-                ("description_source", "TEXT NOT NULL DEFAULT 'full'"),
-            ):
-                try:
-                    conn.execute(
-                        f"ALTER TABLE listings ADD COLUMN {column} {typedef}"
-                    )
-                except sqlite3.OperationalError:
-                    pass  # Column already present; nothing to do.
-                  
-        # This is called once per candidate listing during ingest.
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_listings_redirect_url ON listings (redirect_url)"
         )
@@ -429,7 +243,7 @@ def init_db(db_path: str = _DEFAULT_DB_PATH) -> None:
 # ---------------------------------------------------------------------------
 
 def geocache_get_many(
-    conn: sqlite3.Connection,
+    conn,
     location_texts: list[str],
 ) -> dict[str, tuple[float, float]]:
     """Return cached (lat, lon) pairs for all location_text values that exist in the cache.
@@ -437,7 +251,7 @@ def geocache_get_many(
     Uses a single query with an IN clause to minimise round-trips.
 
     Args:
-        conn:            Open sqlite3 connection.
+        conn:            Open database connection.
         location_texts:  List of raw location strings to look up.
 
     Returns:
@@ -446,7 +260,9 @@ def geocache_get_many(
     """
     if not location_texts:
         return {}
-    placeholders = ",".join("?" * len(location_texts))
+    # Build "%s,%s,..." placeholder string — safe because only the count varies,
+    # not the values; all user data is passed via the parameterised tuple.
+    placeholders = ",".join(["%s"] * len(location_texts))
     rows = conn.execute(
         f"SELECT location_text, lat, lon FROM location_geocache WHERE location_text IN ({placeholders})",
         location_texts,
@@ -455,24 +271,31 @@ def geocache_get_many(
 
 
 def geocache_put(
-    conn: sqlite3.Connection,
+    conn,
     location_text: str,
     lat: float,
     lon: float,
 ) -> None:
-    """Insert or replace a geocache entry.
+    """Insert or update a geocache entry.
 
-    Uses INSERT OR REPLACE so subsequent calls with the same location_text
-    update the cached_at timestamp rather than raising a UNIQUE conflict.
+    Uses INSERT ... ON CONFLICT DO UPDATE so subsequent calls with the same
+    location_text update the cached_at timestamp rather than raising a UNIQUE conflict.
 
     Args:
-        conn:           Open sqlite3 connection.
+        conn:           Open database connection.
         location_text:  Raw location string used as the cache key.
         lat:            Latitude of the resolved location.
         lon:            Longitude of the resolved location.
     """
     conn.execute(
-        "INSERT OR REPLACE INTO location_geocache (location_text, lat, lon) VALUES (?, ?, ?)",
+        """
+        INSERT INTO location_geocache (location_text, lat, lon)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (location_text) DO UPDATE
+            SET lat = EXCLUDED.lat,
+                lon = EXCLUDED.lon,
+                cached_at = CURRENT_TIMESTAMP
+        """,
         (location_text, lat, lon),
     )
     conn.commit()
@@ -482,7 +305,7 @@ def geocache_put(
 # Write helpers
 # ---------------------------------------------------------------------------
 
-def listing_exists(conn: sqlite3.Connection, source: str, source_id: str) -> bool:
+def listing_exists(conn, source: str, source_id: str) -> bool:
     """Return True if a row with the given (source, source_id) pair already exists.
 
     The caller is responsible for opening and closing the connection.  This
@@ -490,35 +313,35 @@ def listing_exists(conn: sqlite3.Connection, source: str, source_id: str) -> boo
     for the same listing.
 
     Args:
-        conn:      Open sqlite3 connection.
+        conn:      Open database connection.
         source:    Source identifier string, e.g. ``"adzuna"``.
         source_id: Source-specific listing ID string.
     """
     row = conn.execute(
-        "SELECT 1 FROM listings WHERE source = ? AND source_id = ?",
+        "SELECT 1 FROM listings WHERE source = %s AND source_id = %s",
         (source, source_id),
     ).fetchone()
     return row is not None
 
 
-def listing_exists_by_url(conn: sqlite3.Connection, redirect_url: str) -> bool:
+def listing_exists_by_url(conn, redirect_url: str) -> bool:
     """Return True if a listing with this redirect_url already exists (cross-source dedup).
 
     Used as a secondary dedup check after (source, source_id) to catch the same
     job posted across multiple sources under different IDs.
 
     Args:
-        conn:         Open sqlite3 connection.
+        conn:         Open database connection.
         redirect_url: The canonical job URL to check.
     """
     row = conn.execute(
-        "SELECT 1 FROM listings WHERE redirect_url = ?",
+        "SELECT 1 FROM listings WHERE redirect_url = %s",
         (redirect_url,)
     ).fetchone()
     return row is not None
 
 
-def insert_listing(listing: dict, db_path: str = _DEFAULT_DB_PATH) -> None:
+def insert_listing(listing: dict, db_path=None) -> None:
     """Insert a new listing row.
 
     `listing` must contain all columns except `id`. The JSON array columns
@@ -526,6 +349,8 @@ def insert_listing(listing: dict, db_path: str = _DEFAULT_DB_PATH) -> None:
     lists — they will be serialised to JSON strings before insertion. They
     may also be supplied as strings or None, both of which are passed through
     unchanged.
+
+    The ``db_path`` parameter is accepted for API compatibility; it is ignored.
     """
     # Serialise array columns if the caller passed Python lists.
     row = dict(listing)
@@ -575,20 +400,20 @@ def insert_listing(listing: dict, db_path: str = _DEFAULT_DB_PATH) -> None:
                 posted_at,
                 description_source
             ) VALUES (
-                :source, :source_id,
-                :title, :company, :location,
-                :salary_min, :salary_max, :salary_is_predicted,
-                :contract_type, :contract_time,
-                :description, :redirect_url,
-                :created_at, :fetched_at,
-                :score, :matched_skills, :missing_skills, :concerns, :verdict,
-                :bookmarked, :dismissed, :seen,
-                :tokens_input, :tokens_output,
-                :applied,
-                :job_type,
-                :model_used,
-                :posted_at,
-                :description_source
+                %(source)s, %(source_id)s,
+                %(title)s, %(company)s, %(location)s,
+                %(salary_min)s, %(salary_max)s, %(salary_is_predicted)s,
+                %(contract_type)s, %(contract_time)s,
+                %(description)s, %(redirect_url)s,
+                %(created_at)s, %(fetched_at)s,
+                %(score)s, %(matched_skills)s, %(missing_skills)s, %(concerns)s, %(verdict)s,
+                %(bookmarked)s, %(dismissed)s, %(seen)s,
+                %(tokens_input)s, %(tokens_output)s,
+                %(applied)s,
+                %(job_type)s,
+                %(model_used)s,
+                %(posted_at)s,
+                %(description_source)s
             )
             """,
             row,
@@ -602,7 +427,7 @@ def update_score(
     source: str,
     source_id: str,
     score_data: dict,
-    db_path: str = _DEFAULT_DB_PATH,
+    db_path=None,
 ) -> None:
     """Write scoring results back to an existing row and mark it seen.
 
@@ -619,7 +444,7 @@ def update_score(
         score_data: Dict with keys: score, matched_skills, missing_skills,
                     concerns, verdict. Array fields may be Python lists or
                     JSON strings.  Optionally includes ``description_source``.
-        db_path:    Path to the SQLite database file.
+        db_path:    Ignored — kept for API compatibility.
     """
     data = dict(score_data)
     for col in ("matched_skills", "missing_skills", "concerns"):
@@ -634,17 +459,17 @@ def update_score(
         conn.execute(
             """
             UPDATE listings
-            SET score              = :score,
-                matched_skills     = :matched_skills,
-                missing_skills     = :missing_skills,
-                concerns           = :concerns,
-                verdict            = :verdict,
+            SET score              = %(score)s,
+                matched_skills     = %(matched_skills)s,
+                missing_skills     = %(missing_skills)s,
+                concerns           = %(concerns)s,
+                verdict            = %(verdict)s,
                 seen               = 1,
-                tokens_input       = :tokens_input,
-                tokens_output      = :tokens_output,
-                model_used         = :model_used,
-                description_source = COALESCE(:description_source, description_source)  -- Preserve on rescore
-            WHERE source = :source AND source_id = :source_id
+                tokens_input       = %(tokens_input)s,
+                tokens_output      = %(tokens_output)s,
+                model_used         = %(model_used)s,
+                description_source = COALESCE(%(description_source)s, description_source)
+            WHERE source = %(source)s AND source_id = %(source_id)s
             """,
             {
                 **data,
@@ -665,27 +490,27 @@ def update_score(
 # Admin helpers
 # ---------------------------------------------------------------------------
 
-def get_listing_count(db_path: str = _DEFAULT_DB_PATH) -> int:
+def get_listing_count(db_path=None) -> int:
     """Return the total number of rows in the listings table.
 
     Used by the Clear Database UI to show the user how many records will be
     deleted before they confirm.
 
     Args:
-        db_path: Path to the SQLite database file.
+        db_path: Ignored — kept for API compatibility.
 
     Returns:
         Integer row count (0 when the table is empty).
     """
     conn = get_connection(db_path)
     try:
-        row = conn.execute("SELECT COUNT(*) FROM listings").fetchone()
-        return row[0] if row else 0
+        row = conn.execute("SELECT COUNT(*) AS cnt FROM listings").fetchone()
+        return row["cnt"] if row else 0
     finally:
         conn.close()
 
 
-def clear_all_listings(conn: sqlite3.Connection) -> int:
+def clear_all_listings(conn) -> int:
     """Delete all rows from the listings table.  Schema and other tables are
     left intact (e.g. ``location_geocache`` is not touched).
 
@@ -695,11 +520,10 @@ def clear_all_listings(conn: sqlite3.Connection) -> int:
     implicit transaction started by the DELETE is flushed.
 
     Args:
-        conn: An open sqlite3 connection to the database.
+        conn: An open database connection.
 
     Returns:
-        The number of rows deleted (equivalent to ``sqlite3.Cursor.rowcount``
-        after a DELETE without a WHERE clause).
+        The number of rows deleted.
     """
     cursor = conn.execute("DELETE FROM listings")
     conn.commit()
@@ -710,8 +534,8 @@ def clear_all_listings(conn: sqlite3.Connection) -> int:
 # Read helpers
 # ---------------------------------------------------------------------------
 
-def _deserialise_row(row: sqlite3.Row) -> dict:
-    """Convert a sqlite3.Row to a plain dict and deserialise JSON array columns."""
+def _deserialise_row(row) -> dict:
+    """Convert a RealDictCursor row to a plain dict and deserialise JSON array columns."""
     d = dict(row)
     for col in ("matched_skills", "missing_skills", "concerns"):
         raw = d.get(col)
@@ -733,7 +557,7 @@ def get_feed(
     search: str | None = None,
     job_type: str | None = None,
     sort: str | None = None,
-    db_path: str = _DEFAULT_DB_PATH,
+    db_path=None,
 ) -> list[dict]:
     """Return listings with score >= effective threshold and dismissed = 0.
 
@@ -750,23 +574,23 @@ def get_feed(
         job_type:    If provided, restricts to listings whose job_type matches (case-insensitive).
         sort:        Optional sort key. ``'date_posted'`` orders by posted_at DESC;
                      any other value (or None) falls back to score DESC.
-        db_path:     Path to the SQLite database file.
+        db_path:     Ignored — kept for API compatibility.
     """
     effective = min_score if min_score is not None else threshold
 
-    conditions = ["score >= ?", "dismissed = 0", "applied = 0", "description_source = 'full'"]
+    conditions = ["score >= %s", "dismissed = 0", "applied = 0", "description_source = 'full'"]
     params: list = [effective]
 
     if remote_only:
         conditions.append("LOWER(location) LIKE '%remote%'")
 
     if search:
-        conditions.append("(LOWER(title) LIKE ? OR LOWER(company) LIKE ?)")
+        conditions.append("(LOWER(title) LIKE %s OR LOWER(company) LIKE %s)")
         term = f"%{search.lower()}%"
         params.extend([term, term])
 
     if job_type:
-        conditions.append("LOWER(job_type) = LOWER(?)")
+        conditions.append("LOWER(job_type) = LOWER(%s)")
         params.append(job_type)
 
     where_clause = " AND ".join(conditions)
@@ -791,7 +615,7 @@ def get_snippet_feed(
     search: str | None = None,
     job_type: str | None = None,
     sort: str | None = None,
-    db_path: str = _DEFAULT_DB_PATH,
+    db_path=None,
 ) -> list[dict]:
     """Return scored, non-dismissed listings whose description came from an API snippet.
 
@@ -812,23 +636,23 @@ def get_snippet_feed(
         job_type:    If provided, restricts to listings whose job_type matches (case-insensitive).
         sort:        Optional sort key.  ``'date_posted'`` orders by posted_at DESC;
                      any other value (or None) falls back to score DESC.
-        db_path:     Path to the SQLite database file.
+        db_path:     Ignored — kept for API compatibility.
     """
     effective = min_score if min_score is not None else threshold
 
-    conditions = ["score >= ?", "dismissed = 0", "applied = 0", "description_source = 'snippet'"]
+    conditions = ["score >= %s", "dismissed = 0", "applied = 0", "description_source = 'snippet'"]
     params: list = [effective]
 
     if remote_only:
         conditions.append("LOWER(location) LIKE '%remote%'")
 
     if search:
-        conditions.append("(LOWER(title) LIKE ? OR LOWER(company) LIKE ?)")
+        conditions.append("(LOWER(title) LIKE %s OR LOWER(company) LIKE %s)")
         term = f"%{search.lower()}%"
         params.extend([term, term])
 
     if job_type:
-        conditions.append("LOWER(job_type) = LOWER(?)")
+        conditions.append("LOWER(job_type) = LOWER(%s)")
         params.append(job_type)
 
     where_clause = " AND ".join(conditions)
@@ -845,14 +669,14 @@ def get_snippet_feed(
         conn.close()
 
 
-def get_job_types(db_path: str = _DEFAULT_DB_PATH) -> list[str]:
+def get_job_types(db_path=None) -> list[str]:
     """Return a sorted list of distinct non-null job_type values present in the listings table.
 
     Used to populate the filter dropdown dynamically so it only shows types
     that actually exist in the database.
 
     Args:
-        db_path: Path to the SQLite database file.
+        db_path: Ignored — kept for API compatibility.
 
     Returns:
         Sorted list of unique job_type strings, excluding NULL values.
@@ -867,7 +691,7 @@ def get_job_types(db_path: str = _DEFAULT_DB_PATH) -> list[str]:
         conn.close()
 
 
-def get_bookmarks(db_path: str = _DEFAULT_DB_PATH) -> list[dict]:
+def get_bookmarks(db_path=None) -> list[dict]:
     """Return all bookmarked listings ordered by score DESC."""
     conn = get_connection(db_path)
     try:
@@ -883,12 +707,12 @@ def get_bookmarks(db_path: str = _DEFAULT_DB_PATH) -> list[dict]:
         conn.close()
 
 
-def get_all_scored(db_path: str = _DEFAULT_DB_PATH) -> list[dict]:
+def get_all_scored(db_path=None) -> list[dict]:
     """Return all listings that have been scored (seen = 1), ordered by fetched_at DESC.
 
     Uses a subquery to pick the row with the highest id per (source, source_id)
-    pair so that any accidental duplicate rows (e.g. from an imperfect migration)
-    are collapsed to a single entry before the caller iterates them.
+    pair so that any accidental duplicate rows are collapsed to a single entry
+    before the caller iterates them.
     """
     conn = get_connection(db_path)
     try:
@@ -910,7 +734,7 @@ def get_all_scored(db_path: str = _DEFAULT_DB_PATH) -> list[dict]:
         conn.close()
 
 
-def get_listing_by_id(listing_id: int, db_path: str = _DEFAULT_DB_PATH) -> dict | None:
+def get_listing_by_id(listing_id: int, db_path=None) -> dict | None:
     """Return a single listing by internal id, or None if not found.
 
     JSON array columns are deserialised to Python lists, consistent with the
@@ -919,7 +743,7 @@ def get_listing_by_id(listing_id: int, db_path: str = _DEFAULT_DB_PATH) -> dict 
     conn = get_connection(db_path)
     try:
         row = conn.execute(
-            "SELECT * FROM listings WHERE id = ?", (listing_id,)
+            "SELECT * FROM listings WHERE id = %s", (listing_id,)
         ).fetchone()
         if row is None:
             return None
@@ -928,7 +752,7 @@ def get_listing_by_id(listing_id: int, db_path: str = _DEFAULT_DB_PATH) -> dict 
         conn.close()
 
 
-def get_last_fetch_time(db_path: str = _DEFAULT_DB_PATH):
+def get_last_fetch_time(db_path=None):
     """Return the most recent fetched_at timestamp across all listings, or None.
 
     Used by the web UI to display how fresh the data is (e.g. "Last updated
@@ -936,7 +760,7 @@ def get_last_fetch_time(db_path: str = _DEFAULT_DB_PATH):
     exist, or ``None`` when the table is empty.
 
     Args:
-        db_path: Path to the SQLite database file.
+        db_path: Ignored — kept for API compatibility.
     """
     import datetime
 
@@ -951,14 +775,16 @@ def get_last_fetch_time(db_path: str = _DEFAULT_DB_PATH):
         # fetched_at is stored as an ISO 8601 string (e.g. "2026-01-02T12:34:56Z"
         # or "2026-01-02T12:34:56").  fromisoformat() handles both; strip the
         # trailing "Z" which Python < 3.11 does not accept.
-        raw = raw.rstrip("Z")
+        if isinstance(raw, datetime.datetime):
+            return raw
+        raw = str(raw).rstrip("Z")
         return datetime.datetime.fromisoformat(raw)
     finally:
         conn.close()
 
 
 def get_usage_stats(
-    db_path: str = _DEFAULT_DB_PATH,
+    db_path=None,
     input_cost_per_mtok: float = _FALLBACK_INPUT_COST_PER_MTOK,
     output_cost_per_mtok: float = _FALLBACK_OUTPUT_COST_PER_MTOK,
 ) -> dict:
@@ -966,7 +792,7 @@ def get_usage_stats(
 
     Queries the listings table to produce totals and a per-day breakdown.
     All token columns are nullable — NULL values are treated as 0 via
-    SQLite's COALESCE so the arithmetic is always well-defined.
+    COALESCE so the arithmetic is always well-defined.
 
     Cost estimation uses per-model pricing from ``_lookup_pricing()``.  When
     a row's ``model_used`` value maps to a known model, the actual rates for
@@ -982,7 +808,7 @@ def get_usage_stats(
     cost calculations go through ``_lookup_pricing()``.
 
     Args:
-        db_path:              Path to the SQLite database file.
+        db_path:              Ignored — kept for API compatibility.
         input_cost_per_mtok:  Ignored — kept for backward-compatible callers.
         output_cost_per_mtok: Ignored — kept for backward-compatible callers.
 
@@ -1040,13 +866,13 @@ def get_usage_stats(
         day_rows = conn.execute(
             """
             SELECT
-                DATE(fetched_at)                                    AS date,
+                DATE(fetched_at::timestamp)                         AS date,
                 COUNT(CASE WHEN score IS NOT NULL THEN 1 END)       AS scored,
                 COALESCE(SUM(tokens_input), 0)                      AS tokens_input,
                 COALESCE(SUM(tokens_output), 0)                     AS tokens_output,
                 model_used
             FROM listings
-            GROUP BY DATE(fetched_at), model_used
+            GROUP BY DATE(fetched_at::timestamp), model_used
             ORDER BY date DESC
             """
         ).fetchall()
@@ -1054,7 +880,7 @@ def get_usage_stats(
         # Aggregate per-date across all models that appeared on that day.
         by_date_map: dict[str, dict] = {}
         for row in day_rows:
-            date_key = row["date"]
+            date_key = str(row["date"]) if row["date"] is not None else None
             if date_key not in by_date_map:
                 by_date_map[date_key] = {
                     "date": date_key,
@@ -1086,7 +912,7 @@ def get_usage_stats(
             bucket["cost_usd"] = None if has_unknown else bucket["cost_usd"]
             by_date.append(bucket)
         # Sort most-recent first (keys are ISO date strings — lexicographic DESC works).
-        by_date.sort(key=lambda d: d["date"], reverse=True)
+        by_date.sort(key=lambda d: d["date"] or "", reverse=True)
 
         return {
             "total_scored": total_scored,
@@ -1103,12 +929,12 @@ def get_usage_stats(
 # Toggle helpers
 # ---------------------------------------------------------------------------
 
-def set_bookmarked(listing_id: int, value: int, db_path: str = _DEFAULT_DB_PATH) -> None:
+def set_bookmarked(listing_id: int, value: int, db_path=None) -> None:
     """Set bookmarked to 1 (save) or 0 (unsave) for the given internal id."""
     conn = get_connection(db_path)
     try:
         conn.execute(
-            "UPDATE listings SET bookmarked = ? WHERE id = ?",
+            "UPDATE listings SET bookmarked = %s WHERE id = %s",
             (int(bool(value)), listing_id),
         )
         conn.commit()
@@ -1116,12 +942,12 @@ def set_bookmarked(listing_id: int, value: int, db_path: str = _DEFAULT_DB_PATH)
         conn.close()
 
 
-def set_dismissed(listing_id: int, value: int, db_path: str = _DEFAULT_DB_PATH) -> None:
+def set_dismissed(listing_id: int, value: int, db_path=None) -> None:
     """Set dismissed to 1 (hide) or 0 (restore) for the given internal id."""
     conn = get_connection(db_path)
     try:
         conn.execute(
-            "UPDATE listings SET dismissed = ? WHERE id = ?",
+            "UPDATE listings SET dismissed = %s WHERE id = %s",
             (int(bool(value)), listing_id),
         )
         conn.commit()
@@ -1129,12 +955,12 @@ def set_dismissed(listing_id: int, value: int, db_path: str = _DEFAULT_DB_PATH) 
         conn.close()
 
 
-def set_applied(listing_id: int, value: int, db_path: str = _DEFAULT_DB_PATH) -> None:
+def set_applied(listing_id: int, value: int, db_path=None) -> None:
     """Set applied to 1 (mark as applied) or 0 (unmark) for the given internal id."""
     conn = get_connection(db_path)
     try:
         conn.execute(
-            "UPDATE listings SET applied = ? WHERE id = ?",
+            "UPDATE listings SET applied = %s WHERE id = %s",
             (int(bool(value)), listing_id),
         )
         conn.commit()
@@ -1142,7 +968,7 @@ def set_applied(listing_id: int, value: int, db_path: str = _DEFAULT_DB_PATH) ->
         conn.close()
 
 
-def mark_opened(listing_id: int, db_path: str = _DEFAULT_DB_PATH) -> None:
+def mark_opened(listing_id: int, db_path=None) -> None:
     """Record that the user has opened (expanded) this listing for the first time.
 
     Sets ``opened_at`` to the current UTC timestamp as an ISO 8601 string.
@@ -1151,7 +977,7 @@ def mark_opened(listing_id: int, db_path: str = _DEFAULT_DB_PATH) -> None:
 
     Args:
         listing_id: Internal integer primary key.
-        db_path:    Path to the SQLite database file.
+        db_path:    Ignored — kept for API compatibility.
     """
     import datetime
 
@@ -1159,7 +985,7 @@ def mark_opened(listing_id: int, db_path: str = _DEFAULT_DB_PATH) -> None:
     conn = get_connection(db_path)
     try:
         conn.execute(
-            "UPDATE listings SET opened_at = ? WHERE id = ? AND opened_at IS NULL",
+            "UPDATE listings SET opened_at = %s WHERE id = %s AND opened_at IS NULL",
             (now, listing_id),
         )
         conn.commit()
@@ -1167,7 +993,7 @@ def mark_opened(listing_id: int, db_path: str = _DEFAULT_DB_PATH) -> None:
         conn.close()
 
 
-def toggle_bookmarked(listing_id: int, db_path: str = _DEFAULT_DB_PATH) -> dict | None:
+def toggle_bookmarked(listing_id: int, db_path=None) -> dict | None:
     """Atomically flip the bookmarked flag and return the updated listing.
 
     Uses a single SQL statement (``1 - bookmarked``) so concurrent requests
@@ -1176,7 +1002,7 @@ def toggle_bookmarked(listing_id: int, db_path: str = _DEFAULT_DB_PATH) -> dict 
 
     Args:
         listing_id: Internal integer primary key.
-        db_path:    Path to the SQLite database file.
+        db_path:    Ignored — kept for API compatibility.
 
     Returns:
         The updated listing dict, or None if the id does not exist.
@@ -1184,7 +1010,7 @@ def toggle_bookmarked(listing_id: int, db_path: str = _DEFAULT_DB_PATH) -> dict 
     conn = get_connection(db_path)
     try:
         conn.execute(
-            "UPDATE listings SET bookmarked = 1 - bookmarked WHERE id = ?",
+            "UPDATE listings SET bookmarked = 1 - bookmarked WHERE id = %s",
             (listing_id,),
         )
         conn.commit()
@@ -1193,7 +1019,7 @@ def toggle_bookmarked(listing_id: int, db_path: str = _DEFAULT_DB_PATH) -> dict 
     return get_listing_by_id(listing_id, db_path=db_path)
 
 
-def toggle_applied(listing_id: int, db_path: str = _DEFAULT_DB_PATH) -> dict | None:
+def toggle_applied(listing_id: int, db_path=None) -> dict | None:
     """Atomically flip the applied flag and return the updated listing.
 
     Uses a single SQL statement (``1 - applied``) so concurrent requests
@@ -1202,7 +1028,7 @@ def toggle_applied(listing_id: int, db_path: str = _DEFAULT_DB_PATH) -> dict | N
 
     Args:
         listing_id: Internal integer primary key.
-        db_path:    Path to the SQLite database file.
+        db_path:    Ignored — kept for API compatibility.
 
     Returns:
         The updated listing dict, or None if the id does not exist.
@@ -1210,7 +1036,7 @@ def toggle_applied(listing_id: int, db_path: str = _DEFAULT_DB_PATH) -> dict | N
     conn = get_connection(db_path)
     try:
         conn.execute(
-            "UPDATE listings SET applied = 1 - applied WHERE id = ?",
+            "UPDATE listings SET applied = 1 - applied WHERE id = %s",
             (listing_id,),
         )
         conn.commit()
@@ -1219,7 +1045,7 @@ def toggle_applied(listing_id: int, db_path: str = _DEFAULT_DB_PATH) -> dict | N
     return get_listing_by_id(listing_id, db_path=db_path)
 
 
-def get_applied(db_path: str = _DEFAULT_DB_PATH) -> list[dict]:
+def get_applied(db_path=None) -> list[dict]:
     """Return all listings where applied = 1, ordered by fetched_at DESC."""
     conn = get_connection(db_path)
     try:

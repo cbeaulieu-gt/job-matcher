@@ -184,7 +184,7 @@ To run ingestion nightly at 07:00:
 **Windows Task Scheduler**
 
 ```powershell
-schtasks /create /tn "JobMatcherIngest" /tr "python C:\Apps\job_matcher\ingest.py" /sc daily /st 07:00
+schtasks /create /tn "JobMatcherIngest" /tr "python C:\Apps\job-matcher-pr\ingest.py" /sc daily /st 07:00
 ```
 
 ---
@@ -294,9 +294,9 @@ LLM provider API keys (Anthropic, OpenAI, Gemini) are managed through `config/pr
 Register waitress as a Windows service named `JobMatcher`:
 
 ```powershell
-nssm install JobMatcher "C:\Apps\job_matcher\venv\Scripts\waitress-serve.exe"
+nssm install JobMatcher "C:\Apps\job-matcher-pr\venv\Scripts\waitress-serve.exe"
 nssm set JobMatcher AppParameters "--host=0.0.0.0 --port=5000 app:app"
-nssm set JobMatcher AppDirectory "C:\Apps\job_matcher"
+nssm set JobMatcher AppDirectory "C:\Apps\job-matcher-pr"
 nssm set JobMatcher Start SERVICE_AUTO_START
 nssm start JobMatcher
 
@@ -318,9 +318,9 @@ Create a daily ingest task running at 6am:
 
 ```powershell
 $action = New-ScheduledTaskAction `
-    -Execute "C:\Apps\job_matcher\venv\Scripts\python.exe" `
+    -Execute "C:\Apps\job-matcher-pr\venv\Scripts\python.exe" `
     -Argument "ingest.py --hours 25" `
-    -WorkingDirectory "C:\Apps\job_matcher"
+    -WorkingDirectory "C:\Apps\job-matcher-pr"
 
 $trigger = New-ScheduledTaskTrigger -Daily -At 6am
 

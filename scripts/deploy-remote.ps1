@@ -31,7 +31,7 @@
     interactively.
 
 .PARAMETER RemoteProjectRoot
-    Destination path on the remote machine. Defaults to C:\Apps\job_matcher.
+    Destination path on the remote machine. Defaults to C:\Apps\job-matcher-pr.
 
 .PARAMETER NssmPath
     Full path to nssm.exe on the remote machine when NSSM is not on PATH
@@ -47,7 +47,7 @@
 .EXAMPLE
     .\deploy-remote.ps1 -ComputerName 192.168.1.50
 
-    Prompts for credentials, copies files to C:\Apps\job_matcher on the remote
+    Prompts for credentials, copies files to C:\Apps\job-matcher-pr on the remote
     machine, then prints Enter-PSSession instructions to complete setup.
 
 .EXAMPLE
@@ -75,7 +75,7 @@ param(
 
     [Parameter()]
     [ValidateNotNullOrEmpty()]
-    [string]$RemoteProjectRoot = 'C:\Apps\job_matcher',
+    [string]$RemoteProjectRoot = 'C:\Apps\job-matcher-pr',
 
     [Parameter()]
     [string]$NssmPath,

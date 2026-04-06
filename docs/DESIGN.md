@@ -59,7 +59,7 @@ The application runs natively on Windows using two independent processes:
 │          │                           │                           │
 │          └──────────────┬────────────┘                           │
 │                         │ shared SQLite file                     │
-│                   C:\Apps\job_matcher\jobs.db                    │
+│                   C:\Apps\job-matcher-pr\jobs.db                 │
 └──────────────────────────────────────────────────────────────────┘
 ```
 

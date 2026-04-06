@@ -19,9 +19,10 @@ docker compose logs web --tail=20 --no-log-prefix
 echo ""
 
 echo "=== Database Stats ==="
-if docker compose ps db | grep -q "running"; then
-  source .env 2>/dev/null || true
-  docker compose exec -T db psql -U "${POSTGRES_USER:-jobmatcher}" -d "${POSTGRES_DB:-jobmatcher}" -c \
+if docker compose ps --status running --services 2>/dev/null | grep -q "^db$"; then
+  POSTGRES_USER=$(grep '^POSTGRES_USER=' .env 2>/dev/null | cut -d= -f2 || echo "jobmatcher")
+  POSTGRES_DB=$(grep '^POSTGRES_DB=' .env 2>/dev/null | cut -d= -f2 || echo "jobmatcher")
+  docker compose exec -T db psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -c \
     "SELECT COUNT(*) AS total_listings, COUNT(score) AS scored, MAX(fetched_at) AS last_fetch FROM listings;" \
     2>/dev/null || echo "    (Could not query database)"
 else

@@ -6,6 +6,12 @@ set -euo pipefail
 # Run from /opt/job-matcher-pr/ after cloning the repo
 # ---------------------------------------------------------------------------
 
+# Require root for chown operations.
+if [[ $EUID -ne 0 ]]; then
+  echo "ERROR: This script must be run as root (e.g. sudo ./scripts/docker-setup.sh)" >&2
+  exit 1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
@@ -21,6 +27,11 @@ fi
 echo "    Docker $(docker --version | cut -d' ' -f3 | tr -d ',')"
 echo "    Compose $(docker compose version --short)"
 
+if ! docker ps &>/dev/null; then
+  echo "ERROR: Cannot connect to Docker daemon. Is Docker running?" >&2
+  exit 1
+fi
+
 echo "==> Setting up directories..."
 mkdir -p "$PROJECT_DIR/config"
 # uid 1000 = appuser inside container — required for Settings UI to write providers.json
@@ -35,6 +46,10 @@ if [[ ! -f "$PROJECT_DIR/.env" ]]; then
   echo "    nano $PROJECT_DIR/.env"
   echo ""
   read -r -p "Press Enter when .env is configured, or Ctrl+C to abort..."
+  if grep -q "your-strong-password-here\|changeme" "$PROJECT_DIR/.env" 2>/dev/null; then
+    echo "ERROR: POSTGRES_PASSWORD in .env still contains the example value. Set a real password first." >&2
+    exit 1
+  fi
 else
   echo "    .env already exists, skipping"
 fi
@@ -53,8 +68,13 @@ for example in "$PROJECT_DIR/config/"*.example.json; do
 done
 
 echo "==> Logging in to GitHub Container Registry..."
-echo "    Enter your GitHub username and a Personal Access Token with read:packages scope"
-docker login ghcr.io
+if [[ -n "${GHCR_TOKEN:-}" && -n "${GHCR_USERNAME:-}" ]]; then
+  echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
+else
+  echo "    Enter your GitHub username and a Personal Access Token with read:packages scope"
+  echo "    (Or set GHCR_USERNAME and GHCR_TOKEN env vars to skip this prompt)"
+  docker login ghcr.io
+fi
 
 echo "==> Pulling images..."
 docker compose -f "$PROJECT_DIR/docker-compose.yml" pull

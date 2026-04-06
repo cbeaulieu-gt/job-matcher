@@ -16,6 +16,7 @@ logs/
 tests/
 docs/
 scripts/
+!scripts/entrypoint.sh
 *.md
 .env
 .worktrees/

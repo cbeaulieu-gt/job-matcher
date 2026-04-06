@@ -28,7 +28,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 $ServiceName   = 'JobMatcher'
 $TaskName      = 'JobMatcherIngest'
-$ProjectRoot   = 'C:\Apps\job_matcher'
+$ProjectRoot   = 'C:\Apps\job-matcher-pr'
 $VenvPython    = Join-Path -Path $ProjectRoot -ChildPath 'venv\Scripts\python.exe'
 $DefaultDbPath = 'C:\ProgramData\JobMatcher\data\jobs.db'
 

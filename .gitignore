@@ -20,8 +20,12 @@ __pycache__/
 
 # Virtual environments
 .env
+/.env
 .venv/
 venv/
+
+# Docker
+docker-compose.override.yml
 
 # Build artifacts
 dist/

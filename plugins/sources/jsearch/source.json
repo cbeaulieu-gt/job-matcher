@@ -1,0 +1,14 @@
+{
+  "source_key": "jsearch",
+  "display_name": "JSearch (RapidAPI)",
+  "description": "Job aggregator powered by Google for Jobs, accessed via RapidAPI. Free tier: 200 requests/month.",
+  "home_url": "https://rapidapi.com/letscrape-6bRBa3QguO5/api/jsearch",
+  "fields": [
+    {
+      "name": "api_key",
+      "label": "RapidAPI Key",
+      "type": "password",
+      "required": true
+    }
+  ]
+}

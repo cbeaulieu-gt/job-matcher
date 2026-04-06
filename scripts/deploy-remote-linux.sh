@@ -185,7 +185,7 @@ fi
 
 step "Cloning / updating repository at ${REMOTE_PATH}..."
 
-ssh "${SSH_TARGET}" bash <<REMOTE
+ssh -t "${SSH_TARGET}" bash <<REMOTE
 set -euo pipefail
 
 if [[ ! -e "${REMOTE_PATH}" ]]; then

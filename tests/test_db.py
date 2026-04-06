@@ -1,13 +1,15 @@
 """
-tests/test_db.py — Unit tests for db.py using a temporary SQLite file.
+tests/test_db.py — Unit tests for db.py using a PostgreSQL test database.
 
-Each test class creates a fresh database in a NamedTemporaryFile so tests
-are fully isolated from each other and from jobs.db in the project root.
+Each test uses TempDB which creates the schema in a real PostgreSQL instance
+and tears it down via table truncation after each test, keeping tests isolated.
+
+Requires DATABASE_URL to point at a reachable PostgreSQL instance.
+Default: postgresql://jobmatcher:jobmatcher@localhost:5432/jobmatcher
 """
 
 import os
 import sys
-import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -78,20 +80,58 @@ def make_listing(
 
 
 class TempDB:
-    """Context manager that creates a temp SQLite file and removes it on exit."""
+    """Context manager that initialises the schema and truncates tables on exit.
 
-    def __enter__(self) -> str:
-        self._fh = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        self._fh.close()
-        self.path = self._fh.name
-        db.init_db(self.path)
+    Connects to the PostgreSQL instance specified by DATABASE_URL.  Each test
+    gets a clean slate: init_db() ensures tables exist, and __exit__ truncates
+    both tables so subsequent tests start empty.
+
+    The ``path`` attribute is set to None for API compatibility with any test
+    code that passes it to db functions (db functions ignore db_path anyway).
+    """
+
+    def __enter__(self) -> None:
+        db.init_db()
+        # Truncate to ensure a clean slate even if a previous test leaked rows.
+        conn = db.get_connection()
+        try:
+            conn.execute("TRUNCATE listings, location_geocache RESTART IDENTITY CASCADE")
+            conn.commit()
+        finally:
+            conn.close()
+        self.path = None
         return self.path
 
     def __exit__(self, *_):
+        conn = db.get_connection()
         try:
-            os.unlink(self.path)
-        except FileNotFoundError:
-            pass
+            conn.execute("TRUNCATE listings, location_geocache RESTART IDENTITY CASCADE")
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def _get_table_columns(conn, table: str) -> list[str]:
+    """Return a list of column names for the given table using information_schema."""
+    rows = conn.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_name = %s
+        ORDER BY ordinal_position
+        """,
+        (table,),
+    ).fetchall()
+    return [row["column_name"] for row in rows]
+
+
+def _index_exists(conn, index_name: str) -> bool:
+    """Return True if an index with the given name exists in the current database."""
+    row = conn.execute(
+        "SELECT 1 FROM pg_indexes WHERE indexname = %s",
+        (index_name,),
+    ).fetchone()
+    return row is not None
 
 
 # ---------------------------------------------------------------------------
@@ -100,31 +140,31 @@ class TempDB:
 
 class TestInitDb:
     def test_creates_listings_table(self):
-        """init_db() creates the listings table in a fresh database."""
-        with TempDB() as path:
-            conn = db.get_connection(path)
+        """init_db() creates the listings table."""
+        with TempDB():
+            conn = db.get_connection()
             try:
-                rows = conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name='listings'"
-                ).fetchall()
-                assert len(rows) == 1
+                row = conn.execute(
+                    """
+                    SELECT table_name FROM information_schema.tables
+                    WHERE table_name = 'listings' AND table_schema = 'public'
+                    """
+                ).fetchone()
+                assert row is not None
             finally:
                 conn.close()
 
     def test_idempotent(self):
-        """Calling init_db() twice on the same file does not raise."""
-        with TempDB() as path:
-            db.init_db(path)  # second call
-            # If we get here without exception, the test passes.
+        """Calling init_db() twice does not raise."""
+        with TempDB():
+            db.init_db()  # second call
 
     def test_redirect_url_index_exists(self):
         """init_db() creates the idx_listings_redirect_url index on the listings table."""
-        with TempDB() as path:
-            conn = db.get_connection(path)
+        with TempDB():
+            conn = db.get_connection()
             try:
-                indexes = conn.execute("PRAGMA index_list(listings)").fetchall()
-                index_names = [row["name"] for row in indexes]
-                assert "idx_listings_redirect_url" in index_names
+                assert _index_exists(conn, "idx_listings_redirect_url")
             finally:
                 conn.close()
 
@@ -237,13 +277,13 @@ class TestInsertAndFeed:
                 "verdict": "Good match.",
                 # Intentionally omitting: salary_is_predicted, salary_min, salary_max,
                 # contract_type, contract_time, tokens_in, tokens_out, cost_usd,
-                # job_type, model_used, posted_at, source_id (adzuna_id), etc.
+                # job_type, model_used, posted_at, etc.
             }
             db.insert_listing(minimal, db_path=path)
 
             conn = db.get_connection(path)
             row = conn.execute(
-                "SELECT * FROM listings WHERE source_id = ?", ("minimal-001",)
+                "SELECT * FROM listings WHERE source_id = %s", ("minimal-001",)
             ).fetchone()
             conn.close()
 
@@ -560,57 +600,12 @@ class TestModelUsed:
                 conn.close()
 
     def test_column_exists_in_schema(self):
-        """init_db() creates the model_used column (verifiable via PRAGMA)."""
-        with TempDB() as path:
-            conn = db.get_connection(path)
+        """init_db() creates the model_used column (verifiable via information_schema)."""
+        with TempDB():
+            conn = db.get_connection()
             try:
-                cols = conn.execute("PRAGMA table_info(listings)").fetchall()
-                col_names = [c["name"] for c in cols]
+                col_names = _get_table_columns(conn, "listings")
                 assert "model_used" in col_names
-            finally:
-                conn.close()
-
-    def test_migration_on_existing_db_without_model_used(self):
-        """init_db() on a legacy adzuna_id-based table adds model_used via migration.
-
-        Simulates a pre-migration database that has ``adzuna_id`` but no
-        ``model_used`` column, then verifies that init_db() migrates the
-        schema to include ``model_used`` (via the Path B table-copy migration).
-        """
-        with TempDB() as path:
-            # Drop the freshly created table and replace it with a minimal
-            # legacy schema that has adzuna_id and no model_used.
-            conn = db.get_connection(path)
-            try:
-                conn.execute("DROP TABLE listings")
-                conn.execute("""
-                    CREATE TABLE listings (
-                        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-                        adzuna_id           TEXT UNIQUE NOT NULL,
-                        title               TEXT,
-                        score               REAL,
-                        seen                INTEGER DEFAULT 0
-                    )
-                """)
-                conn.execute(
-                    "INSERT INTO listings (adzuna_id, title, score, seen) "
-                    "VALUES ('legacy-mu-001', 'Old Job', 8.0, 1)"
-                )
-                conn.commit()
-            finally:
-                conn.close()
-
-            # Run init_db() — Path B migration copies to canonical schema.
-            db.init_db(path)
-
-            conn = db.get_connection(path)
-            try:
-                cols = conn.execute("PRAGMA table_info(listings)").fetchall()
-                col_names = [c["name"] for c in cols]
-                assert "model_used" in col_names
-                assert "source_id" in col_names
-                # adzuna_id must no longer appear after the migration.
-                assert "adzuna_id" not in col_names
             finally:
                 conn.close()
 
@@ -699,75 +694,8 @@ class TestCrossSourceDedup:
 
             conn = db.get_connection(path)
             try:
-                count = conn.execute("SELECT COUNT(*) FROM listings").fetchone()[0]
+                count = conn.execute("SELECT COUNT(*) AS cnt FROM listings").fetchone()["cnt"]
                 assert count == 2
-            finally:
-                conn.close()
-
-
-# ---------------------------------------------------------------------------
-# Migration backfill
-# ---------------------------------------------------------------------------
-
-class TestMigrationBackfill:
-    def test_backfill_sets_source_and_source_id_for_existing_rows(self):
-        """init_db() migrates a legacy adzuna_id-based table: renames the column
-        to source_id and backfills source='adzuna' for all existing rows."""
-        with TempDB() as path:
-            # Simulate a pre-migration database that has adzuna_id but no
-            # source or source_id columns (Path B in init_db).
-            conn = db.get_connection(path)
-            try:
-                conn.execute("DROP TABLE listings")
-                conn.execute("""
-                    CREATE TABLE listings (
-                        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-                        adzuna_id           TEXT UNIQUE NOT NULL,
-                        title               TEXT,
-                        score               REAL,
-                        seen                INTEGER DEFAULT 0,
-                        redirect_url        TEXT,
-                        fetched_at          TEXT,
-                        created_at          TEXT,
-                        company             TEXT,
-                        location            TEXT,
-                        salary_min          INTEGER,
-                        salary_max          INTEGER,
-                        salary_is_predicted INTEGER,
-                        contract_type       TEXT,
-                        contract_time       TEXT,
-                        description         TEXT,
-                        matched_skills      TEXT,
-                        missing_skills      TEXT,
-                        concerns            TEXT,
-                        verdict             TEXT,
-                        bookmarked          INTEGER DEFAULT 0,
-                        dismissed           INTEGER DEFAULT 0,
-                        applied             INTEGER DEFAULT 0,
-                        job_type            TEXT,
-                        model_used          TEXT,
-                        tokens_input        INTEGER,
-                        tokens_output       INTEGER
-                    )
-                """)
-                conn.execute(
-                    "INSERT INTO listings (adzuna_id, title, score, seen) "
-                    "VALUES ('legacy-001', 'Old Job', 7.0, 1)"
-                )
-                conn.commit()
-            finally:
-                conn.close()
-
-            # Run init_db() — Path B migration copies adzuna_id → source_id.
-            db.init_db(path)
-
-            conn = db.get_connection(path)
-            try:
-                row = conn.execute(
-                    "SELECT source, source_id FROM listings WHERE source_id = 'legacy-001'"
-                ).fetchone()
-                assert row["source"] == "adzuna"
-                assert row["source_id"] == "legacy-001"
             finally:
                 conn.close()
 
@@ -834,17 +762,16 @@ class TestGetLastFetchTime:
 
 
 # ---------------------------------------------------------------------------
-# posted_at column — migration, storage, and sort
+# posted_at column — storage and sort
 # ---------------------------------------------------------------------------
 
 class TestPostedAt:
     def test_column_exists_in_schema(self):
-        """init_db() creates the posted_at column (verifiable via PRAGMA)."""
-        with TempDB() as path:
-            conn = db.get_connection(path)
+        """init_db() creates the posted_at column (verifiable via information_schema)."""
+        with TempDB():
+            conn = db.get_connection()
             try:
-                cols = conn.execute("PRAGMA table_info(listings)").fetchall()
-                col_names = [c["name"] for c in cols]
+                col_names = _get_table_columns(conn, "listings")
                 assert "posted_at" in col_names
             finally:
                 conn.close()
@@ -914,44 +841,10 @@ class TestPostedAt:
             # sc-high has the higher score so should appear first despite older posted_at
             assert ids[0] == "sc-high"
 
-    def test_migration_adds_posted_at_to_existing_db(self):
-        """init_db() adds posted_at to a database that was created without it."""
-        with TempDB() as path:
-            # Simulate a pre-migration database (legacy adzuna_id schema, no posted_at).
-            conn = db.get_connection(path)
-            try:
-                conn.execute("DROP TABLE listings")
-                conn.execute("""
-                    CREATE TABLE listings (
-                        id        INTEGER PRIMARY KEY AUTOINCREMENT,
-                        adzuna_id TEXT UNIQUE NOT NULL,
-                        title     TEXT,
-                        score     REAL,
-                        seen      INTEGER DEFAULT 0
-                    )
-                """)
-                conn.execute(
-                    "INSERT INTO listings (adzuna_id, title, score, seen) "
-                    "VALUES ('legacy-pa-001', 'Old Job', 8.0, 1)"
-                )
-                conn.commit()
-            finally:
-                conn.close()
-
-            db.init_db(path)
-
-            conn = db.get_connection(path)
-            try:
-                cols = conn.execute("PRAGMA table_info(listings)").fetchall()
-                col_names = [c["name"] for c in cols]
-                assert "posted_at" in col_names
-            finally:
-                conn.close()
-
     def test_null_posted_at_does_not_crash_sort(self):
         """get_feed(sort='date_posted') works even when some rows have NULL posted_at.
 
-        SQLite sorts NULLs before non-NULL values in ASC order (i.e. last in DESC).
+        PostgreSQL sorts NULLs last in DESC order by default.
         The important thing is no exception is raised and non-NULL rows sort first.
         """
         with TempDB() as path:
@@ -966,7 +859,7 @@ class TestPostedAt:
             )
             results = db.get_feed(threshold=7.0, sort="date_posted", db_path=path)
             ids = [r["source_id"] for r in results]
-            # real-pa has a non-NULL posted_at so should sort first (DESC puts NULLs last)
+            # real-pa has a non-NULL posted_at so should sort first
             assert ids[0] == "real-pa"
             assert "null-pa" in ids
 
@@ -978,12 +871,12 @@ class TestPostedAt:
 class TestToggleBookmarked:
     """Tests for db.toggle_bookmarked() — atomic flip of the bookmarked flag."""
 
-    def _insert_and_get_id(self, path: str, source_id: str, bookmarked: int = 0) -> int:
+    def _insert_and_get_id(self, path, source_id: str, bookmarked: int = 0) -> int:
         db.insert_listing(make_listing(source_id=source_id, bookmarked=bookmarked), db_path=path)
         conn = db.get_connection(path)
         try:
             row = conn.execute(
-                "SELECT id FROM listings WHERE source_id = ?", (source_id,)
+                "SELECT id FROM listings WHERE source_id = %s", (source_id,)
             ).fetchone()
             return row["id"]
         finally:
@@ -1034,12 +927,12 @@ class TestToggleBookmarked:
 class TestToggleApplied:
     """Tests for db.toggle_applied() — atomic flip of the applied flag."""
 
-    def _insert_and_get_id(self, path: str, source_id: str, applied: int = 0) -> int:
+    def _insert_and_get_id(self, path, source_id: str, applied: int = 0) -> int:
         db.insert_listing(make_listing(source_id=source_id, applied=applied), db_path=path)
         conn = db.get_connection(path)
         try:
             row = conn.execute(
-                "SELECT id FROM listings WHERE source_id = ?", (source_id,)
+                "SELECT id FROM listings WHERE source_id = %s", (source_id,)
             ).fetchone()
             return row["id"]
         finally:

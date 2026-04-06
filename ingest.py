@@ -66,8 +66,10 @@ def _configure_file_logging() -> None:
     """
     MAX_LOG_FILES = 30
 
-    db_abs  = os.path.abspath(os.environ.get("DB_PATH", "jobs.db"))
-    log_dir = os.path.join(os.path.dirname(db_abs), "logs")
+    log_dir = os.environ.get(
+        "LOG_DIR",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+    )
     os.makedirs(log_dir, exist_ok=True)
 
     ts       = datetime.now().strftime("%Y%m%d_%H%M%S")

@@ -26,6 +26,10 @@ from job_sources import get_sources
 
 app = Flask(__name__)
 
+# Inject environment and version globals so all templates can render the status bar.
+app.jinja_env.globals['APP_ENV'] = os.environ.get('APP_ENV', 'local')
+app.jinja_env.globals['APP_VERSION'] = os.environ.get('APP_VERSION', 'local')
+
 DB_PATH: str = os.environ.get("DB_PATH", "jobs.db")
 DEMO_MODE: bool = False
 

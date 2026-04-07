@@ -11,4 +11,4 @@
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
-docker compose exec -T web python ingest.py --hours 25
+docker compose -p job-matcher-pr-prod exec -T web python ingest.py --hours 25

@@ -14,10 +14,10 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 echo "=== Container Status ==="
 echo ""
 echo "--- Dev Stack (port 5000) ---"
-docker compose -f "$PROJECT_DIR/docker-compose.dev.yml" ps
+docker compose -p job-matcher-pr-dev -f "$PROJECT_DIR/docker-compose.dev.yml" ps
 echo ""
 echo "--- Prod Stack (port 5001) ---"
-docker compose -f "$PROJECT_DIR/docker-compose.prod.yml" ps
+docker compose -p job-matcher-pr-prod -f "$PROJECT_DIR/docker-compose.prod.yml" ps
 echo ""
 
 # ---------------------------------------------------------------------------
@@ -26,10 +26,10 @@ echo ""
 echo "=== Recent Web Logs (last 20 lines) ==="
 echo ""
 echo "--- DEV ---"
-docker compose -f "$PROJECT_DIR/docker-compose.dev.yml" logs web --tail=20 --no-log-prefix
+docker compose -p job-matcher-pr-dev -f "$PROJECT_DIR/docker-compose.dev.yml" logs web --tail=20 --no-log-prefix
 echo ""
 echo "--- PROD ---"
-docker compose -f "$PROJECT_DIR/docker-compose.prod.yml" logs web --tail=20 --no-log-prefix
+docker compose -p job-matcher-pr-prod -f "$PROJECT_DIR/docker-compose.prod.yml" logs web --tail=20 --no-log-prefix
 echo ""
 
 # ---------------------------------------------------------------------------
@@ -38,10 +38,10 @@ echo ""
 echo "=== Database Stats ==="
 echo ""
 echo "--- DEV (jobmatcher_dev) ---"
-if docker compose -f "$PROJECT_DIR/docker-compose.dev.yml" ps --status running --services 2>/dev/null | grep -q "^db$"; then
+if docker compose -p job-matcher-pr-dev -f "$PROJECT_DIR/docker-compose.dev.yml" ps --status running --services 2>/dev/null | grep -q "^db$"; then
   DEV_POSTGRES_USER=$(grep '^POSTGRES_USER=' "$PROJECT_DIR/.env.dev" 2>/dev/null | cut -d= -f2 || echo "jobmatcher")
   DEV_POSTGRES_DB=$(grep '^POSTGRES_DB=' "$PROJECT_DIR/.env.dev" 2>/dev/null | cut -d= -f2 || echo "jobmatcher_dev")
-  docker compose -f "$PROJECT_DIR/docker-compose.dev.yml" exec -T db psql -U "${DEV_POSTGRES_USER}" -d "${DEV_POSTGRES_DB}" -c \
+  docker compose -p job-matcher-pr-dev -f "$PROJECT_DIR/docker-compose.dev.yml" exec -T db psql -U "${DEV_POSTGRES_USER}" -d "${DEV_POSTGRES_DB}" -c \
     "SELECT COUNT(*) AS total_listings, COUNT(score) AS scored, MAX(fetched_at) AS last_fetch FROM listings;" \
     2>/dev/null || echo "    (Could not query dev database)"
 else
@@ -53,10 +53,10 @@ echo ""
 # Database Stats — prod
 # ---------------------------------------------------------------------------
 echo "--- PROD (jobmatcher_prod) ---"
-if docker compose -f "$PROJECT_DIR/docker-compose.prod.yml" ps --status running --services 2>/dev/null | grep -q "^db$"; then
+if docker compose -p job-matcher-pr-prod -f "$PROJECT_DIR/docker-compose.prod.yml" ps --status running --services 2>/dev/null | grep -q "^db$"; then
   PROD_POSTGRES_USER=$(grep '^POSTGRES_USER=' "$PROJECT_DIR/.env.prod" 2>/dev/null | cut -d= -f2 || echo "jobmatcher")
   PROD_POSTGRES_DB=$(grep '^POSTGRES_DB=' "$PROJECT_DIR/.env.prod" 2>/dev/null | cut -d= -f2 || echo "jobmatcher_prod")
-  docker compose -f "$PROJECT_DIR/docker-compose.prod.yml" exec -T db psql -U "${PROD_POSTGRES_USER}" -d "${PROD_POSTGRES_DB}" -c \
+  docker compose -p job-matcher-pr-prod -f "$PROJECT_DIR/docker-compose.prod.yml" exec -T db psql -U "${PROD_POSTGRES_USER}" -d "${PROD_POSTGRES_DB}" -c \
     "SELECT COUNT(*) AS total_listings, COUNT(score) AS scored, MAX(fetched_at) AS last_fetch FROM listings;" \
     2>/dev/null || echo "    (Could not query prod database)"
 else

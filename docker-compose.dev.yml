@@ -3,7 +3,6 @@ name: job-matcher-pr-dev
 services:
   db:
     image: postgres:16-alpine
-    container_name: job-matcher-dev-db
     env_file: .env.dev
     volumes:
       - pgdata_dev:/var/lib/postgresql/data
@@ -20,7 +19,6 @@ services:
 
   web:
     image: ghcr.io/cbeaulieu-gt/job-matcher-pr:${APP_VERSION:-latest}
-    container_name: job-matcher-dev-web
     env_file: .env.dev
     depends_on:
       db:
@@ -44,7 +42,6 @@ services:
 
   scheduler:
     image: mcuadros/ofelia:latest
-    container_name: job-matcher-dev-scheduler
     depends_on:
       - web
     volumes:

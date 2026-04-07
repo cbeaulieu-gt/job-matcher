@@ -59,7 +59,8 @@ def _normalise_contract_time(raw: str | None) -> str | None:
     """
     if not raw:
         return None
-    return _CONTRACT_TIME_MAP.get(raw.upper(), raw.lower())
+    key = raw.upper().replace("-", "").replace(" ", "")
+    return _CONTRACT_TIME_MAP.get(key, raw.lower())
 
 
 def _normalise_salary_period(raw: str | None) -> str | None:

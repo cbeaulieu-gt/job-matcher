@@ -23,12 +23,15 @@ Usage
 
 from __future__ import annotations
 
+import logging
 import os
 
 from .base import LLMProvider
 from .anthropic_provider import AnthropicProvider
 from .openai_provider import OpenAIProvider
 from .gemini_provider import GeminiProvider
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "LLMProvider",
@@ -37,6 +40,7 @@ __all__ = [
     "GeminiProvider",
     "make_provider",
     "build_provider_chain",
+    "generate_with_fallback",
 ]
 
 
@@ -135,9 +139,6 @@ def build_provider_chain(providers: dict) -> list[LLMProvider]:
         empty ``api_key`` values are silently skipped.  May be empty if all
         configured providers have empty keys.
     """
-    import logging as _logging
-    _log = _logging.getLogger(__name__)
-
     llm_section: dict = providers.get("llm") or {}
     raw_order: list = providers.get("provider_order") or []
 
@@ -150,7 +151,7 @@ def build_provider_chain(providers: dict) -> list[LLMProvider]:
             continue  # duplicate — silently drop
         seen.add(name)
         if name not in _PROVIDER_CLASS_MAP:
-            _log.warning(
+            logger.warning(
                 "build_provider_chain: '%s' is in provider_order but not in the "
                 "provider registry — skipping.",
                 name,
@@ -171,7 +172,7 @@ def build_provider_chain(providers: dict) -> list[LLMProvider]:
         if cfg is None:
             # Provider is registered but has no entry in the llm section —
             # warn so operators know why it is absent from the chain.
-            _log.warning(
+            logger.warning(
                 "build_provider_chain: '%s' is in the provider registry but has no "
                 "entry in providers[\"llm\"] — skipping.",
                 name,
@@ -184,3 +185,56 @@ def build_provider_chain(providers: dict) -> list[LLMProvider]:
         chain.append(cls(api_key=api_key, model=cfg.get("model", "")))
 
     return chain
+
+
+def generate_with_fallback(
+    prompt: str,
+    chain: list,
+    dead_providers: set,
+) -> tuple[str, str] | None:
+    """Try providers in order for a raw text generation call.
+
+    Same retry/fallback semantics as ``score_listing_with_fallback()`` in
+    ``ingest.py``:
+
+    * Auth errors (401/403 in the RuntimeError message) permanently add the
+      provider to *dead_providers* for the remainder of the run.
+    * Transient failures log a warning and skip to the next provider.
+
+    Args:
+        prompt:         Arbitrary prompt string.
+        chain:          Ordered list of ``LLMProvider`` instances.
+        dead_providers: Set of ``id(provider)`` values to skip.  Modified
+                        in-place when an auth error is detected.
+
+    Returns:
+        ``(raw_text, "provider/model")`` on success, or ``None`` if all
+        providers fail.
+    """
+    for provider in chain:
+        if id(provider) in dead_providers:
+            continue
+
+        provider_name = provider.__class__.__name__.replace("Provider", "").lower()
+        model_name = getattr(provider, "_model", None) or getattr(provider, "_model_name", "unknown")
+
+        try:
+            raw_text = provider.generate(prompt)
+            return (raw_text, f"{provider_name}/{model_name}")
+        except RuntimeError as exc:
+            exc_lower = str(exc).lower()
+            if any(marker in exc_lower for marker in ("401", "403", "unauthorized", "authentication")):
+                logger.warning(
+                    "Auth error from %s — permanently disabled for this run: %s",
+                    provider_name,
+                    exc,
+                )
+                dead_providers.add(id(provider))
+            else:
+                logger.warning(
+                    "Transient error from %s, trying next provider: %s",
+                    provider_name,
+                    exc,
+                )
+
+    return None

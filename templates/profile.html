@@ -50,6 +50,47 @@
   <form class="settings-form" method="post" action="/profile">
 
     {# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+       Import from Resume (collapsible, collapsed by default)
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ #}
+    <div class="provider-row import-section">
+      <div class="provider-header import-toggle" style="cursor:pointer"
+           onclick="this.parentElement.classList.toggle('expanded')">
+        <span class="provider-name">Import from Resume</span>
+        <span class="import-chevron">&#x25B6;</span>
+      </div>
+
+      <div class="import-body">
+        <p class="field-hint">
+          Upload a PDF resume to pre-fill the profile form below. Review the
+          extracted data before saving.
+        </p>
+
+        <label class="settings-label">Import Mode</label>
+        <div class="import-mode-selector">
+          <label>
+            <input type="radio" name="import_mode" value="fresh" checked>
+            Start Fresh
+          </label>
+          <p class="field-hint">Replaces all populated fields based solely on the PDF.</p>
+          <label>
+            <input type="radio" name="import_mode" value="merge">
+            Merge with existing profile
+          </label>
+          <p class="field-hint">Adds new entries alongside existing profile data.</p>
+        </div>
+
+        <label class="settings-label">PDF File</label>
+        <input type="file" accept=".pdf" id="import-pdf-file" class="settings-input">
+
+        <button type="button" id="import-pdf-btn" class="btn" disabled>
+          Import
+        </button>
+
+        <div id="import-status" style="margin-top:0.75rem"></div>
+      </div>
+    </div>
+
+    {# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
        Section 1 — Candidate skills & preferences (profile.json)
     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ #}
 
@@ -403,6 +444,98 @@
   </form>
 
 </div>
+
+{# ── PDF import JS ────────────────────────────────────────────── #}
+<script>
+(function () {
+  var fileInput = document.getElementById('import-pdf-file');
+  var importBtn = document.getElementById('import-pdf-btn');
+  var statusDiv = document.getElementById('import-status');
+
+  fileInput.addEventListener('change', function () {
+    importBtn.disabled = !fileInput.files.length;
+  });
+
+  importBtn.addEventListener('click', function () {
+    var file = fileInput.files[0];
+    if (!file) return;
+
+    var mode = document.querySelector('input[name="import_mode"]:checked').value;
+    var formData = new FormData();
+    formData.append('file', file);
+    formData.append('mode', mode);
+
+    importBtn.disabled = true;
+    importBtn.textContent = 'Importing\u2026';
+    statusDiv.innerHTML = '';
+
+    fetch('/profile/import-pdf', { method: 'POST', body: formData })
+      .then(function (resp) { return resp.json().then(function (d) { return { ok: resp.ok, data: d }; }); })
+      .then(function (result) {
+        importBtn.disabled = false;
+        importBtn.textContent = 'Import';
+
+        if (!result.ok || !result.data.success) {
+          statusDiv.innerHTML = '';
+          var errP = document.createElement('p');
+          errP.className = 'save-error';
+          errP.textContent = result.data.error || 'Import failed.';
+          statusDiv.appendChild(errP);
+          return;
+        }
+
+        var prof = result.data.profile;
+
+        _fillRepeatingRows('primary_skills', prof.primary_skills || []);
+        _fillRepeatingRows('education', prof.education || []);
+        _fillRepeatingRows('preferred_industries', prof.preferred_industries || []);
+
+        var seniorityInput = document.querySelector('input[name="seniority"], select[name="seniority"]');
+        if (seniorityInput && prof.seniority) seniorityInput.value = prof.seniority;
+
+        var locationInput = document.querySelector('input[name="location_center"]');
+        if (locationInput && prof.location_center) locationInput.value = prof.location_center;
+
+        statusDiv.innerHTML = '';
+        var noticeP = document.createElement('p');
+        noticeP.className = 'save-notice';
+        noticeP.textContent = 'Profile pre-filled from resume (' + result.data.model_used + '). Review the fields below and click Save.';
+        statusDiv.appendChild(noticeP);
+      })
+      .catch(function (err) {
+        importBtn.disabled = false;
+        importBtn.textContent = 'Import';
+        statusDiv.innerHTML = '';
+        var netErrP = document.createElement('p');
+        netErrP.className = 'save-error';
+        netErrP.textContent = 'Network error: ' + err.message;
+        statusDiv.appendChild(netErrP);
+      });
+  });
+
+  function _fillRepeatingRows(fieldName, values) {
+    var list = document.getElementById('list-' + fieldName);
+    if (!list) {
+      console.warn('Import: list element not found for field:', fieldName);
+      return;
+    }
+
+    var rows = list.querySelectorAll('.row-item');
+    rows.forEach(function (r) { r.remove(); });
+
+    var items = values.length ? values : [''];
+    items.forEach(function (val) {
+      var div = document.createElement('div');
+      div.className = 'row-item';
+      div.innerHTML =
+        '<input class="settings-input" type="text" name="' + fieldName + '[]" value="" autocomplete="off">' +
+        '<button type="button" class="btn-row-remove" aria-label="Remove row">&#x2212;</button>';
+      div.querySelector('input').value = val;
+      list.appendChild(div);
+    });
+  }
+})();
+</script>
 
 {# ── Repeating-row JS (vanilla, no framework) ─────────────────── #}
 <script>

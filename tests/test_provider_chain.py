@@ -183,3 +183,84 @@ class TestBuildProviderChain(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestGenerateWithFallback:
+    def test_returns_text_and_model_on_success(self):
+        """Returns (raw_text, 'provider/model') on first provider success."""
+        from unittest.mock import MagicMock
+        from providers import generate_with_fallback
+
+        provider = MagicMock()
+        provider.generate.return_value = "LLM response text"
+        provider.__class__ = type("AnthropicProvider", (), {})
+        provider._model = "claude-haiku-4-5-20251001"
+
+        result = generate_with_fallback("test prompt", [provider], set())
+        assert result == ("LLM response text", "anthropic/claude-haiku-4-5-20251001")
+
+    def test_skips_dead_providers(self):
+        """Providers in dead_providers set are skipped."""
+        from unittest.mock import MagicMock
+        from providers import generate_with_fallback
+
+        dead = MagicMock()
+        alive = MagicMock()
+        alive.generate.return_value = "response"
+        alive.__class__ = type("OpenAIProvider", (), {})
+        alive._model = "gpt-4o-mini"
+
+        dead_set = {id(dead)}
+        result = generate_with_fallback("prompt", [dead, alive], dead_set)
+        assert result is not None
+        assert result[0] == "response"
+        dead.generate.assert_not_called()
+
+    def test_auth_error_kills_provider(self):
+        """Auth errors (401/403) add provider to dead_providers permanently."""
+        from unittest.mock import MagicMock
+        from providers import generate_with_fallback
+
+        provider = MagicMock()
+        provider.generate.side_effect = RuntimeError("401 Unauthorized")
+        provider.__class__ = type("AnthropicProvider", (), {})
+
+        dead_set = set()
+        result = generate_with_fallback("prompt", [provider], dead_set)
+        assert result is None
+        assert id(provider) in dead_set
+
+    def test_transient_error_tries_next_provider(self):
+        """Transient errors skip to the next provider."""
+        from unittest.mock import MagicMock
+        from providers import generate_with_fallback
+
+        bad = MagicMock()
+        bad.generate.side_effect = RuntimeError("Connection timeout")
+        bad.__class__ = type("AnthropicProvider", (), {})
+
+        good = MagicMock()
+        good.generate.return_value = "fallback response"
+        good.__class__ = type("OpenAIProvider", (), {})
+        good._model = "gpt-4o-mini"
+
+        result = generate_with_fallback("prompt", [bad, good], set())
+        assert result == ("fallback response", "openai/gpt-4o-mini")
+
+    def test_all_fail_returns_none(self):
+        """Returns None when all providers fail."""
+        from unittest.mock import MagicMock
+        from providers import generate_with_fallback
+
+        provider = MagicMock()
+        provider.generate.side_effect = RuntimeError("timeout")
+        provider.__class__ = type("AnthropicProvider", (), {})
+
+        result = generate_with_fallback("prompt", [provider], set())
+        assert result is None
+
+    def test_empty_chain_returns_none(self):
+        """Returns None when chain is empty."""
+        from providers import generate_with_fallback
+        result = generate_with_fallback("prompt", [], set())
+        assert result is None

@@ -152,6 +152,51 @@ class AnthropicProvider(LLMProvider):
         """USD cost per million output tokens for the configured model."""
         return self._output_cost
 
+    def generate(self, prompt: str) -> str:
+        """Call the Anthropic Messages API and return raw text.
+
+        Unlike ``complete()``, no JSON parsing is performed — the raw text
+        from the first content block is returned directly.  Retries once on
+        API error (2-second delay).  Raises ``RuntimeError`` if both attempts
+        fail.
+
+        Args:
+            prompt: Fully rendered prompt string.
+
+        Returns:
+            Raw text string from the model response.
+
+        Raises:
+            RuntimeError: After two consecutive failures.
+        """
+        for attempt in range(2):
+            if attempt > 0:
+                time.sleep(2)
+
+            try:
+                message = self._client.messages.create(
+                    model=self._model,
+                    max_tokens=1024,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+            except anthropic.APIError as exc:
+                logger.warning(
+                    "Anthropic API error (attempt %d/2): %s", attempt + 1, exc
+                )
+                continue
+
+            try:
+                return message.content[0].text
+            except (IndexError, AttributeError) as exc:
+                logger.warning(
+                    "Unexpected Anthropic response structure (attempt %d/2): %s",
+                    attempt + 1,
+                    exc,
+                )
+                continue
+
+        raise RuntimeError("Anthropic generate failed after 2 attempts")
+
     def complete(self, prompt: str) -> dict:
         """Call the Anthropic Messages API and return a parsed scoring dict.
 

@@ -727,3 +727,143 @@ class TestBuildLlmSchemasHasValues:
         assert "api_key" not in current_values, (
             "api_key (password field) must not appear in current_values"
         )
+
+
+# ===========================================================================
+# POST /settings — cross-tab and within-tab preservation (issue #71)
+# ===========================================================================
+
+
+class TestSettingsPostCrossTabPreservation:
+    """Saving one tab must never wipe data belonging to the other tab."""
+
+    def test_saving_llm_tab_does_not_wipe_job_sources(
+        self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
+    ):
+        """POST to the LLM tab must leave job_sources credentials untouched."""
+        _write_providers(tmp_providers_path)
+        client.post("/settings", data={
+            "anthropic__api_key": "sk-updated",
+            "anthropic__model": "claude-haiku-4-5-20251001",
+            "tab": "llm",
+        })
+        with open(tmp_providers_path, encoding="utf-8") as fh:
+            saved = json.load(fh)
+        # Adzuna credentials must be unchanged.
+        assert saved["job_sources"]["adzuna"]["app_id"] == "existing-id"
+        assert saved["job_sources"]["adzuna"]["app_key"] == "existing-key"
+
+    def test_saving_sources_tab_does_not_wipe_llm_credentials(
+        self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
+    ):
+        """POST to the sources tab must leave LLM api_key and model untouched."""
+        _write_providers(tmp_providers_path)
+        client.post("/settings", data={
+            "adzuna__enabled": "on",
+            "adzuna__app_id": "new-id",
+            "adzuna__app_key": "new-key",
+            "tab": "sources",
+        })
+        with open(tmp_providers_path, encoding="utf-8") as fh:
+            saved = json.load(fh)
+        # Anthropic credentials must be unchanged.
+        assert saved["llm"]["anthropic"]["api_key"] == "sk-existing"
+        assert saved["llm"]["anthropic"]["model"] == "claude-haiku-4-5-20251001"
+
+    def test_provider_order_not_wiped_by_llm_tab_save(
+        self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
+    ):
+        """provider_order must be preserved when saving the LLM tab."""
+        _write_providers(tmp_providers_path)
+        client.post("/settings", data={
+            "anthropic__api_key": "sk-updated",
+            "tab": "llm",
+        })
+        with open(tmp_providers_path, encoding="utf-8") as fh:
+            saved = json.load(fh)
+        assert saved["provider_order"] == ["anthropic", "openai", "gemini"]
+
+    def test_provider_order_not_wiped_by_sources_tab_save(
+        self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
+    ):
+        """provider_order must be preserved when saving the sources tab."""
+        _write_providers(tmp_providers_path)
+        client.post("/settings", data={
+            "adzuna__enabled": "on",
+            "tab": "sources",
+        })
+        with open(tmp_providers_path, encoding="utf-8") as fh:
+            saved = json.load(fh)
+        assert saved["provider_order"] == ["anthropic", "openai", "gemini"]
+
+
+class TestSettingsPostWithinTabPreservation:
+    """Within the active tab, providers not touched by the user must be preserved."""
+
+    def test_saving_one_llm_provider_preserves_other_providers(
+        self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
+    ):
+        """Updating Anthropic's key must not overwrite OpenAI's or Gemini's model."""
+        _write_providers(tmp_providers_path)
+        # Only submit Anthropic fields; OpenAI and Gemini fields are not in the form.
+        client.post("/settings", data={
+            "anthropic__api_key": "sk-updated",
+            "anthropic__model": "claude-haiku-4-5-20251001",
+            "tab": "llm",
+        })
+        with open(tmp_providers_path, encoding="utf-8") as fh:
+            saved = json.load(fh)
+        assert saved["llm"]["openai"]["model"] == "gpt-4o-mini"
+        assert saved["llm"]["gemini"]["model"] == "gemini-1.5-flash"
+
+    def test_saving_one_source_preserves_other_source_credentials(
+        self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
+    ):
+        """Updating one source's enabled flag must not wipe another source's credentials."""
+        # Add a second source with credentials so we can verify it's preserved.
+        data = {
+            "provider_order": ["anthropic"],
+            "llm": {
+                "anthropic": {"api_key": "sk-existing", "model": "claude-haiku-4-5-20251001"},
+            },
+            "job_sources": {
+                "adzuna": {"app_id": "existing-id", "app_key": "existing-key", "enabled": True},
+                "jooble": {"api_key": "jooble-key", "enabled": True},
+            },
+        }
+        with open(tmp_providers_path, "w", encoding="utf-8") as fh:
+            json.dump(data, fh)
+
+        # Only submit Adzuna fields; Jooble is not touched.
+        client.post("/settings", data={
+            "adzuna__enabled": "on",
+            "adzuna__app_id": "updated-id",
+            "adzuna__app_key": "updated-key",
+            "tab": "sources",
+        })
+        with open(tmp_providers_path, encoding="utf-8") as fh:
+            saved = json.load(fh)
+        # Jooble must be untouched — its key is not wiped.
+        assert saved["job_sources"]["jooble"]["api_key"] == "jooble-key"
+        assert saved["job_sources"]["jooble"]["enabled"] is False  # unchecked → disabled
+
+    def test_saving_multiple_llm_providers_at_once(
+        self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
+    ):
+        """Submitting multiple providers' fields in a single POST must update all of them."""
+        _write_providers(tmp_providers_path)
+        client.post("/settings", data={
+            "anthropic__api_key": "sk-new-anthropic",
+            "anthropic__model": "claude-opus-4-20251001",
+            "openai__api_key": "sk-new-openai",
+            "openai__model": "gpt-4o",
+            "tab": "llm",
+        })
+        with open(tmp_providers_path, encoding="utf-8") as fh:
+            saved = json.load(fh)
+        assert saved["llm"]["anthropic"]["api_key"] == "sk-new-anthropic"
+        assert saved["llm"]["anthropic"]["model"] == "claude-opus-4-20251001"
+        assert saved["llm"]["openai"]["api_key"] == "sk-new-openai"
+        assert saved["llm"]["openai"]["model"] == "gpt-4o"
+        # Gemini was not submitted — its model must remain unchanged.
+        assert saved["llm"]["gemini"]["model"] == "gemini-1.5-flash"

@@ -948,36 +948,60 @@ def settings():
         active_tab = request.form.get("tab", "llm").strip()
 
         # --- Build updates dict from namespaced form fields ---
-        updates: dict = {"llm": {}, "job_sources": {}}
+        # Only populate the section that corresponds to the active tab.  Processing
+        # the other section would send blank values for every field not present in
+        # the submitted form, causing _deep_merge to overwrite previously-saved
+        # credentials with empty strings (cross-tab wipe bug, issue #71).
+        updates: dict = {}
 
-        # LLM providers: iterate registry so new providers are handled automatically.
-        for provider_key, cls in _PROVIDER_CLASS_MAP.items():
-            schema = cls.settings_schema()
-            provider_updates: dict = {}
-            for field in schema["fields"]:
-                field_name = field["name"]
-                form_key = f"{provider_key}__{field_name}"
-                value = request.form.get(form_key, "").strip()
-                provider_updates[field_name] = value  # blank → save_providers skips it
-            if provider_updates:
-                updates["llm"][provider_key] = provider_updates
+        if active_tab == "llm":
+            updates["llm"] = {}
+            # LLM providers: iterate registry so new providers are handled automatically.
+            # Only include fields that have a non-empty value so that providers the
+            # user left blank are not merged into providers.json as empty strings
+            # (within-tab wipe bug, issue #71).  A user who explicitly clears a field
+            # will have submitted a blank for a provider that already had a value — we
+            # distinguish "provider's form was on the page and submitted blank" from
+            # "provider wasn't on the page at all" by limiting this block to
+            # active_tab == "llm" above.
+            for provider_key, cls in _PROVIDER_CLASS_MAP.items():
+                schema = cls.settings_schema()
+                provider_updates: dict = {}
+                for field in schema["fields"]:
+                    field_name = field["name"]
+                    form_key = f"{provider_key}__{field_name}"
+                    raw = request.form.get(form_key)
+                    if raw is None:
+                        # Field not present in form at all — skip to preserve
+                        # any existing stored value.
+                        continue
+                    provider_updates[field_name] = raw.strip()
+                if provider_updates:
+                    updates["llm"][provider_key] = provider_updates
 
-        # Job sources: save enabled flag for all; save credential fields for keyed sources.
-        for source_key, cls in get_sources().items():
-            schema = cls.settings_schema()
-            source_updates: dict = {}
+        elif active_tab == "sources":
+            updates["job_sources"] = {}
+            # Job sources: save enabled flag for all sources in the active tab;
+            # save credential fields only when non-empty to avoid wiping stored
+            # credentials for sources the user didn't touch (issue #71).
+            for source_key, cls in get_sources().items():
+                source_updates: dict = {}
 
-            # Checkbox: unchecked = not submitted = False
-            enabled = request.form.get(f"{source_key}__enabled") == "on"
-            source_updates["enabled"] = enabled
+                # Checkbox: unchecked = not submitted = False.  enabled must
+                # always be included because a missing checkbox means explicitly
+                # disabled — not "unchanged".
+                enabled = request.form.get(f"{source_key}__enabled") == "on"
+                source_updates["enabled"] = enabled
 
-            for field in schema["fields"]:
-                field_name = field["name"]
-                form_key = f"{source_key}__{field_name}"
-                value = request.form.get(form_key, "").strip()
-                source_updates[field_name] = value
+                for field in cls.settings_schema()["fields"]:
+                    field_name = field["name"]
+                    form_key = f"{source_key}__{field_name}"
+                    raw = request.form.get(form_key)
+                    if raw is None:
+                        continue
+                    source_updates[field_name] = raw.strip()
 
-            updates["job_sources"][source_key] = source_updates
+                updates["job_sources"][source_key] = source_updates
 
         try:
             save_providers(updates, providers_path=_PROVIDERS_PATH)

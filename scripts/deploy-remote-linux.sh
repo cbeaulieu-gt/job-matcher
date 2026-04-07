@@ -185,28 +185,28 @@ fi
 
 step "Cloning / updating repository at ${REMOTE_PATH}..."
 
-ssh -t "${SSH_TARGET}" bash <<REMOTE
-set -euo pipefail
+# First, ensure the directory exists (needs sudo + TTY for password prompt).
+# Check remotely whether the path exists before prompting for sudo.
+DIR_EXISTS=$(ssh "${SSH_TARGET}" "test -e '${REMOTE_PATH}' && echo yes || echo no")
 
-if [[ ! -e "${REMOTE_PATH}" ]]; then
-    echo "  Creating ${REMOTE_PATH}..."
-    sudo mkdir -p "${REMOTE_PATH}"
-    sudo chown "\$(id -un):\$(id -gn)" "${REMOTE_PATH}"
+if [[ "${DIR_EXISTS}" == "no" ]]; then
+    echo "  Creating ${REMOTE_PATH} (requires sudo)..."
+    ssh -tt "${SSH_TARGET}" "sudo mkdir -p '${REMOTE_PATH}' && sudo chown \$(id -un):\$(id -gn) '${REMOTE_PATH}'"
     echo "  Cloning from ${REPO_URL}..."
-    git clone "${REPO_URL}" "${REMOTE_PATH}"
+    ssh "${SSH_TARGET}" "git clone '${REPO_URL}' '${REMOTE_PATH}'"
     echo "  Clone complete."
-
-elif [[ -d "${REMOTE_PATH}/.git" ]]; then
-    echo "  Git repo found -- pulling latest from origin/main..."
-    cd "${REMOTE_PATH}"
-    git pull origin main
-    echo "  Pull complete."
-
 else
-    echo "  WARN: ${REMOTE_PATH} exists but is NOT a git repository."
-    echo "        Skipping git operations. Files already present will be used as-is."
+    # Check if it's a git repo and pull updates
+    IS_GIT=$(ssh "${SSH_TARGET}" "test -d '${REMOTE_PATH}/.git' && echo yes || echo no")
+    if [[ "${IS_GIT}" == "yes" ]]; then
+        echo "  Git repo found -- pulling latest from origin/main..."
+        ssh "${SSH_TARGET}" "cd '${REMOTE_PATH}' && git pull origin main"
+        echo "  Pull complete."
+    else
+        echo "  WARN: ${REMOTE_PATH} exists but is NOT a git repository."
+        echo "        Skipping git operations. Files already present will be used as-is."
+    fi
 fi
-REMOTE
 
 ok "Repository is up to date at ${REMOTE_PATH}."
 

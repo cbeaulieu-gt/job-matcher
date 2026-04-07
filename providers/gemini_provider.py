@@ -149,6 +149,50 @@ class GeminiProvider(LLMProvider):
         """USD cost per million output tokens for the configured model."""
         return self._output_cost
 
+    def generate(self, prompt: str) -> str:
+        """Call the Gemini GenerativeAI API and return raw text.
+
+        Unlike ``complete()``, no JSON parsing is performed — the ``text``
+        attribute of the response is returned directly.  Retries once on any
+        exception (2-second delay).  Raises ``RuntimeError`` if both attempts
+        fail.
+
+        Args:
+            prompt: Fully rendered prompt string.
+
+        Returns:
+            Raw text string from the model response.
+
+        Raises:
+            RuntimeError: After two consecutive failures.
+        """
+        for attempt in range(2):
+            if attempt > 0:
+                time.sleep(2)
+
+            try:
+                response = self._client.models.generate_content(
+                    model=self._model_name,
+                    contents=prompt,
+                )
+            except Exception as exc:  # noqa: BLE001 — Gemini raises varied errors
+                logger.warning(
+                    "Gemini API error (attempt %d/2): %s", attempt + 1, exc
+                )
+                continue
+
+            try:
+                return response.text
+            except (AttributeError, ValueError) as exc:
+                logger.warning(
+                    "Unexpected Gemini response structure (attempt %d/2): %s",
+                    attempt + 1,
+                    exc,
+                )
+                continue
+
+        raise RuntimeError("Gemini generate failed after 2 attempts")
+
     def complete(self, prompt: str) -> dict:
         """Call the Gemini GenerativeAI API and return a parsed scoring dict.
 

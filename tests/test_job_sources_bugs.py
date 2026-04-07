@@ -468,6 +468,9 @@ class TestMakeSourceUniform:
             "jooble": {
                 "api_key": "fake",
             },
+            "jsearch": {
+                "api_key": "fake",
+            },
         }
         for source_name in SOURCES:
             config = {**base_config, "job_source": source_name}

@@ -4,10 +4,11 @@
 #
 # PURPOSE:
 #   Runs from a developer workstation (Git Bash, WSL, or any POSIX shell).
-#   Clones or updates the job-matcher-pr repo on a remote Linux host, copies
-#   local .env example files if the live files don't yet exist, then
+#   Copies the required deployment files (compose files, scripts, config
+#   examples) from the local checkout to a remote Linux host, then
 #   optionally runs scripts/docker-setup.sh on the remote (interactively via
 #   SSH TTY) to complete the first-time Docker stack configuration.
+#   No git or GitHub credentials are needed on the remote server.
 #
 # USAGE:
 #   ./scripts/deploy-remote-linux.sh <host> [user] [remote-path]
@@ -22,7 +23,6 @@
 #
 # PREREQUISITES (remote):
 #   - SSH access with key-based or password auth
-#   - git installed
 #   - docker + docker compose plugin installed (checked in Step 3)
 #   - sudo access for docker-setup.sh (requires root for chown operations)
 #
@@ -40,8 +40,6 @@ GREEN='\033[0;32m'
 RED='\033[0;31m'
 BOLD='\033[1m'
 RESET='\033[0m'
-
-REPO_URL="https://github.com/cbeaulieu-gt/job-matcher-pr.git"
 
 banner() {
     local border
@@ -180,42 +178,64 @@ if [[ "${PREREQ_FAILED}" == "1" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Step 4 — Clone or update the repo
+# Step 4 — Create remote directory and copy deployment files via scp
 # ---------------------------------------------------------------------------
 
-step "Cloning / updating repository at ${REMOTE_PATH}..."
+step "Preparing ${REMOTE_PATH} on ${REMOTE_HOST}..."
 
-# First, ensure the directory exists (needs sudo + TTY for password prompt).
-# Check remotely whether the path exists before prompting for sudo.
+# Ensure the remote directory exists (needs sudo + TTY for password prompt).
 DIR_EXISTS=$(ssh "${SSH_TARGET}" "test -e '${REMOTE_PATH}' && echo yes || echo no")
 
 if [[ "${DIR_EXISTS}" == "no" ]]; then
     echo "  Creating ${REMOTE_PATH} (requires sudo)..."
     ssh -tt "${SSH_TARGET}" "sudo mkdir -p '${REMOTE_PATH}' && sudo chown \$(id -un):\$(id -gn) '${REMOTE_PATH}'"
-    echo "  Cloning from ${REPO_URL}..."
-    ssh "${SSH_TARGET}" "git clone '${REPO_URL}' '${REMOTE_PATH}'"
-    echo "  Clone complete."
-else
-    # Check if it's a git repo and pull updates
-    IS_GIT=$(ssh "${SSH_TARGET}" "test -d '${REMOTE_PATH}/.git' && echo yes || echo no")
-    if [[ "${IS_GIT}" == "yes" ]]; then
-        echo "  Git repo found -- pulling latest from origin/main..."
-        ssh "${SSH_TARGET}" "cd '${REMOTE_PATH}' && git pull origin main"
-        echo "  Pull complete."
-    else
-        echo "  WARN: ${REMOTE_PATH} exists but is NOT a git repository."
-        echo "        Skipping git operations. Files already present will be used as-is."
-    fi
 fi
 
-ok "Repository is up to date at ${REMOTE_PATH}."
+# Create required sub-directories on the remote.
+ssh "${SSH_TARGET}" "mkdir -p '${REMOTE_PATH}/scripts' '${REMOTE_PATH}/config'"
 
-# ---------------------------------------------------------------------------
-# Step 5 — Copy local .env example files (don't overwrite existing live files)
-# ---------------------------------------------------------------------------
+step "Copying deployment files to ${REMOTE_HOST}:${REMOTE_PATH}..."
 
-step "Copying .env example files to remote (skipping if live files already exist)..."
+# --- Docker Compose files ---
+for COMPOSE_FILE in docker-compose.prod.yml docker-compose.dev.yml; do
+    LOCAL_FILE="${LOCAL_PROJECT_ROOT}/${COMPOSE_FILE}"
+    if [[ -f "${LOCAL_FILE}" ]]; then
+        scp -q "${LOCAL_FILE}" "${SSH_TARGET}:${REMOTE_PATH}/${COMPOSE_FILE}"
+        ok "Copied ${COMPOSE_FILE}"
+    else
+        warn "Local file not found, skipping: ${COMPOSE_FILE}"
+    fi
+done
 
+# --- Scripts ---
+SCRIPTS=(
+    docker-setup.sh
+    docker-status.sh
+    docker-teardown.sh
+    entrypoint.sh
+    ingest-cron.sh
+    backup.sh
+)
+for SCRIPT in "${SCRIPTS[@]}"; do
+    LOCAL_FILE="${LOCAL_PROJECT_ROOT}/scripts/${SCRIPT}"
+    if [[ -f "${LOCAL_FILE}" ]]; then
+        scp -q "${LOCAL_FILE}" "${SSH_TARGET}:${REMOTE_PATH}/scripts/${SCRIPT}"
+        ok "Copied scripts/${SCRIPT}"
+    else
+        warn "Local file not found, skipping: scripts/${SCRIPT}"
+    fi
+done
+
+# --- Config example files ---
+shopt -s nullglob
+for EXAMPLE in "${LOCAL_PROJECT_ROOT}"/config/*.example.json; do
+    BASENAME="$(basename "${EXAMPLE}")"
+    scp -q "${EXAMPLE}" "${SSH_TARGET}:${REMOTE_PATH}/config/${BASENAME}"
+    ok "Copied config/${BASENAME}"
+done
+shopt -u nullglob
+
+# --- .env example files (don't overwrite existing live files) ---
 for ENV_EXAMPLE in .env.prod.example .env.dev.example; do
     LOCAL_EXAMPLE="${LOCAL_PROJECT_ROOT}/${ENV_EXAMPLE}"
     REMOTE_EXAMPLE="${REMOTE_PATH}/${ENV_EXAMPLE}"
@@ -234,12 +254,14 @@ for ENV_EXAMPLE in .env.prod.example .env.dev.example; do
         ok "${LIVE_NAME} already exists on remote -- skipping example copy."
     else
         scp -q "${LOCAL_EXAMPLE}" "${SSH_TARGET}:${REMOTE_EXAMPLE}"
-        ok "Copied ${ENV_EXAMPLE} to ${REMOTE_PATH}/"
+        ok "Copied ${ENV_EXAMPLE}"
     fi
 done
 
+ok "All deployment files copied to ${REMOTE_PATH}."
+
 # ---------------------------------------------------------------------------
-# Step 6 — Run docker-setup.sh (interactive, requires sudo)
+# Step 5 — Run docker-setup.sh (interactive, requires sudo)
 # ---------------------------------------------------------------------------
 
 echo ""
@@ -253,11 +275,10 @@ if [[ "${RUN_SETUP}" =~ ^[Yy]$ ]]; then
     step "Launching docker-setup.sh on ${REMOTE_HOST} via interactive SSH..."
     echo ""
 
-    # Sanity check: verify the clone succeeded before attempting to run the script.
+    # Sanity check: verify the file copy succeeded before attempting to run the script.
     if ! ssh "${SSH_TARGET}" "[[ -f '${REMOTE_PATH}/scripts/docker-setup.sh' ]]" 2>/dev/null; then
         fail "scripts/docker-setup.sh not found at ${REMOTE_PATH}/scripts/docker-setup.sh on the remote."
-        fail "The git clone may have failed (e.g. insufficient permissions on ${REMOTE_PATH})."
-        fail "Fix the clone step and re-run this script before attempting docker-setup.sh."
+        fail "The file copy in Step 4 may have failed. Re-run this script."
         exit 1
     fi
 
@@ -281,7 +302,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Step 7 — Summary
+# Step 6 — Summary
 # ---------------------------------------------------------------------------
 
 banner "Deployment Complete"

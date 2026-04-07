@@ -79,12 +79,12 @@ jobs:
           APP_VERSION: ${{ github.event.workflow_run.head_sha }}
         run: |
           export APP_VERSION
-          docker compose --env-file /opt/job-matcher-pr/.env.dev -f /opt/job-matcher-pr/docker-compose.dev.yml pull
-          docker compose --env-file /opt/job-matcher-pr/.env.dev -f /opt/job-matcher-pr/docker-compose.dev.yml up -d --remove-orphans
-          docker compose --env-file /opt/job-matcher-pr/.env.dev -f /opt/job-matcher-pr/docker-compose.dev.yml ps --status running --services | grep -q "web"
+          docker compose -p job-matcher-pr-dev --env-file /opt/job-matcher-pr/.env.dev -f /opt/job-matcher-pr/docker-compose.dev.yml pull
+          docker compose -p job-matcher-pr-dev --env-file /opt/job-matcher-pr/.env.dev -f /opt/job-matcher-pr/docker-compose.dev.yml up -d --remove-orphans
+          docker compose -p job-matcher-pr-dev --env-file /opt/job-matcher-pr/.env.dev -f /opt/job-matcher-pr/docker-compose.dev.yml ps --status running --services | grep -q "web"
 
       - name: Prune old images
-        run: docker image prune -f --filter "label=com.docker.compose.project=job-matcher-dev"
+        run: docker image prune -f --filter "label=com.docker.compose.project=job-matcher-pr-dev"
 
   deploy-prod:
     name: Deploy prod stack
@@ -110,7 +110,7 @@ jobs:
           APP_VERSION: ${{ github.event.workflow_run.head_sha }}
         run: |
           export APP_VERSION
-          docker compose --env-file /opt/job-matcher-pr/.env.prod -f /opt/job-matcher-pr/docker-compose.prod.yml pull
-          docker compose --env-file /opt/job-matcher-pr/.env.prod -f /opt/job-matcher-pr/docker-compose.prod.yml up -d --remove-orphans
-          docker compose --env-file /opt/job-matcher-pr/.env.prod -f /opt/job-matcher-pr/docker-compose.prod.yml ps --status running --services | grep -q "web"
-          docker image prune -f --filter "label=com.docker.compose.project=job-matcher-pr"
+          docker compose -p job-matcher-pr-prod --env-file /opt/job-matcher-pr/.env.prod -f /opt/job-matcher-pr/docker-compose.prod.yml pull
+          docker compose -p job-matcher-pr-prod --env-file /opt/job-matcher-pr/.env.prod -f /opt/job-matcher-pr/docker-compose.prod.yml up -d --remove-orphans
+          docker compose -p job-matcher-pr-prod --env-file /opt/job-matcher-pr/.env.prod -f /opt/job-matcher-pr/docker-compose.prod.yml ps --status running --services | grep -q "web"
+          docker image prune -f --filter "label=com.docker.compose.project=job-matcher-pr-prod"

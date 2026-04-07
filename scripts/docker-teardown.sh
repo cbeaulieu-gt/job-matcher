@@ -22,10 +22,10 @@ if [[ "$(echo "$confirm_dev" | tr '[:upper:]' '[:lower:]')" == "y" ]]; then
 
   read -r -p "Also delete DEV data volume (pgdata_dev)? This permanently destroys all dev job data. [y/N] " confirm_dev_vol
   if [[ "$(echo "$confirm_dev_vol" | tr '[:upper:]' '[:lower:]')" == "y" ]]; then
-    docker compose -f "$PROJECT_DIR/docker-compose.dev.yml" down -v
+    docker compose -p job-matcher-pr-dev -f "$PROJECT_DIR/docker-compose.dev.yml" down -v
     echo "    Dev containers and data volume removed"
   else
-    docker compose -f "$PROJECT_DIR/docker-compose.dev.yml" down
+    docker compose -p job-matcher-pr-dev -f "$PROJECT_DIR/docker-compose.dev.yml" down
     echo "    Dev containers removed"
     echo "    Dev data volume preserved"
   fi
@@ -44,10 +44,10 @@ if [[ "$(echo "$confirm_prod" | tr '[:upper:]' '[:lower:]')" == "y" ]]; then
 
   read -r -p "Also delete PROD data volume (pgdata_prod)? This permanently destroys all prod job data. [y/N] " confirm_prod_vol
   if [[ "$(echo "$confirm_prod_vol" | tr '[:upper:]' '[:lower:]')" == "y" ]]; then
-    docker compose -f "$PROJECT_DIR/docker-compose.prod.yml" down -v
+    docker compose -p job-matcher-pr-prod -f "$PROJECT_DIR/docker-compose.prod.yml" down -v
     echo "    Prod containers and data volume removed"
   else
-    docker compose -f "$PROJECT_DIR/docker-compose.prod.yml" down
+    docker compose -p job-matcher-pr-prod -f "$PROJECT_DIR/docker-compose.prod.yml" down
     echo "    Prod containers removed"
     echo "    Prod data volume preserved"
   fi

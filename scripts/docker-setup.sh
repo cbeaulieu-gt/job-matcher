@@ -139,16 +139,16 @@ fi
 # Pull and start both stacks
 # ---------------------------------------------------------------------------
 echo "==> Pulling dev stack images..."
-docker compose --env-file "$PROJECT_DIR/.env.dev" -f "$PROJECT_DIR/docker-compose.dev.yml" pull
+docker compose -p job-matcher-pr-dev --env-file "$PROJECT_DIR/.env.dev" -f "$PROJECT_DIR/docker-compose.dev.yml" pull
 
 echo "==> Starting dev stack (port 5000)..."
-docker compose --env-file "$PROJECT_DIR/.env.dev" -f "$PROJECT_DIR/docker-compose.dev.yml" up -d
+docker compose -p job-matcher-pr-dev --env-file "$PROJECT_DIR/.env.dev" -f "$PROJECT_DIR/docker-compose.dev.yml" up -d
 
 echo "==> Pulling prod stack images..."
-docker compose --env-file "$PROJECT_DIR/.env.prod" -f "$PROJECT_DIR/docker-compose.prod.yml" pull
+docker compose -p job-matcher-pr-prod --env-file "$PROJECT_DIR/.env.prod" -f "$PROJECT_DIR/docker-compose.prod.yml" pull
 
 echo "==> Starting prod stack (port 5001)..."
-docker compose --env-file "$PROJECT_DIR/.env.prod" -f "$PROJECT_DIR/docker-compose.prod.yml" up -d
+docker compose -p job-matcher-pr-prod --env-file "$PROJECT_DIR/.env.prod" -f "$PROJECT_DIR/docker-compose.prod.yml" up -d
 
 echo ""
 echo "Both stacks are running!"
@@ -158,7 +158,7 @@ echo "  Dev  (port 5000): http://<this-vm-ip>:5000/settings — configure dev AP
 echo "  Prod (port 5001): http://<this-vm-ip>:5001/settings — configure prod API keys"
 echo ""
 echo "  Run your first dev ingest:"
-echo "    docker compose -f docker-compose.dev.yml exec web python ingest.py --hours 48"
+echo "    docker compose -p job-matcher-pr-dev -f docker-compose.dev.yml exec web python ingest.py --hours 48"
 echo ""
 echo "  Check status: ./scripts/docker-status.sh"
 echo ""
@@ -185,4 +185,4 @@ echo ""
 echo "    30 1 * * * $PROJECT_DIR/scripts/backup.sh >> $PROJECT_DIR/logs/backup.log 2>&1"
 echo ""
 echo "    Backups are written to $PROJECT_DIR/backups/ and the 10 most recent are kept."
-echo "    To restore: docker compose exec -T db psql -U jobmatcher jobmatcher < backups/jobs_YYYYMMDD_HHMMSS.sql"
+echo "    To restore: docker compose -p job-matcher-pr-prod exec -T db psql -U jobmatcher jobmatcher < backups/jobs_YYYYMMDD_HHMMSS.sql"

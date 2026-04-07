@@ -439,7 +439,7 @@ Add to the host crontab (`crontab -e`):
 **Restore from a backup**
 
 ```bash
-docker compose exec -T db psql -U jobmatcher jobmatcher < backups/jobs_YYYYMMDD_HHMMSS.sql
+docker compose -p job-matcher-pr-prod exec -T db psql -U jobmatcher jobmatcher < backups/jobs_YYYYMMDD_HHMMSS.sql
 ```
 
 Replace `jobs_YYYYMMDD_HHMMSS.sql` with the filename of the backup you want to restore.

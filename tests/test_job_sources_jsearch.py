@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import os
 import sys
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import requests as _req
 

@@ -29,6 +29,8 @@ import time
 from datetime import datetime, timezone
 import requests
 from bs4 import BeautifulSoup
+from geopy.distance import geodesic
+from geopy.geocoders import Nominatim
 
 import db
 from job_sources import make_enabled_sources
@@ -346,7 +348,6 @@ class GeoFilter:
 
         # Lazy-initialised geolocator — only created when needed.
         self._geolocator = None
-        self._geopy_missing = False
 
         # Run statistics.
         self.hits = 0
@@ -372,23 +373,9 @@ class GeoFilter:
         return bool(self._center_str) and self._radius_km is not None
 
     def _geolocator_instance(self):
-        """Return (or lazily create) the Nominatim geolocator.
-
-        Returns None when geopy is not installed.
-        """
-        if self._geopy_missing:
-            return None
+        """Return (or lazily create) the Nominatim geolocator."""
         if self._geolocator is None:
-            try:
-                from geopy.geocoders import Nominatim
-                self._geolocator = Nominatim(user_agent=_GEOCODE_USER_AGENT)
-            except ImportError:
-                logger.warning(
-                    "geopy is not installed — location geocoding skipped. "
-                    "Run: uv pip install geopy==2.4.1"
-                )
-                self._geopy_missing = True
-                return None
+            self._geolocator = Nominatim(user_agent=_GEOCODE_USER_AGENT)
         return self._geolocator
 
     def _resolve(self, location_text: str) -> tuple[float, float] | None:
@@ -420,9 +407,6 @@ class GeoFilter:
 
         # 3. Nominatim API call.
         geolocator = self._geolocator_instance()
-        if geolocator is None:
-            self._mem[location_text] = None
-            return None
 
         # Enforce 1 req/sec.
         elapsed = time.monotonic() - self._last_geocode_ts
@@ -480,11 +464,6 @@ class GeoFilter:
                 return f'geo_filter: location "{location}" could not be geocoded (fallback=discard)'
             return None
 
-        try:
-            from geopy.distance import geodesic
-        except ImportError:
-            return None
-
         distance_km = geodesic(self._center_coords, listing_coords).km
 
         if distance_km > self._radius_km:
@@ -537,11 +516,6 @@ def geo_filter(
     center_coords = geocache.get(center_str)
     if center_coords is None:
         return None  # Can't filter without center coords — skip silently.
-
-    try:
-        from geopy.distance import geodesic
-    except ImportError:
-        return None
 
     distance_km = geodesic(center_coords, listing_coords).km
     if distance_km > radius_km:

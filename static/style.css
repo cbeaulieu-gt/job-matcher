@@ -1790,3 +1790,28 @@ body {
 .env-status-bar__sep {
   color: var(--text-muted);
 }
+
+/* ── Import section (collapsible) ─────────────────────────────── */
+.import-section .import-body {
+  display: none;
+}
+.import-section.expanded .import-body {
+  display: block;
+}
+.import-section.expanded .import-chevron {
+  transform: rotate(90deg);
+}
+.import-chevron {
+  float: right;
+  transition: transform 0.2s ease;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+.import-mode-selector {
+  margin-bottom: 1rem;
+}
+.import-mode-selector label {
+  display: block;
+  margin-bottom: 0.25rem;
+  cursor: pointer;
+}

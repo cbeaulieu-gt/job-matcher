@@ -137,6 +137,66 @@ class TestNormaliseContractTime:
         """The CONTRACT_TIME_MAP covers all documented JSearch employment types."""
         assert set(_CONTRACT_TIME_MAP.keys()) == {"FULLTIME", "PARTTIME", "CONTRACTOR", "INTERN"}
 
+    # ------------------------------------------------------------------
+    # Hyphenated / spaced inputs (regression for #81)
+    # ------------------------------------------------------------------
+
+    def test_hyphenated_full_time_lowercase(self):
+        """'full-time' (JSearch API value) normalises to 'full_time'."""
+        assert _normalise_contract_time("full-time") == "full_time"
+
+    def test_hyphenated_full_time_titlecase(self):
+        """'Full-Time' normalises to 'full_time'."""
+        assert _normalise_contract_time("Full-Time") == "full_time"
+
+    def test_hyphenated_full_time_uppercase(self):
+        """'FULL-TIME' normalises to 'full_time'."""
+        assert _normalise_contract_time("FULL-TIME") == "full_time"
+
+    def test_hyphenated_part_time(self):
+        """'part-time' normalises to 'part_time'."""
+        assert _normalise_contract_time("part-time") == "part_time"
+
+    # ------------------------------------------------------------------
+    # Regression: pre-existing canonical inputs still work
+    # ------------------------------------------------------------------
+
+    def test_canonical_fulltime_regression(self):
+        """'FULLTIME' (no hyphen) still maps to 'full_time'."""
+        assert _normalise_contract_time("FULLTIME") == "full_time"
+
+    def test_canonical_parttime_regression(self):
+        """'PARTTIME' (no hyphen) still maps to 'part_time'."""
+        assert _normalise_contract_time("PARTTIME") == "part_time"
+
+    def test_unknown_value_fallback_unchanged(self):
+        """Unknown value 'temporary' is lowercased and passed through."""
+        assert _normalise_contract_time("temporary") == "temporary"
+
+    # ------------------------------------------------------------------
+    # Space-separated inputs (regression for #83 review feedback)
+    # ------------------------------------------------------------------
+
+    def test_space_separated_full_time_uppercase(self):
+        """'FULL TIME' (space instead of hyphen) normalises to 'full_time'."""
+        assert _normalise_contract_time("FULL TIME") == "full_time"
+
+    def test_space_separated_part_time_titlecase(self):
+        """'Part Time' (titlecase with space) normalises to 'part_time'."""
+        assert _normalise_contract_time("Part Time") == "part_time"
+
+    # ------------------------------------------------------------------
+    # Regression: map entries for CONTRACTOR and INTERN
+    # ------------------------------------------------------------------
+
+    def test_contractor_regression(self):
+        """'CONTRACTOR' maps to 'contract' via _CONTRACT_TIME_MAP."""
+        assert _normalise_contract_time("CONTRACTOR") == "contract"
+
+    def test_intern_regression(self):
+        """'INTERN' maps to 'intern' via _CONTRACT_TIME_MAP."""
+        assert _normalise_contract_time("INTERN") == "intern"
+
 
 # ---------------------------------------------------------------------------
 # _normalise_salary_period()

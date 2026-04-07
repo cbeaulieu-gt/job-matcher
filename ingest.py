@@ -757,7 +757,7 @@ def format_skills_for_prompt(profile: dict) -> dict:
     """
     profile = dict(profile)  # shallow copy — do not mutate caller's dict
     skills = profile.get("primary_skills", [])
-    if skills and isinstance(skills[0], dict):
+    if skills and all(isinstance(s, dict) for s in skills):
         formatted = []
         for s in skills:
             status = "active" if s.get("active", True) else "dormant"

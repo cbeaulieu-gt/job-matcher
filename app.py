@@ -1479,7 +1479,7 @@ def profile():
                     field_errors.append(
                         f"Primary skill '{desc}': years must be a whole number, got '{years_str}'"
                     )
-                    years = 0
+                    continue
                 if years < 0:
                     field_errors.append(
                         f"Primary skill '{desc}': years_active cannot be negative"

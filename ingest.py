@@ -75,12 +75,20 @@ def _configure_file_logging() -> None:
     ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_file = os.path.join(log_dir, f"ingest_{ts}.log")
 
-    handler = logging.FileHandler(log_file, encoding="utf-8")
-    handler.setFormatter(
-        logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
-    )
-    logging.getLogger().addHandler(handler)
-    logger.info("Logging to file: %s", log_file)
+    try:
+        handler = logging.FileHandler(log_file, encoding="utf-8")
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+        )
+        logging.getLogger().addHandler(handler)
+        logger.info("Logging to file: %s", log_file)
+    except (PermissionError, OSError) as exc:
+        logging.warning(
+            "File logging unavailable — cannot open %s (%s). Continuing with stdout-only logging.",
+            log_file,
+            exc,
+        )
+        return
 
     # Prune oldest files beyond the retention limit.
     existing = sorted(

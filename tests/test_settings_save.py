@@ -396,26 +396,25 @@ class TestSettingsPostWritesToProviders:
             saved = json.load(fh)
         assert saved["llm"]["anthropic"]["api_key"] == "sk-updated"
 
-    def test_blank_password_field_preserves_existing_credential(
+    def test_blank_api_key_preserved_by_no_js_guard(
         self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
     ):
-        """Submitting a blank api_key (password field) via POST must NOT wipe the stored value.
+        """Submitting a blank password field without a __clear__ flag must preserve
+        the stored value.
 
-        No-JS guard (issue #138): when a native form POST submits all inputs
-        including blank password fields for providers the user did not touch,
-        the server must treat empty password values as "no change" to prevent
-        accidental credential wipe.  Credentials can only be cleared via the
-        dedicated Clear button (issue #137).
+        This is the no-JS guard (issue #137): a native form submit with an empty
+        password field must not wipe an existing credential.  The explicit Clear
+        button (which adds a __clear__ hidden field) is the only way to clear a key.
         """
         _write_providers(tmp_providers_path)
         client.post("/settings", data={
-            "anthropic__api_key": "",   # blank password — must preserve existing
+            "anthropic__api_key": "",   # blank, but no __clear__ flag
             "anthropic__model": "claude-haiku-4-5-20251001",
             "tab": "llm",
         })
         with open(tmp_providers_path, encoding="utf-8") as fh:
             saved = json.load(fh)
-        # Blank password field must be ignored — the existing key must remain.
+        # No-JS guard: existing key must be preserved when password submitted empty
         assert saved["llm"]["anthropic"]["api_key"] == "sk-existing"
 
     def test_saves_job_source_credentials_to_providers_json(
@@ -647,7 +646,7 @@ class TestBuildLlmSchemasHasValues:
             (e for e in schemas if e[0] == "anthropic"), None
         )
         assert anthropic_entry is not None, "anthropic must appear in schemas"
-        _key, _schema, has_values, _current_values = anthropic_entry
+        _key, _schema, has_values, _current_values, _populated = anthropic_entry
         assert has_values is False, (
             "has_values must be False when model is empty, even if api_key is set"
         )
@@ -675,7 +674,7 @@ class TestBuildLlmSchemasHasValues:
             (e for e in schemas if e[0] == "anthropic"), None
         )
         assert anthropic_entry is not None
-        _key, _schema, has_values, _current_values = anthropic_entry
+        _key, _schema, has_values, _current_values, _populated = anthropic_entry
         assert has_values is True, (
             "has_values must be True when all required fields (api_key and model) are set"
         )
@@ -704,7 +703,7 @@ class TestBuildLlmSchemasHasValues:
             (e for e in schemas if e[0] == "anthropic"), None
         )
         assert anthropic_entry is not None
-        _key, _schema, _has_values, current_values = anthropic_entry
+        _key, _schema, _has_values, current_values, _populated = anthropic_entry
         # The model default from AnthropicProvider.settings_schema() is
         # "claude-haiku-4-5-20251001".  current_values must surface that default.
         assert current_values.get("model") == "claude-haiku-4-5-20251001", (
@@ -734,7 +733,7 @@ class TestBuildLlmSchemasHasValues:
             (e for e in schemas if e[0] == "anthropic"), None
         )
         assert anthropic_entry is not None
-        _key, _schema, _has_values, current_values = anthropic_entry
+        _key, _schema, _has_values, current_values, _populated = anthropic_entry
         assert "api_key" not in current_values, (
             "api_key (password field) must not appear in current_values"
         )
@@ -938,15 +937,14 @@ class TestSettingsPostDirtyTracking:
         assert saved["job_sources"]["jooble"]["enabled"] is True
         assert saved["job_sources"]["remotive"]["enabled"] is True
 
-    def test_empty_password_field_preserves_stored_value(
+    def test_explicitly_cleared_field_clears_stored_value_via_clear_flag(
         self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
     ):
-        """Submitting an empty password field must preserve the stored credential.
+        """When the Clear button is clicked, a __clear__ flag is posted alongside the empty
+        password.  The server must clear the stored value regardless of the no-JS guard.
 
-        No-JS guard (issue #138): password fields submitted as "" — whether by
-        a dirty JS client or by a no-JS full-form submit — must be treated as
-        "no change".  This prevents accidental credential wipe in both paths.
-        Credentials can only be explicitly cleared via the Clear button (#137).
+        The JS Clear button sets the password to '' and adds a hidden __clear__ field.
+        The server detects the flag and writes "" to storage.
         """
         data = {
             "provider_order": ["anthropic"],
@@ -958,17 +956,18 @@ class TestSettingsPostDirtyTracking:
         with open(tmp_providers_path, "w", encoding="utf-8") as fh:
             json.dump(data, fh)
 
-        # Empty password field — must be ignored (no-JS guard).
+        # The Clear button posts both the empty password and the __clear__ flag.
         client.post("/settings", data={
             "anthropic__api_key": "",
+            "__clear__anthropic__api_key": "1",
             "tab": "llm",
         })
         with open(tmp_providers_path, encoding="utf-8") as fh:
             saved = json.load(fh)
-        assert saved["llm"]["anthropic"]["api_key"] == "sk-to-keep", (
-            "Empty password field must be ignored — existing credential preserved"
+        assert saved["llm"]["anthropic"]["api_key"] == "", (
+            "__clear__ flag must clear the stored api_key to ''"
         )
-        # Model was not submitted — must remain unchanged.
+        # Model was not touched — must remain unchanged.
         assert saved["llm"]["anthropic"]["model"] == "claude-haiku-4-5-20251001"
 
     def test_empty_post_with_only_tab_changes_nothing(
@@ -1170,6 +1169,278 @@ class TestSettingsPostCheckboxDirtyTracking:
         assert saved["job_sources"]["adzuna"]["enabled"] is False
         assert saved["job_sources"]["adzuna"]["app_id"] == "existing-id"
         assert saved["job_sources"]["adzuna"]["app_key"] == "existing-key"
+
+
+# ===========================================================================
+# Clear button — __clear__ flag mechanism (issue #137)
+# ===========================================================================
+
+
+class TestBuildLlmSchemasPopulatedFields:
+    """_build_llm_schemas() must return a 5-tuple including populated_fields."""
+
+    def test_populated_fields_contains_password_field_when_stored(self):
+        """populated_fields must include a password field name when stored value is non-empty."""
+
+        data = {
+            "provider_order": ["anthropic"],
+            "llm": {
+                "anthropic": {"api_key": "sk-secret", "model": "claude-haiku-4-5-20251001"},
+            },
+            "job_sources": {},
+        }
+
+        from app import _build_llm_schemas
+
+        schemas = _build_llm_schemas(data["llm"], data["provider_order"])
+        anthropic_entry = next(e for e in schemas if e[0] == "anthropic")
+        # Unpack 5-tuple: (key, schema, has_values, current_values, populated_fields)
+        _key, _schema, _has_values, _current_values, populated_fields = anthropic_entry
+        assert "api_key" in populated_fields, (
+            "populated_fields must include 'api_key' when a non-empty api_key is stored"
+        )
+
+    def test_populated_fields_excludes_password_field_when_empty(self):
+        """populated_fields must NOT include a password field name when stored value is empty."""
+        from app import _build_llm_schemas
+
+        data_llm = {"anthropic": {"api_key": "", "model": "claude-haiku-4-5-20251001"}}
+        schemas = _build_llm_schemas(data_llm, ["anthropic"])
+        anthropic_entry = next(e for e in schemas if e[0] == "anthropic")
+        _key, _schema, _has_values, _current_values, populated_fields = anthropic_entry
+        assert "api_key" not in populated_fields, (
+            "populated_fields must NOT include 'api_key' when stored value is empty"
+        )
+
+    def test_populated_fields_excludes_password_field_when_absent(self):
+        """populated_fields must NOT include a password field name when not stored at all."""
+        from app import _build_llm_schemas
+
+        data_llm = {"anthropic": {"model": "claude-haiku-4-5-20251001"}}  # no api_key key
+        schemas = _build_llm_schemas(data_llm, ["anthropic"])
+        anthropic_entry = next(e for e in schemas if e[0] == "anthropic")
+        _key, _schema, _has_values, _current_values, populated_fields = anthropic_entry
+        assert "api_key" not in populated_fields, (
+            "populated_fields must NOT include 'api_key' when it is absent from stored config"
+        )
+
+    def test_populated_fields_includes_non_password_field_when_stored(self):
+        """populated_fields must include non-password fields too when they have a stored value."""
+        from app import _build_llm_schemas
+
+        data_llm = {"anthropic": {"api_key": "sk-x", "model": "claude-haiku-4-5-20251001"}}
+        schemas = _build_llm_schemas(data_llm, ["anthropic"])
+        anthropic_entry = next(e for e in schemas if e[0] == "anthropic")
+        _key, _schema, _has_values, _current_values, populated_fields = anthropic_entry
+        assert "model" in populated_fields, (
+            "populated_fields must include 'model' when a non-empty model is stored"
+        )
+
+    def test_build_llm_schemas_returns_five_tuple(self):
+        """Each entry returned by _build_llm_schemas must be a 5-tuple."""
+        from app import _build_llm_schemas
+
+        schemas = _build_llm_schemas({}, [])
+        for entry in schemas:
+            assert len(entry) == 5, (
+                f"_build_llm_schemas must return 5-tuples, got {len(entry)}-tuple for {entry[0]}"
+            )
+
+
+class TestSettingsClearFlagLlm:
+    """POST with __clear__ flag must explicitly clear a stored password field (issue #137).
+
+    The no-JS guard skips empty password strings so accidental no-JS form
+    submits cannot wipe keys.  The Clear button works around this by posting
+    a __clear__<provider_key>__<field_name>=1 hidden field alongside an empty
+    password value.  The server recognises this flag and sets the stored value
+    to "".
+    """
+
+    def test_clear_flag_removes_stored_llm_key(
+        self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
+    ):
+        """POST with __clear__anthropic__api_key=1 must clear the stored api_key to ''."""
+        _write_providers(tmp_providers_path)
+
+        client.post("/settings", data={
+            "tab": "llm",
+            "__clear__anthropic__api_key": "1",
+        })
+
+        with open(tmp_providers_path, encoding="utf-8") as fh:
+            saved = json.load(fh)
+        assert saved["llm"]["anthropic"]["api_key"] == "", (
+            "api_key must be cleared to '' when __clear__ flag is submitted"
+        )
+
+    def test_clear_flag_with_empty_password_clears_key(
+        self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
+    ):
+        """POST with empty password AND __clear__ flag must clear the key.
+
+        When the Clear button is clicked:
+        1. The password input is set to '' (empty)
+        2. A hidden __clear__ input is added with value '1'
+        Both fields are sent.  The clear flag must win over the no-JS guard.
+        """
+        _write_providers(tmp_providers_path)
+
+        client.post("/settings", data={
+            "tab": "llm",
+            "anthropic__api_key": "",        # empty password (no-JS guard would skip this)
+            "__clear__anthropic__api_key": "1",  # clear flag overrides the guard
+        })
+
+        with open(tmp_providers_path, encoding="utf-8") as fh:
+            saved = json.load(fh)
+        assert saved["llm"]["anthropic"]["api_key"] == "", (
+            "__clear__ flag must override no-JS guard and clear the key"
+        )
+
+    def test_no_clear_flag_preserves_key_when_password_empty(
+        self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
+    ):
+        """POST with empty password but NO __clear__ flag must preserve the stored key.
+
+        This is the no-JS guard: a form submit with an empty password field
+        (no JS, no Clear button) must not wipe an existing credential.
+        """
+        _write_providers(tmp_providers_path)
+
+        client.post("/settings", data={
+            "tab": "llm",
+            "anthropic__api_key": "",   # empty, but no __clear__ flag
+            "anthropic__model": "claude-haiku-4-5-20251001",
+        })
+
+        with open(tmp_providers_path, encoding="utf-8") as fh:
+            saved = json.load(fh)
+        assert saved["llm"]["anthropic"]["api_key"] == "sk-existing", (
+            "No-JS guard must preserve existing key when password submitted empty without __clear__ flag"
+        )
+
+    def test_clear_flag_does_not_affect_other_fields(
+        self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
+    ):
+        """Clearing one field must not touch other fields of the same provider."""
+        _write_providers(tmp_providers_path)
+
+        client.post("/settings", data={
+            "tab": "llm",
+            "__clear__anthropic__api_key": "1",
+        })
+
+        with open(tmp_providers_path, encoding="utf-8") as fh:
+            saved = json.load(fh)
+        assert saved["llm"]["anthropic"]["api_key"] == ""
+        # model was not touched
+        assert saved["llm"]["anthropic"]["model"] == "claude-haiku-4-5-20251001"
+
+    def test_clear_flag_for_unknown_field_is_silently_ignored(
+        self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
+    ):
+        """A __clear__ flag for a field not in the schema must not cause an error."""
+        _write_providers(tmp_providers_path)
+
+        resp = client.post("/settings", data={
+            "tab": "llm",
+            "__clear__anthropic__nonexistent_field": "1",
+        })
+
+        assert resp.status_code in (200, 302), (
+            "Unknown __clear__ field must not cause a 500 error"
+        )
+
+
+class TestSettingsClearFlagSources:
+    """Clear flag must also work on the job sources tab (issue #137)."""
+
+    def test_clear_flag_removes_stored_source_key(
+        self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
+    ):
+        """POST with __clear__adzuna__app_key=1 must clear the stored app_key."""
+        _write_providers(tmp_providers_path)
+
+        client.post("/settings", data={
+            "tab": "sources",
+            "adzuna__app_id": "existing-id",   # present so source is "touched"
+            "__clear__adzuna__app_key": "1",
+        })
+
+        with open(tmp_providers_path, encoding="utf-8") as fh:
+            saved = json.load(fh)
+        assert saved["job_sources"]["adzuna"]["app_key"] == "", (
+            "app_key must be cleared to '' when __clear__ flag is submitted on sources tab"
+        )
+
+    def test_no_clear_flag_preserves_source_key_when_password_empty(
+        self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
+    ):
+        """On sources tab, empty password without __clear__ must preserve existing value."""
+        _write_providers(tmp_providers_path)
+
+        client.post("/settings", data={
+            "tab": "sources",
+            "adzuna__app_id": "existing-id",
+            "adzuna__app_key": "",   # empty, no __clear__ flag
+        })
+
+        with open(tmp_providers_path, encoding="utf-8") as fh:
+            saved = json.load(fh)
+        assert saved["job_sources"]["adzuna"]["app_key"] == "existing-key", (
+            "No-JS guard must preserve source key when password submitted empty without __clear__ flag"
+        )
+
+
+class TestSettingsPopulatedFieldsInTemplate:
+    """populated_fields must reach the template and trigger Clear button rendering."""
+
+    def test_clear_button_rendered_for_configured_password_field(
+        self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
+    ):
+        """When a password field has a stored value, a Clear button must appear in the HTML."""
+        _write_providers(tmp_providers_path)
+        # anthropic has api_key="sk-existing" — Clear button must be rendered
+        resp = client.get("/settings")
+        body = resp.data.decode()
+        assert "btn-clear-key" in body, (
+            "Clear button (.btn-clear-key) must be rendered for a configured password field"
+        )
+
+    def test_clear_button_not_rendered_when_password_field_empty(
+        self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
+    ):
+        """When a password field is empty/unset, no Clear button must appear for that field."""
+        data = {
+            "provider_order": ["anthropic"],
+            "llm": {
+                "anthropic": {"api_key": "", "model": "claude-haiku-4-5-20251001"},
+            },
+            "job_sources": {},
+        }
+        with open(tmp_providers_path, "w", encoding="utf-8") as fh:
+            json.dump(data, fh)
+
+        resp = client.get("/settings")
+        body = resp.data.decode()
+        # api_key is empty — no Clear button for it
+        # (If other providers also have no keys, no btn-clear-key at all)
+        # Extract the anthropic block and verify no data-field-id for anthropic__api_key
+        assert 'data-field-id="anthropic__api_key"' not in body, (
+            "Clear button must NOT be rendered for an empty/unset password field"
+        )
+
+    def test_clear_button_has_correct_data_field_id(
+        self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
+    ):
+        """The Clear button must have data-field-id matching the input's id."""
+        _write_providers(tmp_providers_path)
+        resp = client.get("/settings")
+        body = resp.data.decode()
+        assert 'data-field-id="anthropic__api_key"' in body, (
+            "Clear button must have data-field-id='anthropic__api_key' for the anthropic api_key field"
+        )
 
 
 # ===========================================================================

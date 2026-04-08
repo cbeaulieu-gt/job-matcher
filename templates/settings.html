@@ -275,7 +275,7 @@
     <form class="settings-form" method="post" action="/settings">
       <input type="hidden" name="tab" value="llm">
 
-      {% for provider_key, schema, has_values, current_values in llm_schemas %}
+      {% for provider_key, schema, has_values, current_values, populated_fields in llm_schemas %}
         <div class="provider-row">
           <div class="provider-header">
             <span class="provider-name">{{ schema.display_name }}</span>
@@ -291,13 +291,23 @@
               {{ field.label }}
             </label>
             {% if field.type == "password" %}
-              <input
-                id="{{ provider_key }}__{{ field.name }}"
-                class="settings-input"
-                type="password"
-                name="{{ provider_key }}__{{ field.name }}"
-                autocomplete="off"
-                placeholder="Enter new value to update (leave blank to keep existing)">
+              {# data-field-id links the Clear button to its input — JS uses it to construct
+                 the __clear__ hidden field name for the server-side clear mechanism #}
+              <div class="password-field-wrapper">
+                <input
+                  id="{{ provider_key }}__{{ field.name }}"
+                  class="settings-input"
+                  type="password"
+                  name="{{ provider_key }}__{{ field.name }}"
+                  autocomplete="off"
+                  placeholder="Enter new value to update (leave blank to keep existing)">
+                {% if field.name in populated_fields %}
+                  <button type="button"
+                          class="btn-clear-key"
+                          data-field-id="{{ provider_key }}__{{ field.name }}"
+                          title="Clear this key">&#x2715;</button>
+                {% endif %}
+              </div>
             {% else %}
               <input
                 id="{{ provider_key }}__{{ field.name }}"
@@ -351,7 +361,7 @@
     <form class="settings-form" method="post" action="/settings">
       <input type="hidden" name="tab" value="sources">
 
-      {% for source_key, schema, has_values, is_enabled, credentials_required in source_schemas %}
+      {% for source_key, schema, has_values, is_enabled, credentials_required, populated_fields in source_schemas %}
         {% set toggle_disabled = credentials_required and not has_values %}
         <div class="provider-row">
           <div class="provider-header">
@@ -402,13 +412,21 @@
               {{ field.label }}
             </label>
             {% if field.type == "password" %}
-              <input
-                id="{{ source_key }}__{{ field.name }}"
-                class="settings-input"
-                type="password"
-                name="{{ source_key }}__{{ field.name }}"
-                autocomplete="off"
-                placeholder="Enter new value to update (leave blank to keep existing)">
+              <div class="password-field-wrapper">
+                <input
+                  id="{{ source_key }}__{{ field.name }}"
+                  class="settings-input"
+                  type="password"
+                  name="{{ source_key }}__{{ field.name }}"
+                  autocomplete="off"
+                  placeholder="Enter new value to update (leave blank to keep existing)">
+                {% if field.name in populated_fields %}
+                  <button type="button"
+                          class="btn-clear-key"
+                          data-field-id="{{ source_key }}__{{ field.name }}"
+                          title="Clear this key">&#x2715;</button>
+                {% endif %}
+              </div>
             {% else %}
               <input
                 id="{{ source_key }}__{{ field.name }}"
@@ -716,15 +734,60 @@
       bar.setAttribute('aria-hidden', 'true');
     }
 
-    // Named function so we can removeEventListener before re-adding.
-    // Called at init time and after every pane swap via reinit().
+    // Clear button handler — delegated on the form so it works after DOM
+    // replacement (sources tab refresh).  When clicked:
+    //   1. Empties the password input and adds a visual indicator class.
+    //   2. Inserts (or updates) a hidden __clear__ field so the server knows
+    //      to wipe the stored value rather than treat the blank as a no-op.
+    //   3. Marks the hidden field as dirty so the sparse submit includes it.
+    //   4. Hides the Clear button (it has been activated).
+    function onFormClick(e) {
+      if (!e.target.matches('.btn-clear-key')) { return; }
+      var fieldId = e.target.getAttribute('data-field-id');
+      var input = document.getElementById(fieldId);
+      if (!input) { return; }
+
+      // Empty the field and give visual feedback.
+      input.value = '';
+      input.placeholder = 'Key will be cleared on save';
+      input.classList.add('input--clearing');
+
+      // Insert (or reuse) a hidden __clear__ field so the server can
+      // distinguish an explicit clear from an accidental no-JS blank submit.
+      var clearName = '__clear__' + input.name;
+      var existing = form.elements[clearName];
+      if (!existing) {
+        var hidden = document.createElement('input');
+        hidden.type   = 'hidden';
+        hidden.name   = clearName;
+        hidden.value  = '1';
+        form.appendChild(hidden);
+      }
+
+      // Mark the hidden __clear__ field as dirty so submitDirty() sends it.
+      dirtyNames.add(clearName);
+
+      // Hide the activated button.
+      e.target.style.display = 'none';
+
+      updateBarVisibility();
+    }
+
+    // Attach dirty-tracking listeners to the form.  Extracted into a named
+    // function so we can re-bind after DOM replacement (sources tab refresh).
+    // Removes existing listeners before re-adding so that each re-bind is clean
+    // and no duplicate handlers accumulate on the new form element.
     function bindFormListeners() {
       form.removeEventListener('input',  onFormInput);
       form.removeEventListener('change', onFormChange);
       form.removeEventListener('submit', onFormSubmit);
+      form.removeEventListener('click',  onFormClick);
+
       form.addEventListener('input',  onFormInput);
       form.addEventListener('change', onFormChange);
       form.addEventListener('submit', onFormSubmit);
+      // Clear button clicks (delegated — works after DOM swap).
+      form.addEventListener('click',  onFormClick);
     }
     bindFormListeners();
 

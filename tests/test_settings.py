@@ -151,19 +151,18 @@ class TestSettingsPost:
             saved = json.load(f)
         assert saved["llm"]["anthropic"]["api_key"] == "sk-new-key"
 
-    def test_blank_password_field_preserves_existing_key(
+    def test_blank_key_field_preserved_by_no_js_guard(
         self, client, tmp_providers_path, tmp_keys_path
     ):
-        """Submitting a blank api_key (password field) must NOT wipe the stored credential.
+        """Submitting a blank api_key without a __clear__ flag must preserve the stored value.
 
-        No-JS guard (issue #138): empty password fields in a POST are ignored so
-        that a native form submit (no JS) cannot accidentally wipe stored keys.
-        The only way to clear a credential is via the explicit Clear button
-        (issue #137).
+        This is the no-JS guard (issue #137): native form submits (no JS) with an
+        empty password field must not wipe an existing credential.  The explicit
+        Clear button (which adds a __clear__ hidden field) is the only way to clear.
         """
         _write_providers(tmp_providers_path, anthropic_key="sk-existing")
 
-        # Submit with blank anthropic api_key — must preserve the existing value.
+        # Submit with blank anthropic api_key, no __clear__ flag — must preserve.
         client.post("/settings", data={
             "anthropic__api_key": "",
             "anthropic__model": "claude-haiku-4-5-20251001",
@@ -274,14 +273,14 @@ class TestSettingsAdzuna:
         assert saved["job_sources"]["adzuna"]["app_id"] == "new-app-id"
         assert saved["job_sources"]["adzuna"]["app_key"] == "new-app-key"
 
-    def test_post_blank_adzuna_password_fields_preserve_existing_values(
+    def test_post_blank_adzuna_fields_preserved_by_no_js_guard(
         self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
     ):
-        """Submitting blank Adzuna password fields must NOT wipe the stored credentials.
+        """Submitting blank Adzuna fields without __clear__ flags must preserve the stored values.
 
-        No-JS guard (issue #138): app_id and app_key are password-type fields.
-        Sending them blank (as a no-JS full-form submit would) must preserve the
-        stored values.  Only the explicit Clear button (issue #137) can clear them.
+        The no-JS guard (issue #137) prevents accidental credential wipes from
+        native form submits.  Blank password fields are skipped unless the
+        explicit __clear__ hidden field is also submitted.
         """
         _write_providers(
             tmp_providers_path, adzuna_app_id="existing-id", adzuna_app_key="existing-key"

@@ -518,11 +518,13 @@ class TestIssue284SaveProvidersBlankStringClears:
     def test_settings_post_blank_password_preserves_credential(
         self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
     ):
-        """POST /settings with a blank password field must preserve the existing credential.
+        """POST /settings with a blank password field must preserve the existing value.
 
-        The no-JS password guard (added in refactor/settings-sync) skips empty
-        password-type fields so that a native form POST cannot accidentally wipe
-        a stored API key.  Only an explicit Clear action should remove a credential.
+        The no-JS password guard (added in feat/clear-api-keys) skips empty password
+        fields to prevent a native form submit from wiping a stored key just because
+        the placeholder was left blank.  Blank now means 'do not change', not 'clear'.
+        To actually clear a password field the caller must also send the explicit
+        __clear__{provider}__{field} = '1' flag.
         """
         _write_providers(tmp_providers_path, data={
             "provider_order": ["anthropic"],
@@ -531,14 +533,42 @@ class TestIssue284SaveProvidersBlankStringClears:
         })
 
         client.post("/settings", data={
-            "anthropic__api_key": "",   # blank → preserved (no-JS guard)
+            "anthropic__api_key": "",   # blank — guard must preserve existing value
             "anthropic__model": "claude-haiku-4-5-20251001",
             "tab": "llm",
         })
 
         with open(tmp_providers_path, encoding="utf-8") as fh:
             saved = json.load(fh)
+        # Blank without the __clear__ flag must leave the stored key unchanged.
         assert saved["llm"]["anthropic"]["api_key"] == "sk-old"
+
+    def test_settings_post_clear_flag_clears_credential(
+        self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
+    ):
+        """POST /settings with a blank field AND the __clear__ flag must wipe the key.
+
+        The explicit __clear__{provider}__{field} = '1' flag is the intentional
+        signal that the user wants to erase the stored credential, bypassing the
+        no-JS guard that would otherwise skip blank password fields.
+        """
+        _write_providers(tmp_providers_path, data={
+            "provider_order": ["anthropic"],
+            "llm": {"anthropic": {"api_key": "sk-old", "model": "claude-haiku-4-5-20251001"}},
+            "job_sources": {},
+        })
+
+        client.post("/settings", data={
+            "anthropic__api_key": "",           # blank password field
+            "__clear__anthropic__api_key": "1", # explicit clear flag → must wipe
+            "anthropic__model": "claude-haiku-4-5-20251001",
+            "tab": "llm",
+        })
+
+        with open(tmp_providers_path, encoding="utf-8") as fh:
+            saved = json.load(fh)
+        # With the __clear__ flag the key must be wiped to an empty string.
+        assert saved["llm"]["anthropic"]["api_key"] == ""
 
     def test_boolean_false_still_persisted(self, tmp_path):
         """Boolean False values must still be written (they are not blank strings)."""

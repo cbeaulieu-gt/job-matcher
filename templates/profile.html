@@ -236,9 +236,18 @@
         </div>
 
         <label class="settings-label">PDF File</label>
-        <input type="file" accept=".pdf" id="import-pdf-file" class="settings-input">
+        <div class="file-input-wrap">
+          <input
+            type="file"
+            accept=".pdf"
+            id="import-pdf-file"
+            class="file-input-hidden"
+            aria-label="Choose PDF file">
+          <label for="import-pdf-file" class="file-input-label">Choose File</label>
+          <span class="file-input-name" id="import-pdf-name">No file chosen</span>
+        </div>
 
-        <button type="button" id="import-pdf-btn" class="btn" disabled>
+        <button type="button" id="import-pdf-btn" class="btn btn-import" disabled>
           Import
         </button>
 
@@ -662,9 +671,14 @@
   var fileInput = document.getElementById('import-pdf-file');
   var importBtn = document.getElementById('import-pdf-btn');
   var statusDiv = document.getElementById('import-status');
+  var fileNameSpan = document.getElementById('import-pdf-name');
 
   fileInput.addEventListener('change', function () {
-    importBtn.disabled = !fileInput.files.length;
+    var hasFile = fileInput.files.length > 0;
+    importBtn.disabled = !hasFile;
+    if (fileNameSpan) {
+      fileNameSpan.textContent = hasFile ? fileInput.files[0].name : 'No file chosen';
+    }
   });
 
   importBtn.addEventListener('click', function () {

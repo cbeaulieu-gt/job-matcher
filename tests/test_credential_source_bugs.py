@@ -515,10 +515,15 @@ class TestIssue284SaveProvidersBlankStringClears:
         assert saved["llm"]["openai"]["api_key"] == "sk-openai"
         assert saved["llm"]["anthropic"]["api_key"] == "sk-ant"
 
-    def test_settings_post_blank_field_clears_credential(
+    def test_settings_post_blank_password_preserves_credential(
         self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
     ):
-        """POST /settings with a blank credential field must clear it in providers.json."""
+        """POST /settings with a blank password field must preserve the existing credential.
+
+        The no-JS password guard (added in refactor/settings-sync) skips empty
+        password-type fields so that a native form POST cannot accidentally wipe
+        a stored API key.  Only an explicit Clear action should remove a credential.
+        """
         _write_providers(tmp_providers_path, data={
             "provider_order": ["anthropic"],
             "llm": {"anthropic": {"api_key": "sk-old", "model": "claude-haiku-4-5-20251001"}},
@@ -526,14 +531,14 @@ class TestIssue284SaveProvidersBlankStringClears:
         })
 
         client.post("/settings", data={
-            "anthropic__api_key": "",   # blank → clear
+            "anthropic__api_key": "",   # blank → preserved (no-JS guard)
             "anthropic__model": "claude-haiku-4-5-20251001",
             "tab": "llm",
         })
 
         with open(tmp_providers_path, encoding="utf-8") as fh:
             saved = json.load(fh)
-        assert saved["llm"]["anthropic"]["api_key"] == ""
+        assert saved["llm"]["anthropic"]["api_key"] == "sk-old"
 
     def test_boolean_false_still_persisted(self, tmp_path):
         """Boolean False values must still be written (they are not blank strings)."""

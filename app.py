@@ -977,6 +977,14 @@ def settings():
                         # Field not present in form at all — skip to preserve
                         # any existing stored value.
                         continue
+                    # No-JS guard (issue #138): a native form POST submits all
+                    # inputs including blank password fields for providers the
+                    # user never touched.  Treat empty password fields as "no
+                    # change" so that a no-JS save of the LLM tab does not wipe
+                    # credentials.  The only way to clear a key is via the
+                    # explicit Clear button (issue #137).
+                    if field.get("type") == "password" and raw.strip() == "":
+                        continue
                     provider_updates[field_name] = raw.strip()
                 if provider_updates:
                     updates["llm"][provider_key] = provider_updates
@@ -1017,6 +1025,11 @@ def settings():
                     form_key = f"{source_key}__{field_name}"
                     raw = request.form.get(form_key)
                     if raw is None:
+                        continue
+                    # No-JS guard (issue #138): same as the LLM tab — skip
+                    # empty password fields so a full no-JS form submit does
+                    # not wipe stored source credentials.
+                    if field.get("type") == "password" and raw.strip() == "":
                         continue
                     source_updates[field_name] = raw.strip()
 

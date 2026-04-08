@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import os
 import sys
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -27,20 +27,6 @@ from app import app as flask_app
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-_DEFAULT_THRESHOLD = 7.0
-
-_FEED_DB_CALLS = [
-    "db.get_feed",
-    "db.get_job_types",
-    "db.get_last_fetch_time",
-]
-
-_SNIPPETS_DB_CALLS = [
-    "db.get_snippet_feed",
-    "db.get_job_types",
-]
-
 
 def _make_client():
     flask_app.config["TESTING"] = True
@@ -178,7 +164,6 @@ class TestFilterBarScoreOptions:
     def test_any_option_selected_when_min_score_zero(self):
         """When min_score=0, the value='0' option has the selected attribute."""
         body = self._get_feed_body("?min_score=0")
-        assert 'value="0"' in body
         assert 'value="0" selected' in body or 'value="0"  selected' in body
 
     def test_numeric_option_selected_when_min_score_five(self):

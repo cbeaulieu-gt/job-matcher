@@ -292,7 +292,6 @@ def test_ensure_plugins_registered_survives_unwritable_config_dir(tmp_path, monk
     ``PermissionError: [Errno 13] Permission denied: '/app/config/providers.json.lock'``
     on Docker containers where /app/config/ was a read-only image layer.
     """
-    import job_sources.auto_register as _ar
 
     providers_path = str(tmp_path / "providers.json")
     _write_providers(providers_path, {"job_sources": {}})

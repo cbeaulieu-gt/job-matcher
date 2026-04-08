@@ -159,7 +159,19 @@ def ensure_plugins_registered(providers_path: str) -> None:
             # Pass only the newly-added entries so save_providers deep-merges them
             # without touching any existing keys in providers.json.
             updates = {"job_sources": {key: job_sources_cfg[key] for key in added}}
-            save_providers(updates, providers_path)
-            logger.info("Auto-registered job sources: %s", added)
+            try:
+                save_providers(updates, providers_path)
+            except (PermissionError, OSError) as exc:
+                # Config directory may be read-only (e.g. Docker image layer
+                # without a mounted config volume).  Registration still took
+                # effect in memory for this process — it just won't persist
+                # to disk until the next run with a writable config dir.
+                logger.warning(
+                    "Could not persist auto-registered sources to %s: %s",
+                    providers_path,
+                    exc,
+                )
+            else:
+                logger.info("Auto-registered job sources: %s", added)
     finally:
         _release_lock(lock_fh)

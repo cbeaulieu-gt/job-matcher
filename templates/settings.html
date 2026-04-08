@@ -889,7 +889,8 @@
       // Re-attach the save button click listener — the old .btn-save was
       // destroyed with the DOM swap, so the listener registered at setup time
       // is gone and must be re-added to the freshly rendered button (#147).
-      bar.querySelector('.btn-save').addEventListener('click', submitDirty);
+      var saveBtn = bar.querySelector('.btn-save');
+      if (saveBtn) { saveBtn.addEventListener('click', submitDirty); }
       bar.classList.remove('save-bar--visible');
       bar.setAttribute('aria-hidden', 'true');
     };

@@ -878,10 +878,19 @@
       var newForm = document.getElementById(paneId).querySelector('form');
       if (!newForm) { return; }
       form = newForm;
+      // Re-acquire bar from the live DOM — pane.innerHTML replacement destroys
+      // the old element, so the outer-closure reference is now detached (#147).
+      bar = document.getElementById(barId);
+      if (!bar) { return; }
       snapshotOriginalValues();
       dirtyNames.clear();
       hideNativeSubmit();
       bindFormListeners();
+      // Re-attach the save button click listener — the old .btn-save was
+      // destroyed with the DOM swap, so the listener registered at setup time
+      // is gone and must be re-added to the freshly rendered button (#147).
+      var saveBtn = bar.querySelector('.btn-save');
+      if (saveBtn) { saveBtn.addEventListener('click', submitDirty); }
       bar.classList.remove('save-bar--visible');
       bar.setAttribute('aria-hidden', 'true');
     };

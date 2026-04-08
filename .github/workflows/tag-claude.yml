@@ -8,11 +8,12 @@ on:
 
 jobs:
   respond:
-    uses: cbeaulieu-gt/github-actions/.github/workflows/claude-tag-respond.yml@v1.8.0
+    uses: cbeaulieu-gt/github-actions/.github/workflows/claude-tag-respond.yml@v2
     permissions:
       contents: write
       issues: write
       pull-requests: write
-      id-token: write
     secrets:
       claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      app_id: ${{ secrets.APP_ID }}
+      app_private_key: ${{ secrets.APP_PRIVATE_KEY }}

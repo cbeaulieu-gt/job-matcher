@@ -299,6 +299,9 @@ All buttons extend `.btn` (base). Add a modifier class for semantic variants.
 | `.btn-save` | Inherits `.btn` | Settings form save; `align-self: flex-start` |
 | `.btn-ingest` | `--text-accent` | Trigger ingest run |
 | `.btn-validate` | Inherits `.btn` | API key validation trigger |
+| `.btn-import` | `--text-accent` | Profile page PDF import trigger; amber accent identical to `.btn-ingest`; `disabled` state via opacity 0.4 |
+| `.btn-danger` | `--score-low-text` / `--score-low-border` | Destructive action trigger; `--bg-raised` bg at rest, `--score-low-bg` on hover |
+| `.btn-danger-confirm` | `--score-low-text` text + border, `--score-low-bg` bg | Final confirmation submit; starts `disabled`; inverts (red bg, dark text) on hover |
 
 ### Forms & Settings
 
@@ -313,12 +316,73 @@ All buttons extend `.btn` (base). Add a modifier class for semantic variants.
 | `.settings-input` | `<input>`, `<textarea>` | `--font-mono` 0.76rem; `--bg-raised` bg; width 100% |
 | `.filter-input` | `<input type="text">` | Filter bar text input; width 220px |
 | `.filter-select` | `<select>` | Filter bar dropdown; custom SVG arrow |
-| `.filter-toggle` | `<label>` | Checkbox label wrapper in filter bar |
+| `.filter-toggle` | `<label>` | Checkbox label wrapper in filter bar; see custom checkbox rules below |
+
+**`.filter-toggle input[type="checkbox"]` — custom checkbox** (appearance: none; fully themed):
+
+| State | Border | Background | Indicator |
+|---|---|---|---|
+| Rest | `--border-strong` | `--bg-raised` | — |
+| Checked | `--text-accent` | `--bg-raised` | `::after` pseudo-element: amber (`--text-accent`) rotated L-shape checkmark |
+| Focus-visible | `--text-accent` 2px outline (offset 2px) | — | — |
+
+Transitions on `border-color` and `background` at 120ms ease. Size is 14×14px; `border-radius: 2px`. Never use `accent-color` alone — it leaves the native browser chrome visible against the dark theme.
 | `.provider-home-link` | `<a>` | External link icon (↗) placed next to provider names on the Settings → Job Sources tab; `font-size: 0.8rem`, `var(--text-muted)` at rest, `var(--text-accent)` on hover, `transition: color 0.15s` |
 | `.source-description` | `<p>` | Short blurb below `.provider-header` on each source card; `--font-body` 0.82rem, `--text-muted`, `line-height: 1.5`; rendered only when `schema.description` is set |
 | `.save-bar` | `<div>` | Sticky unsaved-changes bar; see §5 Save Bar below |
 | `.save-bar--visible` | modifier on `.save-bar` | Added by JS when a text/password field is dirty; animates in via `max-height` + `opacity`; removed when all fields are restored to original values |
 | `.save-bar-label` | `<span>` | "Unsaved changes" text; `--font-mono` 0.8rem, `--score-mid-text` (amber — warning semantics) |
+| `.file-input-wrap` | `<div>` | Flex row wrapper around the hidden file input + styled label + filename display |
+| `.file-input-hidden` | `<input type="file">` | Visually hidden native file input; accessible via `aria-label`; positioned absolutely off-screen |
+| `.file-input-label` | `<label for="...">` | Styled trigger that acts as the visible "Choose File" button; inherits `.btn` visual language |
+| `.file-input-name` | `<span>` | Filename display beside the label; shows "No file chosen" by default, updated via JS on `change` |
+
+#### Settings page — tab bar
+
+A bottom-border underline tab bar rendered inside the Settings page body (not the site header).
+
+| Class | Element | Notes |
+|---|---|---|
+| `.settings-tabs` | `<div role="tablist">` | Flex row, `border-bottom: 1px solid var(--border-mid)`, `margin-bottom: 1.5rem` |
+| `.settings-tab-btn` | `<button>` | `--font-mono` 0.76rem uppercase; `--text-secondary` at rest; `--text-accent` + amber underline when `.active`; `border-bottom: 2px solid transparent` at rest |
+| `.tab-pane` | `<div role="tabpanel">` | Hidden by default (`display: none`); shown when `.active` is added by the tab-switch JS |
+
+#### Settings page — Danger Zone
+
+Destructive action panel with a confirmation gate. All elements use `--score-low-*` (red) tokens.
+
+| Class | Element | Notes |
+|---|---|---|
+| `.danger-zone` | `<div>` | `margin-top: 2.5rem`, `border-top: 1px solid var(--border-subtle)`, `padding-top: 1.5rem` |
+| `.danger-zone-heading` | `<h2>` | `--font-mono` 0.72rem uppercase, `--score-low-text`; `font-weight: normal` |
+| `.btn-danger` | `<button>` | See Buttons table above |
+| `.clear-db-panel` | `<div>` | Hidden (`display: none`) at rest; add `.visible` class via JS to reveal; red-tier bg/border |
+| `.clear-db-warnings` | `<ul>` | Unstyled list of consequences; `⚠` prefix via `::before` |
+| `.clear-db-count` | `<p>` | Current record count line; `--font-mono` 0.76rem, `--score-low-text` |
+| `.clear-db-form` | `<form>` | Flex column, `gap: 0.5rem`, `max-width: 380px` |
+| `.clear-db-label` | `<label>` | `--font-mono` 0.68rem uppercase, `--score-low-text` |
+| `.clear-db-input` | `<input type="text">` | Typed confirmation field; `--bg-raised` bg, `--score-low-border` border |
+| `.btn-danger-confirm` | `<button type="submit">` | See Buttons table above; starts `disabled` until confirmation text matches |
+| `.clear-db-cancel` | `<button type="button">` | Text-only cancel; `--text-muted` at rest, `--text-secondary` on hover; no background or border |
+
+#### Profile page — radio buttons (import mode)
+
+Custom-styled radio buttons inside `.import-mode-selector`. The native `<input type="radio">` element is styled directly via `appearance: none` — no extra markup needed.
+
+| Selector | Notes |
+|---|---|
+| `.import-mode-selector label` | Flex row, `align-items: center`, `gap: 8px`; `--font-mono` 0.76rem, `--text-secondary`; turns `--text-accent` when sibling radio is checked (`:has(input:checked)`) |
+| `.import-mode-selector input[type="radio"]` | 14×14px circle; `--bg-raised` bg, `--border-strong` border; `appearance: none` removes native chrome |
+| checked state | `border-color: var(--text-accent)`; inner dot via `box-shadow: inset 0 0 0 3px var(--text-accent)` |
+
+#### Number inputs — spinner suppression
+
+All `input[type="number"]` elements globally have browser-default spinner arrows removed via:
+- `appearance: textfield` / `-webkit-appearance: textfield` — Chrome/Safari
+- `::-webkit-inner-spin-button`, `::-webkit-outer-spin-button { -webkit-appearance: none }` — WebKit override
+- `-moz-appearance: textfield` — Firefox
+
+This applies to skill years, `location_radius_km`, search distance/salary/max-days/threshold (profile.html), and results-per-page/max-pages (settings.html).
 
 #### Profile form — repeating row inputs
 

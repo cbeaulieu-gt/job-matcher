@@ -850,13 +850,13 @@ def ingest_status():
 def _build_llm_schemas(
     llm_section: dict,
     provider_order: list[str],
-) -> list[tuple[str, dict, bool, dict]]:
+) -> list[tuple[str, dict, bool, dict, set]]:
     """Build the ordered llm_schemas list for the settings template.
 
-    Returns a list of ``(provider_key, schema_dict, has_values, current_values)``
-    tuples.  Providers in *provider_order* come first (unknown/duplicate keys
-    skipped), followed by any registry providers not listed, in registry
-    insertion order.
+    Returns a list of ``(provider_key, schema_dict, has_values, current_values,
+    populated_fields)`` tuples.  Providers in *provider_order* come first
+    (unknown/duplicate keys skipped), followed by any registry providers not
+    listed, in registry insertion order.
 
     ``has_values`` is ``True`` only when every required field in the schema has
     a non-blank stored value.  Checking all required fields (not just
@@ -869,14 +869,19 @@ def _build_llm_schemas(
     the placeholder default is actually submitted when the user saves without
     explicitly editing the field.
 
+    ``populated_fields`` is a set of field names that have a non-empty stored
+    value.  The template uses this to conditionally render the Clear button
+    next to password fields — the button only appears when there is actually
+    something stored to clear.
+
     Args:
         llm_section:    The ``"llm"`` sub-dict from ``providers.json``.
         provider_order: The ``provider_order`` list from ``providers.json``.
     """
     seen: set[str] = set()
-    schemas: list[tuple[str, dict, bool, dict]] = []
+    schemas: list[tuple[str, dict, bool, dict, set]] = []
 
-    def _make_entry(key: str) -> tuple[str, dict, bool, dict]:
+    def _make_entry(key: str) -> tuple[str, dict, bool, dict, set]:
         cls = _PROVIDER_CLASS_MAP[key]
         schema = cls.settings_schema()
         cfg = llm_section.get(key) or {}
@@ -890,7 +895,11 @@ def _build_llm_schemas(
             for f in schema["fields"]
             if f.get("type") != "password"
         }
-        return (key, schema, has_values, current_values)
+        populated_fields = {
+            f["name"] for f in schema["fields"]
+            if bool(cfg.get(f["name"], "").strip())
+        }
+        return (key, schema, has_values, current_values, populated_fields)
 
     for key in provider_order:
         if key in _PROVIDER_CLASS_MAP and key not in seen:
@@ -977,7 +986,25 @@ def settings():
                         # Field not present in form at all — skip to preserve
                         # any existing stored value.
                         continue
-                    provider_updates[field_name] = raw.strip()
+                    stripped = raw.strip()
+                    # No-JS guard: skip empty password fields unless the
+                    # explicit __clear__ flag is present.  This prevents a
+                    # native (no-JS) form submit from wiping an existing key
+                    # just because the password placeholder was left blank.
+                    if field.get("type") == "password" and stripped == "":
+                        clear_key = f"__clear__{provider_key}__{field_name}"
+                        if request.form.get(clear_key) != "1":
+                            continue
+                    provider_updates[field_name] = stripped
+                # After processing normal fields, check for explicit __clear__
+                # flags on password fields.  The flag writes "" regardless of
+                # whether the password form field was also submitted.
+                for field in schema["fields"]:
+                    if field.get("type") != "password":
+                        continue
+                    clear_key = f"__clear__{provider_key}__{field['name']}"
+                    if request.form.get(clear_key) == "1":
+                        provider_updates[field["name"]] = ""
                 if provider_updates:
                     updates["llm"][provider_key] = provider_updates
 
@@ -1018,7 +1045,21 @@ def settings():
                     raw = request.form.get(form_key)
                     if raw is None:
                         continue
-                    source_updates[field_name] = raw.strip()
+                    stripped = raw.strip()
+                    # No-JS guard: skip empty password fields unless the
+                    # explicit __clear__ flag is present.
+                    if field.get("type") == "password" and stripped == "":
+                        clear_key = f"__clear__{source_key}__{field_name}"
+                        if request.form.get(clear_key) != "1":
+                            continue
+                    source_updates[field_name] = stripped
+                # Explicit __clear__ flags for password fields.
+                for field in schema_fields:
+                    if field.get("type") != "password":
+                        continue
+                    clear_key = f"__clear__{source_key}__{field['name']}"
+                    if request.form.get(clear_key) == "1":
+                        source_updates[field["name"]] = ""
 
                 updates["job_sources"][source_key] = source_updates
 
@@ -1064,7 +1105,7 @@ def settings():
     provider_order: list[str] = providers_data.get("provider_order") or []
     llm_schemas = _build_llm_schemas(llm_section, provider_order)
 
-    source_schemas: list[tuple[str, dict, bool, bool, bool]] = []
+    source_schemas: list[tuple[str, dict, bool, bool, bool, set]] = []
     for key, cls in get_sources().items():
         schema = cls.settings_schema()
         cfg = sources_section.get(key) or {}
@@ -1075,7 +1116,11 @@ def settings():
             has_values = False  # no-credential sources are never "configured"
         is_enabled = bool(cfg.get("enabled", False))
         credentials_required = bool(required_fields)
-        source_schemas.append((key, schema, has_values, is_enabled, credentials_required))
+        populated_fields = {
+            f["name"] for f in schema["fields"]
+            if bool(cfg.get(f["name"], "").strip())
+        }
+        source_schemas.append((key, schema, has_values, is_enabled, credentials_required, populated_fields))
 
     # POST-with-error: re-render the form (not a redirect) so the error is shown.
     saved = False  # POST always redirects on success; reaching here means error or GET

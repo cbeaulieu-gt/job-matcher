@@ -302,6 +302,7 @@ All buttons extend `.btn` (base). Add a modifier class for semantic variants.
 | `.btn-import` | `--text-accent` | Profile page PDF import trigger; amber accent identical to `.btn-ingest`; `disabled` state via opacity 0.4 |
 | `.btn-danger` | `--score-low-text` / `--score-low-border` | Destructive action trigger; `--bg-raised` bg at rest, `--score-low-bg` on hover |
 | `.btn-danger-confirm` | `--score-low-text` text + border, `--score-low-bg` bg | Final confirmation submit; starts `disabled`; inverts (red bg, dark text) on hover |
+| `.btn-clear-key` | `--text-muted` / `--border-subtle` → `--score-low-text` / `--score-low-border` on hover | Inline button next to configured password fields; signals "clear this key"; `--font-mono` 0.72rem; `padding: 4px 8px`; `flex-shrink: 0`; `border-radius: var(--radius-md)` |
 
 ### Forms & Settings
 
@@ -314,6 +315,7 @@ All buttons extend `.btn` (base). Add a modifier class for semantic variants.
 | `.settings-label` | `<label>` | `--font-mono` 0.68rem uppercase 0.08em, `--text-muted` |
 | `.settings-label--mt` | modifier on `.settings-label` | Adds `margin-top: 1rem`; use when a label follows a `.row-list` without a natural gap |
 | `.settings-input` | `<input>`, `<textarea>` | `--font-mono` 0.76rem; `--bg-raised` bg; width 100% |
+| `.input--clearing` | modifier on `.settings-input` | Added by JS when the Clear button is clicked; `border-color: var(--score-low-border)` — signals the field will be cleared on save |
 | `.filter-input` | `<input type="text">` | Filter bar text input; width 220px |
 | `.filter-select` | `<select>` | Filter bar dropdown; custom SVG arrow |
 | `.filter-toggle` | `<label>` | Checkbox label wrapper in filter bar; see custom checkbox rules below |

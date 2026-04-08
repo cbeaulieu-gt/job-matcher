@@ -1706,6 +1706,39 @@ body {
   outline-offset: 2px;
 }
 
+/* Clear key button — muted at rest, red tier on hover.  Appears inline next
+   to configured password fields so the user can explicitly remove a stored
+   credential.  Follows the same visual pattern as .btn-row-remove. */
+.btn-clear-key {
+  background: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  padding: 4px 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 0.15s, border-color 0.15s;
+  line-height: 1;
+}
+
+.btn-clear-key:hover {
+  color: var(--score-low-text);
+  border-color: var(--score-low-border);
+}
+
+.btn-clear-key:focus-visible {
+  outline: 2px solid var(--text-accent);
+  outline-offset: 2px;
+}
+
+/* Applied to a password input after the Clear button is clicked — red border
+   signals that the field will be cleared on the next save. */
+.input--clearing {
+  border-color: var(--score-low-border);
+}
+
 /* Add row button — dashed border, accent on hover. */
 .btn-row-add {
   background: none;

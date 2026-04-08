@@ -260,7 +260,7 @@ class TestProfileGet:
     def test_renders_education_entries(
         self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
     ):
-        """GET /profile must pre-populate education[] inputs from profile.json."""
+        """GET /profile must pre-populate education table rows from structured objects."""
         _write_config(tmp_config_path)
         _write_profile(tmp_profile_path, {
             **{
@@ -271,11 +271,31 @@ class TestProfileGet:
                 "location": {"geocode_fallback": "pass"},
                 "scoring_notes": [],
             },
-            "education": ["B.S. CS, MIT, 2010"],
+            "education": [
+                {
+                    "degree_type": "B.S.",
+                    "degree_field": "Computer Science",
+                    "school": "MIT",
+                    "graduation_year": "2010",
+                }
+            ],
         })
         body = client.get("/profile").data.decode()
-        assert 'value="B.S. CS, MIT, 2010"' in body
-        assert 'name="education[]"' in body
+        # Table structure must be present.
+        assert "edu-table" in body
+        # Degree type select or input must contain the type value.
+        assert "B.S." in body
+        # Field of study input must appear.
+        assert 'value="Computer Science"' in body
+        # School input must appear.
+        assert 'value="MIT"' in body
+        # Year input must appear.
+        assert 'value="2010"' in body
+        # Structured field names must be used (not the old education[]).
+        assert 'name="edu_type[]"' in body
+        assert 'name="edu_field[]"' in body
+        assert 'name="edu_school[]"' in body
+        assert 'name="edu_year[]"' in body
 
     def test_renders_when_profile_absent(
         self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
@@ -337,15 +357,52 @@ class TestProfilePost:
     def test_writes_education(
         self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
     ):
-        """POST with multiple education[] values must persist all entries to profile.json."""
+        """POST with structured edu_* fields must persist structured objects to profile.json."""
         _write_config(tmp_config_path)
         self._post(
             client,
-            **{"education[]": ["B.S. CS, MIT, 2010", "M.S. SE, Stanford, 2012"]},
+            **{
+                "edu_type[]": ["B.S.", "M.S."],
+                "edu_field[]": ["Computer Science", "Software Engineering"],
+                "edu_school[]": ["MIT", "Stanford"],
+                "edu_year[]": ["2010", "2012"],
+            },
         )
         with open(tmp_profile_path, encoding="utf-8") as f:
             prof = json.load(f)
-        assert prof["education"] == ["B.S. CS, MIT, 2010", "M.S. SE, Stanford, 2012"]
+        assert prof["education"] == [
+            {
+                "degree_type": "B.S.",
+                "degree_field": "Computer Science",
+                "school": "MIT",
+                "graduation_year": "2010",
+            },
+            {
+                "degree_type": "M.S.",
+                "degree_field": "Software Engineering",
+                "school": "Stanford",
+                "graduation_year": "2012",
+            },
+        ]
+
+    def test_writes_education_skips_empty_rows(
+        self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
+    ):
+        """POST with empty education rows must discard rows where all four fields are empty."""
+        _write_config(tmp_config_path)
+        self._post(
+            client,
+            **{
+                "edu_type[]": ["B.S.", ""],
+                "edu_field[]": ["Computer Science", ""],
+                "edu_school[]": ["MIT", ""],
+                "edu_year[]": ["2010", ""],
+            },
+        )
+        with open(tmp_profile_path, encoding="utf-8") as f:
+            prof = json.load(f)
+        assert len(prof["education"]) == 1
+        assert prof["education"][0]["school"] == "MIT"
 
     def test_writes_seniority(
         self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path

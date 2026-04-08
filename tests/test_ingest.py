@@ -15,7 +15,7 @@ from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from ingest import prefilter, score_listing_with_fallback, format_skills_for_prompt
+from ingest import prefilter, score_listing_with_fallback, format_skills_for_prompt, format_education_for_prompt
 from app import salary_fmt, timeago
 from providers.anthropic_provider import strip_fences
 
@@ -462,3 +462,99 @@ class TestFormatSkillsForPrompt:
         result = format_skills_for_prompt(profile)
         assert result["seniority"] == "Senior"
         assert result["anti_preferences"] == ["no QA"]
+
+
+# ---------------------------------------------------------------------------
+# format_education_for_prompt tests (issue #135)
+# ---------------------------------------------------------------------------
+
+
+class TestFormatEducationForPrompt:
+    """Tests for format_education_for_prompt() in ingest.py (issue #135)."""
+
+    def test_structured_objects_converted_to_strings(self):
+        """Structured education dicts are rendered as readable strings."""
+        profile = {
+            "education": [
+                {
+                    "degree_type": "B.S.",
+                    "degree_field": "Computer Science",
+                    "school": "State University",
+                    "graduation_year": "2012",
+                },
+                {
+                    "degree_type": "M.S.",
+                    "degree_field": "Software Engineering",
+                    "school": "Tech University",
+                    "graduation_year": "2014",
+                },
+            ]
+        }
+        result = format_education_for_prompt(profile)
+        assert result["education"] == [
+            "B.S. in Computer Science — State University (2012)",
+            "M.S. in Software Engineering — Tech University (2014)",
+        ]
+
+    def test_string_array_passes_through_unchanged(self):
+        """If education is already flat strings (old/legacy format), pass through unchanged."""
+        profile = {
+            "education": [
+                "B.S. Computer Science, MIT, 2015",
+                "M.S. SE, Stanford, 2017",
+            ]
+        }
+        result = format_education_for_prompt(profile)
+        assert result["education"] == [
+            "B.S. Computer Science, MIT, 2015",
+            "M.S. SE, Stanford, 2017",
+        ]
+
+    def test_empty_education_list_unchanged(self):
+        """An empty education list passes through unchanged."""
+        profile = {"education": []}
+        result = format_education_for_prompt(profile)
+        assert result["education"] == []
+
+    def test_missing_education_key_unchanged(self):
+        """Profile without an 'education' key passes through without error."""
+        profile = {"seniority": "Senior"}
+        result = format_education_for_prompt(profile)
+        assert "education" not in result
+        assert result["seniority"] == "Senior"
+
+    def test_original_profile_not_mutated(self):
+        """format_education_for_prompt must not mutate the caller's profile dict."""
+        original_edu = [
+            {"degree_type": "B.S.", "degree_field": "CS", "school": "MIT", "graduation_year": "2015"}
+        ]
+        profile = {"education": original_edu}
+        format_education_for_prompt(profile)
+        # Original list must still contain a dict, not a string.
+        assert isinstance(profile["education"][0], dict)
+
+    def test_other_profile_fields_preserved(self):
+        """Fields other than education must pass through unchanged."""
+        profile = {
+            "education": [
+                {"degree_type": "Ph.D.", "degree_field": "AI", "school": "CMU", "graduation_year": "2018"}
+            ],
+            "seniority": "Staff",
+            "primary_skills": ["Python"],
+        }
+        result = format_education_for_prompt(profile)
+        assert result["seniority"] == "Staff"
+        assert result["primary_skills"] == ["Python"]
+
+    def test_partial_fields_handled_gracefully(self):
+        """Education objects with missing fields produce a best-effort string."""
+        profile = {
+            "education": [
+                {"degree_type": "B.S.", "degree_field": "CS", "school": "", "graduation_year": ""}
+            ]
+        }
+        result = format_education_for_prompt(profile)
+        # Should not raise; must contain at least the degree and field info.
+        assert len(result["education"]) == 1
+        assert "B.S." in result["education"][0]
+        assert "CS" in result["education"][0]

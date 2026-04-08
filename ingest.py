@@ -785,6 +785,35 @@ def format_skills_for_prompt(profile: dict) -> dict:
     return profile
 
 
+def format_education_for_prompt(profile: dict) -> dict:
+    """Convert structured education objects to LLM-readable strings for the scoring prompt.
+
+    If ``education`` is already a list of strings (old flat format), it is
+    passed through unchanged for backward compatibility.
+
+    Args:
+        profile: Candidate profile dict.  A shallow copy is returned — the
+                 original is never mutated.
+
+    Returns:
+        A new dict identical to *profile* except that ``education`` is
+        replaced with a list of human-readable strings when the input contains
+        structured education objects.
+    """
+    profile = dict(profile)  # shallow copy — do not mutate caller's dict
+    education = profile.get("education", [])
+    if education and all(isinstance(e, dict) for e in education):
+        formatted = []
+        for e in education:
+            deg_type = e.get("degree_type", "")
+            deg_field = e.get("degree_field", "")
+            school = e.get("school", "")
+            year = e.get("graduation_year", "")
+            formatted.append(f"{deg_type} in {deg_field} — {school} ({year})")
+        profile["education"] = formatted
+    return profile
+
+
 def score_listing_with_fallback(
     listing: dict,
     profile: dict,
@@ -835,6 +864,8 @@ def score_listing_with_fallback(
 
     # Convert structured skill objects to LLM-readable strings before serialising.
     scoring_profile = format_skills_for_prompt(scoring_profile)
+    # Convert structured education objects to LLM-readable strings before serialising.
+    scoring_profile = format_education_for_prompt(scoring_profile)
 
     prompt = _PROMPT_TEMPLATE.format(
         profile_json=json.dumps(scoring_profile, indent=2),

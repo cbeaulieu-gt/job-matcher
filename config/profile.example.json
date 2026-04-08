@@ -17,10 +17,20 @@
     "no junior or associate level positions"
   ],
   "seniority": "Senior / Staff",
-  "_education_help": "education is an array of free-text strings, one entry per degree or credential. Each entry is injected into the LLM scoring prompt so the model does not flag degree requirements as missing when the candidate already satisfies them. Format each entry however is natural — e.g. 'B.S. Computer Science, State University, 2012'.",
+  "_education_help": "education is an array of objects with four fields: degree_type (e.g. 'B.S.', 'M.S.', 'Ph.D.'), degree_field (area of study), school (institution name), graduation_year (four-digit year string). Each entry is formatted into a human-readable string before injection into the LLM scoring prompt.",
   "education": [
-    "B.S. Computer Science, State University, 2012",
-    "M.S. Software Engineering, Tech University, 2014"
+    {
+      "degree_type": "B.S.",
+      "degree_field": "Computer Science",
+      "school": "State University",
+      "graduation_year": "2012"
+    },
+    {
+      "degree_type": "M.S.",
+      "degree_field": "Software Engineering",
+      "school": "Tech University",
+      "graduation_year": "2014"
+    }
   ],
   "preferred_industries": [
     "developer tooling and platforms",

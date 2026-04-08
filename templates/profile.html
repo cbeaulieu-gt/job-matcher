@@ -84,6 +84,74 @@
       text-align: center;
     }
 
+    /* ── Education table (Education section) ─────────────────────────────── */
+    .edu-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 4px;
+    }
+
+    .edu-th {
+      font-family: var(--font-mono);
+      font-size: 0.62rem;
+      font-weight: normal;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+      padding: 0 6px 6px 0;
+      text-align: left;
+    }
+
+    .edu-th--year {
+      width: 72px;
+      text-align: center;
+    }
+
+    .edu-th--remove {
+      width: 32px;
+    }
+
+    .edu-td {
+      padding: 3px 6px 3px 0;
+      vertical-align: middle;
+    }
+
+    .edu-td--year {
+      text-align: center;
+    }
+
+    .edu-td--remove {
+      text-align: right;
+    }
+
+    .edu-input {
+      font-family: var(--font-ui);
+      font-size: 0.78rem;
+      color: var(--text-primary);
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: var(--radius-md);
+      padding: 4px 6px;
+      width: 100%;
+      outline: none;
+      transition: border-color 0.15s, background 0.15s;
+    }
+
+    .edu-input:hover {
+      border-color: var(--border-subtle);
+      background: var(--bg-raised);
+    }
+
+    .edu-input:focus {
+      border-color: var(--border-strong);
+      background: var(--bg-raised);
+    }
+
+    .edu-input--year {
+      width: 72px;
+      text-align: center;
+    }
+
     /* ── Skill active/dormant toggle ─────────────────────────────────────── */
     .skill-toggle {
       display: inline-flex;
@@ -377,29 +445,82 @@
 
       {# ── Education ── #}
       <label class="settings-label">Education</label>
-      <p class="field-hint">One degree or credential per row. Format freely &mdash; e.g. &ldquo;B.S. Computer Science, State University, 2012&rdquo;.</p>
-      <div class="row-list" id="list-education">
-        {% set education_entries = prof.get('education', []) %}
-        {% if education_entries %}
-          {% for entry in education_entries %}
-            <div class="row-item">
-              <input class="settings-input" type="text" name="education[]"
-                     value="{{ entry }}" autocomplete="off">
-              <button type="button" class="btn-row-remove"
-                      aria-label="Remove row">&#x2212;</button>
-            </div>
-          {% endfor %}
-        {% else %}
-          <div class="row-item">
-            <input class="settings-input" type="text" name="education[]"
-                   autocomplete="off">
-            <button type="button" class="btn-row-remove"
-                    aria-label="Remove row">&#x2212;</button>
-          </div>
-        {% endif %}
-      </div>
-      <button type="button" class="btn-row-add"
-              data-list-id="list-education" data-name="education[]">+ Add education</button>
+      <p class="field-hint">One degree per row. Used by the LLM scorer to avoid flagging degree requirements as missing.</p>
+      <table class="edu-table">
+        <thead>
+          <tr>
+            <th class="edu-th" style="width:100px">Type</th>
+            <th class="edu-th">Field of Study</th>
+            <th class="edu-th">School</th>
+            <th class="edu-th edu-th--year">Year</th>
+            <th class="edu-th edu-th--remove"></th>
+          </tr>
+        </thead>
+        <tbody id="edu-tbody">
+          {% set education_entries = prof.get('education', []) %}
+          {% if education_entries %}
+            {% for entry in education_entries %}
+              <tr class="edu-row">
+                <td class="edu-td">
+                  <select class="edu-input" name="edu_type[]" autocomplete="off">
+                    <option value="">—</option>
+                    {% for opt in ['Associate', 'B.A.', 'B.S.', 'M.A.', 'M.S.', 'MBA', 'Ph.D.', 'J.D.', 'M.D.', 'Other'] %}
+                      <option value="{{ opt }}"{% if entry.get('degree_type','') == opt %} selected{% endif %}>{{ opt }}</option>
+                    {% endfor %}
+                  </select>
+                </td>
+                <td class="edu-td">
+                  <input class="edu-input" type="text" name="edu_field[]"
+                         value="{{ entry.get('degree_field', '') }}"
+                         placeholder="e.g. Computer Science" autocomplete="off">
+                </td>
+                <td class="edu-td">
+                  <input class="edu-input" type="text" name="edu_school[]"
+                         value="{{ entry.get('school', '') }}"
+                         placeholder="e.g. MIT" autocomplete="off">
+                </td>
+                <td class="edu-td edu-td--year">
+                  <input class="edu-input edu-input--year" type="text" name="edu_year[]"
+                         value="{{ entry.get('graduation_year', '') }}"
+                         placeholder="2024" maxlength="4" autocomplete="off">
+                </td>
+                <td class="edu-td edu-td--remove">
+                  <button type="button" class="btn-row-remove btn-edu-remove"
+                          aria-label="Remove row">&#x2212;</button>
+                </td>
+              </tr>
+            {% endfor %}
+          {% else %}
+            <tr class="edu-row">
+              <td class="edu-td">
+                <select class="edu-input" name="edu_type[]" autocomplete="off">
+                  <option value="">—</option>
+                  {% for opt in ['Associate', 'B.A.', 'B.S.', 'M.A.', 'M.S.', 'MBA', 'Ph.D.', 'J.D.', 'M.D.', 'Other'] %}
+                    <option value="{{ opt }}">{{ opt }}</option>
+                  {% endfor %}
+                </select>
+              </td>
+              <td class="edu-td">
+                <input class="edu-input" type="text" name="edu_field[]"
+                       placeholder="e.g. Computer Science" autocomplete="off">
+              </td>
+              <td class="edu-td">
+                <input class="edu-input" type="text" name="edu_school[]"
+                       placeholder="e.g. MIT" autocomplete="off">
+              </td>
+              <td class="edu-td edu-td--year">
+                <input class="edu-input edu-input--year" type="text" name="edu_year[]"
+                       placeholder="2024" maxlength="4" autocomplete="off">
+              </td>
+              <td class="edu-td edu-td--remove">
+                <button type="button" class="btn-row-remove btn-edu-remove"
+                        aria-label="Remove row">&#x2212;</button>
+              </td>
+            </tr>
+          {% endif %}
+        </tbody>
+      </table>
+      <button type="button" id="btn-add-edu">+ Add education</button>
 
       <hr class="form-section-divider">
 
@@ -739,7 +860,7 @@
     var prof = data.profile;
 
     _fillSkillsTable(prof.primary_skills || []);
-    _fillRepeatingRows('education', prof.education || []);
+    _fillEduTable(prof.education || []);
     _fillRepeatingRows('preferred_industries', prof.preferred_industries || []);
 
     var seniorityInput = document.querySelector('input[name="seniority"], select[name="seniority"]');
@@ -869,6 +990,40 @@
     });
     // _reindexSkillRows is exposed on window by the row-JS IIFE below.
     window._reindexSkillRows();
+  }
+
+  /**
+   * Repopulate the education table from an array of structured education objects
+   * returned by the PDF import endpoint. Each item may be:
+   *   - an object: { degree_type, degree_field, school, graduation_year }
+   *   - a plain string (legacy fallback — placed in degree_field)
+   *
+   * @param {Array} entries
+   */
+  function _fillEduTable(entries) {
+    var tbody = document.getElementById('edu-tbody');
+    if (!tbody) return;
+
+    tbody.querySelectorAll('.edu-row').forEach(function (r) { r.remove(); });
+
+    var items = entries.length ? entries : [{}];
+    items.forEach(function (e) {
+      var degType, degField, school, year;
+      if (typeof e === 'object' && e !== null) {
+        degType  = e.degree_type       || '';
+        degField = e.degree_field      || '';
+        school   = e.school            || '';
+        year     = e.graduation_year   || '';
+      } else {
+        // Legacy flat string — surface it in the field column so no data is lost.
+        degType  = '';
+        degField = String(e);
+        school   = '';
+        year     = '';
+      }
+      // _makeEduRow is exposed on window by the row-JS IIFE below.
+      tbody.appendChild(window._makeEduRow(degType, degField, school, year));
+    });
   }
 })();
 </script>
@@ -1018,10 +1173,133 @@
     _reindexSkillRows();
   }
 
+  // ── Education table helpers ──────────────────────────────────────────
+
+  var _EDU_TYPE_OPTIONS = ['', 'Associate', 'B.A.', 'B.S.', 'M.A.', 'M.S.', 'MBA', 'Ph.D.', 'J.D.', 'M.D.', 'Other'];
+  var _EDU_TYPE_LABELS  = ['—', 'Associate', 'B.A.', 'B.S.', 'M.A.', 'M.S.', 'MBA', 'Ph.D.', 'J.D.', 'M.D.', 'Other'];
+
+  /**
+   * Build a <select> element for edu_type[].
+   * @param {string} selectedValue
+   * @returns {HTMLSelectElement}
+   */
+  function _makeEduTypeSelect(selectedValue) {
+    var sel = document.createElement('select');
+    sel.className = 'edu-input';
+    sel.name = 'edu_type[]';
+    sel.autocomplete = 'off';
+    _EDU_TYPE_OPTIONS.forEach(function (val, i) {
+      var opt = document.createElement('option');
+      opt.value = val;
+      opt.textContent = _EDU_TYPE_LABELS[i];
+      if (val === selectedValue) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    return sel;
+  }
+
+  /**
+   * Build a single <tr class="edu-row"> for the education table.
+   * @param {string} degType
+   * @param {string} degField
+   * @param {string} school
+   * @param {string} year
+   * @returns {HTMLTableRowElement}
+   */
+  function _makeEduRow(degType, degField, school, year) {
+    var tr = document.createElement('tr');
+    tr.className = 'edu-row';
+
+    var tdType = document.createElement('td');
+    tdType.className = 'edu-td';
+    tdType.appendChild(_makeEduTypeSelect(degType || ''));
+
+    var tdField = document.createElement('td');
+    tdField.className = 'edu-td';
+    var inpField = document.createElement('input');
+    inpField.className = 'edu-input';
+    inpField.type = 'text';
+    inpField.name = 'edu_field[]';
+    inpField.value = degField || '';
+    inpField.placeholder = 'e.g. Computer Science';
+    inpField.autocomplete = 'off';
+    tdField.appendChild(inpField);
+
+    var tdSchool = document.createElement('td');
+    tdSchool.className = 'edu-td';
+    var inpSchool = document.createElement('input');
+    inpSchool.className = 'edu-input';
+    inpSchool.type = 'text';
+    inpSchool.name = 'edu_school[]';
+    inpSchool.value = school || '';
+    inpSchool.placeholder = 'e.g. MIT';
+    inpSchool.autocomplete = 'off';
+    tdSchool.appendChild(inpSchool);
+
+    var tdYear = document.createElement('td');
+    tdYear.className = 'edu-td edu-td--year';
+    var inpYear = document.createElement('input');
+    inpYear.className = 'edu-input edu-input--year';
+    inpYear.type = 'text';
+    inpYear.name = 'edu_year[]';
+    inpYear.value = year || '';
+    inpYear.placeholder = '2024';
+    inpYear.maxLength = 4;
+    inpYear.autocomplete = 'off';
+    tdYear.appendChild(inpYear);
+
+    var tdRemove = document.createElement('td');
+    tdRemove.className = 'edu-td edu-td--remove';
+    var btnRemove = document.createElement('button');
+    btnRemove.type = 'button';
+    btnRemove.className = 'btn-row-remove btn-edu-remove';
+    btnRemove.setAttribute('aria-label', 'Remove row');
+    btnRemove.innerHTML = '&#x2212;';
+    tdRemove.appendChild(btnRemove);
+
+    tr.appendChild(tdType);
+    tr.appendChild(tdField);
+    tr.appendChild(tdSchool);
+    tr.appendChild(tdYear);
+    tr.appendChild(tdRemove);
+    return tr;
+  }
+
+  /**
+   * Add a blank row to the education table.
+   */
+  function addEducationRow() {
+    var tbody = document.getElementById('edu-tbody');
+    if (!tbody) return;
+    var tr = _makeEduRow('', '', '', '');
+    tbody.appendChild(tr);
+    tr.querySelector('select[name="edu_type[]"]').focus();
+  }
+
+  /**
+   * Remove an education row. Ensures at least one row always remains.
+   * @param {HTMLElement} btn - the remove button that was clicked
+   */
+  function removeEducationRow(btn) {
+    var tbody = document.getElementById('edu-tbody');
+    if (!tbody) return;
+    var tr = btn.closest('.edu-row');
+    if (!tr) return;
+    var rows = tbody.querySelectorAll('.edu-row');
+    if (rows.length <= 1) {
+      tr.querySelectorAll('input').forEach(function (inp) { inp.value = ''; });
+      var sel = tr.querySelector('select');
+      if (sel) sel.value = '';
+      return;
+    }
+    tr.remove();
+  }
+
   // Expose helpers that the PDF-import IIFE (defined earlier in the page)
   // references from click handlers fired after both scripts have loaded.
   window._makeSkillRow    = _makeSkillRow;
   window._reindexSkillRows = _reindexSkillRows;
+  window._makeEduRow      = _makeEduRow;
 
   // Event delegation — handles both statically-rendered and dynamically-added buttons.
   document.addEventListener('click', function (e) {
@@ -1033,6 +1311,16 @@
     // Skills table — add row
     if (e.target.matches('#btn-add-skill')) {
       addSkillRow();
+      return;
+    }
+    // Education table — remove row
+    if (e.target.matches('.btn-edu-remove')) {
+      removeEducationRow(e.target);
+      return;
+    }
+    // Education table — add row
+    if (e.target.matches('#btn-add-edu')) {
+      addEducationRow();
       return;
     }
     // Standard repeating-row remove

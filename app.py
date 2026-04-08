@@ -1002,11 +1002,13 @@ def settings():
 
                 source_updates: dict = {}
 
-                # Checkbox: unchecked = not submitted = False.  Only written
-                # here because we've already confirmed this source is in the
-                # form (the user touched at least one of its fields).
-                enabled = request.form.get(enabled_key) == "on"
-                source_updates["enabled"] = enabled
+                # Checkbox: only update enabled when the field was explicitly
+                # submitted.  JS dirty-tracking sends the checkbox only when
+                # the user actually toggled it: 'on' = checked, '' = unchecked.
+                # If the field is absent entirely (user only changed a
+                # credential), leave the stored enabled state untouched.
+                if enabled_key in request.form:
+                    source_updates["enabled"] = request.form.get(enabled_key) == "on"
 
                 for field in schema_fields:
                     field_name = field["name"]

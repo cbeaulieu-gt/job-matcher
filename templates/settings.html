@@ -823,8 +823,11 @@
         var el = form.elements[name];
         if (!el) { return; }
         if (el.type === 'checkbox') {
-          if (el.checked) { body.append(name, 'on'); }
-          // Unchecked: intentionally omitted so the server sees it as absent.
+          // 'on' = checked; '' = explicitly unchecked (dirty).
+          // Only dirty checkboxes reach here, so '' means "user unchecked this".
+          // The server checks for field presence to distinguish "not changed"
+          // (absent) from "explicitly disabled" (present but empty/falsy).
+          body.append(name, el.checked ? 'on' : '');
         } else {
           body.append(name, el.value);
         }

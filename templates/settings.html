@@ -740,6 +740,7 @@
             form = pane.querySelector('form');
             if (!form) {
               showSaveError(bar, 'Failed to re-initialize form after refresh.');
+              saveBtn.textContent = prevLabel;
               return;
             }
             var originalSubmit = form.querySelector('button[type="submit"].btn-save');

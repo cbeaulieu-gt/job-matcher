@@ -613,7 +613,7 @@ class TestJobTimeout:
                 "status": "running",
                 "result": None,
                 "error": None,
-                "created_at": 0.0,
+                "created_at": datetime.now(timezone.utc).timestamp(),  # recent — survives TTL pruning
                 "started_at": datetime.now(timezone.utc).timestamp()
                 - app_module._PDF_JOB_TIMEOUT_SECONDS
                 - 1,

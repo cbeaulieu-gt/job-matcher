@@ -809,7 +809,16 @@ def format_education_for_prompt(profile: dict) -> dict:
             deg_field = e.get("degree_field", "")
             school = e.get("school", "")
             year = e.get("graduation_year", "")
-            formatted.append(f"{deg_type} in {deg_field} — {school} ({year})")
+            base = f"{deg_type} in {deg_field}" if deg_field else deg_type
+            if school and year:
+                suffix = f" — {school} ({year})"
+            elif school:
+                suffix = f" — {school}"
+            elif year:
+                suffix = f" ({year})"
+            else:
+                suffix = ""
+            formatted.append(f"{base}{suffix}")
         profile["education"] = formatted
     return profile
 

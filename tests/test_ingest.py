@@ -547,14 +547,58 @@ class TestFormatEducationForPrompt:
         assert result["primary_skills"] == ["Python"]
 
     def test_partial_fields_handled_gracefully(self):
-        """Education objects with missing fields produce a best-effort string."""
+        """Education objects with missing optional fields produce clean strings."""
         profile = {
             "education": [
                 {"degree_type": "B.S.", "degree_field": "CS", "school": "", "graduation_year": ""}
             ]
         }
         result = format_education_for_prompt(profile)
+        edu = result["education"][0]
         # Should not raise; must contain at least the degree and field info.
         assert len(result["education"]) == 1
-        assert "B.S." in result["education"][0]
-        assert "CS" in result["education"][0]
+        assert "B.S." in edu
+        assert "CS" in edu
+        # Must not produce artefacts from empty optional fields.
+        assert " — " not in edu, f"Unexpected em-dash in output: {edu!r}"
+        assert "()" not in edu, f"Unexpected empty parens in output: {edu!r}"
+        assert "  " not in edu, f"Double space in output: {edu!r}"
+        assert edu == "B.S. in CS", f"Unexpected output: {edu!r}"
+
+    def test_only_degree_type_present(self):
+        """Education object with only degree_type produces just the degree type."""
+        profile = {
+            "education": [
+                {"degree_type": "B.S.", "degree_field": "", "school": "", "graduation_year": ""}
+            ]
+        }
+        result = format_education_for_prompt(profile)
+        edu = result["education"][0]
+        assert edu == "B.S.", f"Unexpected output: {edu!r}"
+        assert " in " not in edu
+        assert " — " not in edu
+        assert "()" not in edu
+
+    def test_school_without_year(self):
+        """Degree with school but no graduation year omits the parens entirely."""
+        profile = {
+            "education": [
+                {"degree_type": "B.S.", "degree_field": "Computer Science", "school": "MIT", "graduation_year": ""}
+            ]
+        }
+        result = format_education_for_prompt(profile)
+        edu = result["education"][0]
+        assert edu == "B.S. in Computer Science — MIT", f"Unexpected output: {edu!r}"
+        assert "()" not in edu
+
+    def test_year_without_school(self):
+        """Degree with graduation year but no school omits the em-dash+school."""
+        profile = {
+            "education": [
+                {"degree_type": "B.S.", "degree_field": "Computer Science", "school": "", "graduation_year": "2020"}
+            ]
+        }
+        result = format_education_for_prompt(profile)
+        edu = result["education"][0]
+        assert edu == "B.S. in Computer Science (2020)", f"Unexpected output: {edu!r}"
+        assert " — " not in edu

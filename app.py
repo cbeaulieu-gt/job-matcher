@@ -13,6 +13,8 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time as _time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from importlib.metadata import version as pkg_version, PackageNotFoundError
 
@@ -1319,23 +1321,51 @@ def _merge_import_result(current: dict, imported: dict) -> dict:
 _PDF_ASYNC_THRESHOLD = 10_000
 
 # Job store: maps job_id (str UUID) → job dict.
-# Each entry: {id, status, result, error, created_at}
+# Each entry: {id, status, result, error, created_at, started_at}
 # status values: "pending" | "running" | "complete" | "failed"
 _pdf_jobs: dict = {}
 _pdf_jobs_lock = threading.Lock()
 
+# Bounded thread pool for async PDF imports — prevents resource exhaustion.
+_pdf_executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="pdf-import")
+_MAX_CONCURRENT_PDF_JOBS = 3
+
 # Completed/failed jobs are pruned after this many seconds.
 _PDF_JOB_TTL_SECONDS = 300  # 5 minutes
+# Running jobs older than this are marked failed (hung LLM call protection).
+_PDF_JOB_TIMEOUT_SECONDS = 300  # 5 minutes
+
+# Rate-limit pruning so it doesn't run on every status poll.
+_last_prune_time: float = 0.0
+_PRUNE_INTERVAL_SECONDS = 30
 
 
 def _prune_pdf_jobs() -> None:
-    """Remove completed/failed jobs older than ``_PDF_JOB_TTL_SECONDS``.
+    """Timeout stuck jobs and remove old completed/failed jobs.
 
-    Call this on every status poll to prevent unbounded memory growth.
-    Not exported — internal helper only.
+    Rate-limited to run at most once per ``_PRUNE_INTERVAL_SECONDS`` to avoid
+    O(n) iteration on every status poll.  Not exported — internal helper only.
     """
-    cutoff = datetime.now(timezone.utc).timestamp() - _PDF_JOB_TTL_SECONDS
+    global _last_prune_time
+    now_mono = _time.monotonic()
+    if now_mono - _last_prune_time < _PRUNE_INTERVAL_SECONDS:
+        return
+    _last_prune_time = now_mono
+
+    now = datetime.now(timezone.utc).timestamp()
+    cutoff = now - _PDF_JOB_TTL_SECONDS
     with _pdf_jobs_lock:
+        # Timeout stuck running jobs
+        for job in _pdf_jobs.values():
+            if (
+                job["status"] == "running"
+                and job.get("started_at")
+                and now - job["started_at"] > _PDF_JOB_TIMEOUT_SECONDS
+            ):
+                job["status"] = "failed"
+                job["error"] = "Job timed out after 5 minutes."
+
+        # Remove old completed/failed jobs
         to_delete = [
             jid
             for jid, job in _pdf_jobs.items()
@@ -1368,6 +1398,7 @@ def _run_pdf_import_job(
 
     with _pdf_jobs_lock:
         _pdf_jobs[job_id]["status"] = "running"
+        _pdf_jobs[job_id]["started_at"] = datetime.now(timezone.utc).timestamp()
 
     try:
         chain = build_provider_chain(providers_dict)
@@ -1429,7 +1460,11 @@ def _run_pdf_import_job(
                 "model_used": model_used,
             }
 
-    except Exception as exc:  # noqa: BLE001
+    except (ValueError, KeyError, TypeError, RuntimeError, OSError) as exc:
+        with _pdf_jobs_lock:
+            _pdf_jobs[job_id]["status"] = "failed"
+            _pdf_jobs[job_id]["error"] = f"Import error: {exc}"
+    except Exception as exc:  # noqa: BLE001 — daemon thread; must capture all failures
         with _pdf_jobs_lock:
             _pdf_jobs[job_id]["status"] = "failed"
             _pdf_jobs[job_id]["error"] = f"Unexpected error: {exc}"
@@ -1506,6 +1541,15 @@ def profile_import_pdf():
     if len(resume_text) > _PDF_ASYNC_THRESHOLD:
         job_id = str(_uuid.uuid4())
         with _pdf_jobs_lock:
+            active = sum(
+                1 for j in _pdf_jobs.values()
+                if j["status"] in ("pending", "running")
+            )
+            if active >= _MAX_CONCURRENT_PDF_JOBS:
+                return jsonify({
+                    "success": False,
+                    "error": "Too many concurrent imports. Please wait and try again.",
+                }), 429
             _pdf_jobs[job_id] = {
                 "id": job_id,
                 "status": "pending",
@@ -1514,12 +1558,10 @@ def profile_import_pdf():
                 "created_at": datetime.now(timezone.utc).timestamp(),
             }
         providers_dict = _load_providers_safe()
-        t = threading.Thread(
-            target=_run_pdf_import_job,
-            args=(job_id, resume_text, mode, providers_dict, _PROFILE_PATH),
-            daemon=True,
+        _pdf_executor.submit(
+            _run_pdf_import_job,
+            job_id, resume_text, mode, providers_dict, _PROFILE_PATH,
         )
-        t.start()
         return jsonify({"async": True, "job_id": job_id}), 202
 
     # Small PDF — synchronous path (unchanged behaviour)

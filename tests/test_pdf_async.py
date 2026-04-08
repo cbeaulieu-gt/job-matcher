@@ -31,6 +31,7 @@ import io
 import json
 import os
 import sys
+import time as _time
 import unittest.mock as mock
 from datetime import datetime, timezone
 
@@ -187,20 +188,13 @@ class TestImportPdfAsync:
         with (
             mock.patch.object(app_module, "_extract_pdf_text", return_value=text),
             mock.patch.object(app_module, "_load_providers_safe", return_value={}),
-            mock.patch.object(
-                app_module,
-                "_run_pdf_import_job",
-                return_value=None,  # stub — don't actually start a thread
-            ),
+            mock.patch.object(app_module, "_pdf_executor") as mock_executor,
         ):
-            # Also patch Thread so we don't spawn real threads in most tests
-            with mock.patch("threading.Thread") as mock_thread:
-                mock_thread.return_value.start = mock.MagicMock()
-                return client.post(
-                    "/profile/import-pdf",
-                    data=data,
-                    content_type="multipart/form-data",
-                ), mock_thread
+            return client.post(
+                "/profile/import-pdf",
+                data=data,
+                content_type="multipart/form-data",
+            ), mock_executor
 
     def test_large_pdf_returns_202(
         self, client, tmp_providers_path, tmp_keys_path, tmp_profile_path
@@ -240,14 +234,15 @@ class TestImportPdfAsync:
             assert job_id in app_module._pdf_jobs
             assert app_module._pdf_jobs[job_id]["status"] == "pending"
 
-    def test_large_pdf_spawns_daemon_thread(
+    def test_large_pdf_submits_to_executor(
         self, client, tmp_providers_path, tmp_keys_path, tmp_profile_path
     ):
         text = "x" * (app_module._PDF_ASYNC_THRESHOLD + 1)
-        _, mock_thread_cls = self._post(client, text)
-        # Thread constructor must have been called with daemon=True
-        call_kwargs = mock_thread_cls.call_args[1]
-        assert call_kwargs.get("daemon") is True
+        _, mock_executor = self._post(client, text)
+        # Executor's submit() must have been called with the worker function
+        mock_executor.submit.assert_called_once()
+        call_args = mock_executor.submit.call_args
+        assert call_args[0][0] is app_module._run_pdf_import_job
 
 
 # ===========================================================================
@@ -340,6 +335,13 @@ class TestImportPdfStatus:
 
 class TestPrunePdfJobs:
 
+    @pytest.fixture(autouse=True)
+    def _reset_prune_timer(self):
+        """Ensure prune rate-limiter doesn't block test assertions."""
+        app_module._last_prune_time = 0.0
+        yield
+        app_module._last_prune_time = 0.0
+
     def test_prune_removes_old_complete_job(self):
         """Complete jobs created more than TTL seconds ago must be pruned."""
         job_id = "old-complete"
@@ -385,20 +387,21 @@ class TestPrunePdfJobs:
         with app_module._pdf_jobs_lock:
             assert job_id in app_module._pdf_jobs
 
-    def test_prune_keeps_running_job_regardless_of_age(self):
-        """Running jobs must never be pruned even if they are very old."""
-        job_id = "old-running"
+    def test_prune_keeps_recent_running_job(self):
+        """Running jobs with a recent started_at must not be timed out."""
+        job_id = "recent-running"
         with app_module._pdf_jobs_lock:
             app_module._pdf_jobs[job_id] = {
                 "id": job_id,
                 "status": "running",
                 "result": None,
                 "error": None,
-                "created_at": 0.0,  # epoch — extremely old
+                "created_at": datetime.now(timezone.utc).timestamp(),
+                "started_at": datetime.now(timezone.utc).timestamp(),
             }
         app_module._prune_pdf_jobs()
         with app_module._pdf_jobs_lock:
-            assert job_id in app_module._pdf_jobs
+            assert app_module._pdf_jobs[job_id]["status"] == "running"
 
     def test_prune_keeps_pending_job_regardless_of_age(self):
         """Pending jobs must not be pruned (they haven't started yet)."""
@@ -529,3 +532,152 @@ class TestRunPdfImportJob:
             )
 
         assert "running" in observed_statuses
+
+
+# ===========================================================================
+# Concurrency limit — _MAX_CONCURRENT_PDF_JOBS
+# ===========================================================================
+
+
+class TestConcurrencyLimit:
+
+    def test_returns_429_when_at_limit(
+        self, client, tmp_providers_path, tmp_keys_path, tmp_profile_path
+    ):
+        """When _MAX_CONCURRENT_PDF_JOBS active jobs exist, new large PDFs get 429."""
+        with app_module._pdf_jobs_lock:
+            for i in range(app_module._MAX_CONCURRENT_PDF_JOBS):
+                app_module._pdf_jobs[f"running-{i}"] = {
+                    "id": f"running-{i}",
+                    "status": "running",
+                    "result": None,
+                    "error": None,
+                    "created_at": datetime.now(timezone.utc).timestamp(),
+                }
+
+        text = "x" * (app_module._PDF_ASYNC_THRESHOLD + 1)
+        data = {
+            "mode": "fresh",
+            "file": (io.BytesIO(_make_minimal_pdf_bytes()), "big.pdf"),
+        }
+        with (
+            mock.patch.object(app_module, "_extract_pdf_text", return_value=text),
+            mock.patch.object(app_module, "_load_providers_safe", return_value={}),
+        ):
+            resp = client.post(
+                "/profile/import-pdf", data=data, content_type="multipart/form-data"
+            )
+        assert resp.status_code == 429
+        assert "concurrent" in resp.get_json()["error"].lower()
+
+    def test_allows_when_under_limit(
+        self, client, tmp_providers_path, tmp_keys_path, tmp_profile_path
+    ):
+        """When fewer than max jobs are active, large PDF is accepted (202)."""
+        text = "x" * (app_module._PDF_ASYNC_THRESHOLD + 1)
+        data = {
+            "mode": "fresh",
+            "file": (io.BytesIO(_make_minimal_pdf_bytes()), "big.pdf"),
+        }
+        with (
+            mock.patch.object(app_module, "_extract_pdf_text", return_value=text),
+            mock.patch.object(app_module, "_load_providers_safe", return_value={}),
+            mock.patch.object(app_module, "_pdf_executor") as mock_exec,
+        ):
+            resp = client.post(
+                "/profile/import-pdf", data=data, content_type="multipart/form-data"
+            )
+        assert resp.status_code == 202
+        mock_exec.submit.assert_called_once()
+
+
+# ===========================================================================
+# Job timeout — stuck running jobs
+# ===========================================================================
+
+
+class TestJobTimeout:
+
+    @pytest.fixture(autouse=True)
+    def _reset_prune_timer(self):
+        app_module._last_prune_time = 0.0
+        yield
+        app_module._last_prune_time = 0.0
+
+    def test_stuck_running_job_gets_timed_out(self):
+        """Running jobs older than _PDF_JOB_TIMEOUT_SECONDS are marked failed."""
+        job_id = "stuck-running"
+        with app_module._pdf_jobs_lock:
+            app_module._pdf_jobs[job_id] = {
+                "id": job_id,
+                "status": "running",
+                "result": None,
+                "error": None,
+                "created_at": 0.0,
+                "started_at": datetime.now(timezone.utc).timestamp()
+                - app_module._PDF_JOB_TIMEOUT_SECONDS
+                - 1,
+            }
+        app_module._prune_pdf_jobs()
+        with app_module._pdf_jobs_lock:
+            job = app_module._pdf_jobs[job_id]
+        assert job["status"] == "failed"
+        assert "timed out" in job["error"]
+
+    def test_recent_running_job_not_timed_out(self):
+        """Running jobs within timeout window are NOT marked failed."""
+        job_id = "recent-running"
+        with app_module._pdf_jobs_lock:
+            app_module._pdf_jobs[job_id] = {
+                "id": job_id,
+                "status": "running",
+                "result": None,
+                "error": None,
+                "created_at": datetime.now(timezone.utc).timestamp(),
+                "started_at": datetime.now(timezone.utc).timestamp(),
+            }
+        app_module._prune_pdf_jobs()
+        with app_module._pdf_jobs_lock:
+            assert app_module._pdf_jobs[job_id]["status"] == "running"
+
+
+# ===========================================================================
+# Prune rate limiting
+# ===========================================================================
+
+
+class TestPruneRateLimit:
+
+    def test_prune_skips_when_called_within_interval(self):
+        """_prune_pdf_jobs is a no-op when called within _PRUNE_INTERVAL_SECONDS."""
+        job_id = "should-survive"
+        with app_module._pdf_jobs_lock:
+            app_module._pdf_jobs[job_id] = {
+                "id": job_id,
+                "status": "complete",
+                "result": {},
+                "error": None,
+                "created_at": 0.0,  # very old — would normally be pruned
+            }
+        # Set last prune to now — next call should skip
+        app_module._last_prune_time = _time.monotonic()
+        app_module._prune_pdf_jobs()
+        with app_module._pdf_jobs_lock:
+            assert job_id in app_module._pdf_jobs  # not pruned because rate-limited
+
+    def test_prune_runs_when_interval_elapsed(self):
+        """_prune_pdf_jobs runs normally after the interval has elapsed."""
+        job_id = "should-be-pruned"
+        with app_module._pdf_jobs_lock:
+            app_module._pdf_jobs[job_id] = {
+                "id": job_id,
+                "status": "complete",
+                "result": {},
+                "error": None,
+                "created_at": 0.0,  # very old
+            }
+        # Set last prune to the past
+        app_module._last_prune_time = 0.0
+        app_module._prune_pdf_jobs()
+        with app_module._pdf_jobs_lock:
+            assert job_id not in app_module._pdf_jobs

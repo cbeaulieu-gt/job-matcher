@@ -12,22 +12,43 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
+    permissions:
+      contents: read
+
+    env:
+      POSTGRES_USER: testuser
+      POSTGRES_PASSWORD: testpass123
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # Set up Docker Buildx so we can use GHA layer caching.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       # Build the image from the local Dockerfile so this job tests the
       # current branch's image, not a previously published GHCR tag.
+      # load: true makes the built image available to the local Docker daemon.
       - name: Build Docker image
-        run: docker build -t ghcr.io/cbeaulieu-gt/job-matcher-pr:latest .
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          load: true
+          tags: ghcr.io/cbeaulieu-gt/job-matcher-pr:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       # The compose env files only need POSTGRES_* credentials.
       # DATABASE_URL, FLASK_DEBUG, etc. are set in the compose environment: block.
       # Use printf to avoid heredoc indentation issues inside YAML run blocks.
       - name: Create test env files
         run: |
-          printf 'POSTGRES_USER=testuser\nPOSTGRES_PASSWORD=testpass123\nPOSTGRES_DB=jobmatcher_dev\n' > .env.dev
-          printf 'POSTGRES_USER=testuser\nPOSTGRES_PASSWORD=testpass123\nPOSTGRES_DB=jobmatcher_prod\n' > .env.prod
+          printf 'POSTGRES_USER=%s\nPOSTGRES_PASSWORD=%s\nPOSTGRES_DB=jobmatcher_dev\n' \
+            "${{ env.POSTGRES_USER }}" "${{ env.POSTGRES_PASSWORD }}" > .env.dev
+          printf 'POSTGRES_USER=%s\nPOSTGRES_PASSWORD=%s\nPOSTGRES_DB=jobmatcher_prod\n' \
+            "${{ env.POSTGRES_USER }}" "${{ env.POSTGRES_PASSWORD }}" > .env.prod
 
       # Create config directories and populate them from example files so the
       # Flask app has valid (if empty) config on first boot.
@@ -72,15 +93,16 @@ jobs:
           fi
           echo "Dev stack returned HTTP $STATUS — OK"
 
-      - name: Assert dev container names contain 'dev'
+      - name: Assert dev stack has expected container count
         run: |
-          NAMES=$(docker compose -p job-matcher-pr-dev -f docker-compose.dev.yml ps --format '{{.Name}}')
-          echo "Dev container names: $NAMES"
-          if ! echo "$NAMES" | grep -q "dev"; then
-            echo "No container names contain 'dev'"
+          CONTAINER_COUNT=$(docker compose -p job-matcher-pr-dev -f docker-compose.dev.yml ps -q | wc -l)
+          echo "Dev stack container count: $CONTAINER_COUNT"
+          if [ "$CONTAINER_COUNT" -lt 2 ]; then
+            echo "Expected at least 2 containers, found $CONTAINER_COUNT"
+            docker compose -p job-matcher-pr-dev -f docker-compose.dev.yml ps
             exit 1
           fi
-          echo "Container name check passed"
+          echo "Container count check passed"
 
       # ---------------------------------------------------------------------------
       # PROD STACK
@@ -113,15 +135,16 @@ jobs:
           fi
           echo "Prod stack returned HTTP $STATUS — OK"
 
-      - name: Assert prod container names contain 'prod'
+      - name: Assert prod stack has expected container count
         run: |
-          NAMES=$(docker compose -p job-matcher-pr-prod -f docker-compose.prod.yml ps --format '{{.Name}}')
-          echo "Prod container names: $NAMES"
-          if ! echo "$NAMES" | grep -q "prod"; then
-            echo "No container names contain 'prod'"
+          CONTAINER_COUNT=$(docker compose -p job-matcher-pr-prod -f docker-compose.prod.yml ps -q | wc -l)
+          echo "Prod stack container count: $CONTAINER_COUNT"
+          if [ "$CONTAINER_COUNT" -lt 2 ]; then
+            echo "Expected at least 2 containers, found $CONTAINER_COUNT"
+            docker compose -p job-matcher-pr-prod -f docker-compose.prod.yml ps
             exit 1
           fi
-          echo "Container name check passed"
+          echo "Container count check passed"
 
       # ---------------------------------------------------------------------------
       # ISOLATION — both stacks running simultaneously

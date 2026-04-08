@@ -73,9 +73,9 @@ cp .env.prod.example .env.prod
 |---|---|---|
 | `POSTGRES_USER` | Yes | PostgreSQL username. Default: `jobmatcher`. |
 | `POSTGRES_PASSWORD` | Yes | PostgreSQL password. Must be at least 12 characters. The setup script will reject placeholder values (`changeme`, `your-strong-password-here`). Use a randomly generated password. |
-| `POSTGRES_DB` | Yes | Database name. Dev default: `jobmatcher_dev`. Prod default: `jobmatcher_prod`. |
+| `POSTGRES_DB` | Yes | Database name. Dev value: `jobmatcher_dev`. Prod value: `jobmatcher_prod`. |
 
-> **Note:** `DATABASE_URL` is not set directly in the env file. It is assembled at runtime by `scripts/entrypoint.sh` from `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB`. This keeps the plaintext password out of `docker inspect` and `/proc/1/environ`.
+> **Note:** `DATABASE_URL` is not set in the env file. It is assembled by Docker Compose variable substitution in the `environment:` block of each Compose file (e.g. `postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/jobmatcher_prod`). The password is visible via `docker inspect` on the web container.
 
 Additional variables that are set in the Compose file itself (not the env file):
 
@@ -135,7 +135,7 @@ The image is built in two stages (`Dockerfile`):
 1. **Builder** — installs Python dependencies into a `/install` prefix
 2. **Runtime** — copies dependencies from the builder, adds a non-root `appuser`, sets up the healthcheck, and configures the entrypoint
 
-The entrypoint (`scripts/entrypoint.sh`) constructs `DATABASE_URL` from the Postgres credentials before handing off to the main process.
+The entrypoint (`scripts/entrypoint.sh`) performs any pre-start setup before handing off to the main process. `DATABASE_URL` is injected by Docker Compose, not constructed by the entrypoint.
 
 ---
 

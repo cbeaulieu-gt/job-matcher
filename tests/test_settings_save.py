@@ -949,7 +949,7 @@ class TestSettingsPostDirtyTracking:
         data = {
             "provider_order": ["anthropic"],
             "llm": {
-                "anthropic": {"api_key": "sk-to-clear", "model": "claude-haiku-4-5-20251001"},
+                "anthropic": {"api_key": "sk-to-keep", "model": "claude-haiku-4-5-20251001"},
             },
             "job_sources": {},
         }
@@ -1441,3 +1441,123 @@ class TestSettingsPopulatedFieldsInTemplate:
         assert 'data-field-id="anthropic__api_key"' in body, (
             "Clear button must have data-field-id='anthropic__api_key' for the anthropic api_key field"
         )
+
+
+# ===========================================================================
+# POST /settings — no-JS password guard (issue #138)
+# ===========================================================================
+
+
+class TestSettingsPostNoJsPasswordGuard:
+    """When a native (no-JS) form POST submits all inputs, blank password fields
+    must be ignored to prevent accidental credential wipe.
+
+    No-JS path: the browser submits every input in the form, including password
+    fields that the user never touched.  Without the guard, saving the LLM tab
+    with no changes would POST empty strings for every api_key and erase all
+    stored credentials.  The guard skips empty password fields so that only an
+    explicit Clear action (issue #137) can remove a stored credential.
+    """
+
+    def test_njs_full_llm_form_preserves_all_credentials(
+        self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
+    ):
+        """A full-form no-JS POST with all password fields blank must preserve all credentials.
+
+        Simulates the browser submitting every field in the LLM form tab, where
+        the user only changed the Anthropic model (non-password) but left all
+        api_key fields (password) untouched (blank).
+        """
+        _write_providers(tmp_providers_path)
+        # Simulate a no-JS full-form submit: all fields present, password fields blank.
+        client.post("/settings", data={
+            "anthropic__api_key": "",        # password — must be preserved
+            "anthropic__model": "claude-opus-4-20251001",  # text — user changed this
+            "openai__api_key": "",           # password — must be preserved (was "")
+            "openai__model": "gpt-4o-mini",
+            "gemini__api_key": "",           # password — must be preserved (was "")
+            "gemini__model": "gemini-1.5-flash",
+            "tab": "llm",
+        })
+        with open(tmp_providers_path, encoding="utf-8") as fh:
+            saved = json.load(fh)
+        # Anthropic api_key must remain — blank password was ignored.
+        assert saved["llm"]["anthropic"]["api_key"] == "sk-existing", (
+            "Blank password field in no-JS submit must not wipe existing api_key"
+        )
+        # Model was a non-password (text) field with a real value — must be updated.
+        assert saved["llm"]["anthropic"]["model"] == "claude-opus-4-20251001"
+
+    def test_new_password_value_is_written_when_non_empty(
+        self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
+    ):
+        """A non-empty password field must still be written (guard only skips blanks)."""
+        _write_providers(tmp_providers_path)
+        client.post("/settings", data={
+            "anthropic__api_key": "sk-brand-new",   # non-empty password — must be saved
+            "anthropic__model": "claude-haiku-4-5-20251001",
+            "tab": "llm",
+        })
+        with open(tmp_providers_path, encoding="utf-8") as fh:
+            saved = json.load(fh)
+        assert saved["llm"]["anthropic"]["api_key"] == "sk-brand-new", (
+            "Non-empty password field must be written as normal"
+        )
+
+    def test_njs_sources_form_preserves_password_credentials(
+        self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
+    ):
+        """A full-form no-JS sources POST with blank password fields must preserve credentials.
+
+        Adzuna app_id and app_key are password-type fields.  Submitting them
+        blank (native form with no changes) must not wipe the stored values.
+        """
+        _write_providers(tmp_providers_path)
+        # Simulate no-JS full-form POST: all source fields present, passwords blank.
+        client.post("/settings", data={
+            "adzuna__enabled": "on",
+            "adzuna__app_id": "",    # password — must be preserved
+            "adzuna__app_key": "",   # password — must be preserved
+            "tab": "sources",
+        })
+        with open(tmp_providers_path, encoding="utf-8") as fh:
+            saved = json.load(fh)
+        # Password fields must not be wiped.
+        assert saved["job_sources"]["adzuna"]["app_id"] == "existing-id", (
+            "Blank password app_id must not wipe existing credential"
+        )
+        assert saved["job_sources"]["adzuna"]["app_key"] == "existing-key", (
+            "Blank password app_key must not wipe existing credential"
+        )
+
+    def test_non_password_blank_field_is_preserved_by_none_guard(
+        self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
+    ):
+        """Non-password fields submitted as blank strings must still be treated normally.
+
+        Only password-type fields have the blank-means-preserve guard.
+        A text field submitted as blank is a valid (empty) update.
+        """
+        data = {
+            "provider_order": ["anthropic"],
+            "llm": {
+                "anthropic": {"api_key": "sk-existing", "model": "claude-haiku-4-5-20251001"},
+            },
+            "job_sources": {},
+        }
+        with open(tmp_providers_path, "w", encoding="utf-8") as fh:
+            json.dump(data, fh)
+
+        # model is a text (not password) field — blank must clear it.
+        client.post("/settings", data={
+            "anthropic__model": "",   # text field, blank — valid empty update
+            "tab": "llm",
+        })
+        with open(tmp_providers_path, encoding="utf-8") as fh:
+            saved = json.load(fh)
+        # Text field submitted as blank — must be written as empty string.
+        assert saved["llm"]["anthropic"]["model"] == "", (
+            "Blank text (non-password) field must be written as empty string"
+        )
+        # Password field was absent entirely (not blank) — must be preserved.
+        assert saved["llm"]["anthropic"]["api_key"] == "sk-existing"

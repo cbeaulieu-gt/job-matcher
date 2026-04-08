@@ -195,7 +195,9 @@ class TestImportResponseParsing:
         """A well-formed JSON string is parsed into a dict."""
         raw = json.dumps({
             "primary_skills": [{"skill": "Python", "years": 5, "status": "active"}],
-            "education": ["BS CS, MIT, 2015"],
+            "education": [
+                {"degree_type": "B.S.", "degree_field": "CS", "school": "MIT", "graduation_year": "2015"}
+            ],
             "seniority": "Senior",
             "preferred_industries": ["fintech"],
             "location_center": "Miami, FL",
@@ -284,31 +286,40 @@ class TestImportMergeLogic:
         assert len(python_entries) == 1
 
     def test_new_education_entries_are_appended(self):
-        """Education entries in the import that are not in current are added."""
-        current = {"education": ["BS CS, MIT, 2015"]}
+        """Structured education entries in the import that are not in current are added."""
+        current = {
+            "education": [
+                {"degree_type": "B.S.", "degree_field": "CS", "school": "MIT", "graduation_year": "2015"}
+            ]
+        }
         imported = {
             "primary_skills": [],
-            "education": ["MS ML, Stanford, 2017"],
+            "education": [
+                {"degree_type": "M.S.", "degree_field": "ML", "school": "Stanford", "graduation_year": "2017"}
+            ],
             "seniority": "",
             "preferred_industries": [],
             "location_center": None,
         }
         result = app_module._merge_import_result(current, imported)
-        assert "MS ML, Stanford, 2017" in result["education"]
-        assert "BS CS, MIT, 2015" in result["education"]
+        edu_schools = [e["school"] for e in result["education"] if isinstance(e, dict)]
+        assert "Stanford" in edu_schools
+        assert "MIT" in edu_schools
 
     def test_duplicate_education_entries_are_skipped(self):
-        """Identical education entries are not duplicated."""
-        current = {"education": ["BS CS, MIT, 2015"]}
+        """Identical structured education entries (all four fields match) are not duplicated."""
+        entry = {"degree_type": "B.S.", "degree_field": "CS", "school": "MIT", "graduation_year": "2015"}
+        current = {"education": [entry]}
         imported = {
             "primary_skills": [],
-            "education": ["BS CS, MIT, 2015"],
+            "education": [entry.copy()],
             "seniority": "",
             "preferred_industries": [],
             "location_center": None,
         }
         result = app_module._merge_import_result(current, imported)
-        assert result["education"].count("BS CS, MIT, 2015") == 1
+        mit_entries = [e for e in result["education"] if isinstance(e, dict) and e.get("school") == "MIT"]
+        assert len(mit_entries) == 1
 
     def test_seniority_is_preserved_from_current_when_set(self):
         """If current profile has a seniority value, it is not overwritten."""
@@ -381,14 +392,17 @@ class TestImportMergeLogic:
         current = {}
         imported = {
             "primary_skills": [{"skill": "Rust", "years": 1, "status": "active"}],
-            "education": ["BS CS, CMU, 2020"],
+            "education": [
+                {"degree_type": "B.S.", "degree_field": "CS", "school": "CMU", "graduation_year": "2020"}
+            ],
             "seniority": "Mid-level",
             "preferred_industries": ["systems"],
             "location_center": None,
         }
         result = app_module._merge_import_result(current, imported)
         assert any(s.get("description") == "Rust" for s in result["primary_skills"] if isinstance(s, dict))
-        assert "BS CS, CMU, 2020" in result["education"]
+        edu_schools = [e["school"] for e in result["education"] if isinstance(e, dict)]
+        assert "CMU" in edu_schools
 
 
 # ===========================================================================
@@ -472,13 +486,15 @@ class TestImportEndpoint:
         assert body["success"] is False
 
     def test_returns_200_with_profile_on_fresh_import(self, client, tmp_providers_path, tmp_keys_path):
-        """Happy path: fresh import returns 200 with profile and model_used."""
+        """Happy path: fresh import returns 200 with structured profile and model_used."""
         data = {"file": (io.BytesIO(b"fake"), "resume.pdf"), "mode": "fresh"}
         long_text = "x" * 200
         mock_provider = MagicMock()
         parsed_response = {
             "primary_skills": [{"skill": "Python", "years": 5, "status": "active"}],
-            "education": ["BS CS, MIT, 2015"],
+            "education": [
+                {"degree_type": "B.S.", "degree_field": "CS", "school": "MIT", "graduation_year": "2015"}
+            ],
             "seniority": "Senior",
             "preferred_industries": ["fintech"],
             "location_center": "Miami, FL",
@@ -501,7 +517,9 @@ class TestImportEndpoint:
         # Write an existing profile
         existing = {
             "primary_skills": [{"description": "Java", "years_active": 8, "active": True}],
-            "education": ["BS CS, MIT, 2015"],
+            "education": [
+                {"degree_type": "B.S.", "degree_field": "CS", "school": "MIT", "graduation_year": "2015"}
+            ],
             "seniority": "Staff",
             "preferred_industries": ["fintech"],
             "location": {"center": "New York, NY"},
@@ -514,7 +532,9 @@ class TestImportEndpoint:
         mock_provider = MagicMock()
         parsed_response = {
             "primary_skills": [{"skill": "Go", "years": 2, "status": "active"}],
-            "education": ["MS ML, Stanford, 2017"],
+            "education": [
+                {"degree_type": "M.S.", "degree_field": "ML", "school": "Stanford", "graduation_year": "2017"}
+            ],
             "seniority": "Junior",  # should be ignored since current has "Staff"
             "preferred_industries": ["healthtech"],
             "location_center": "Austin, TX",  # should be ignored since current has location

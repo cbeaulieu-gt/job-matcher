@@ -582,39 +582,115 @@
 // Dirty-state tracking with client-side sparse submit for credential forms.
 // Only fields the user actually changed are sent in the POST — this prevents
 // empty untouched inputs from arriving as "" and overwriting stored credentials
-// (issue #89).  The server's existing `if raw is None: continue` logic handles
-// the resulting sparse form data correctly.
+// (issue #89).  The server's `if raw is None: continue` logic handles sparse
+// form data correctly; the no-JS password guard (issue #138) additionally
+// skips blank password fields on the server side.
+//
+// After every successful save, the entire active tab pane is replaced with the
+// server-rendered version (issue #138).  The server is the single source of
+// truth — this keeps badges, toggle pills, and form state in sync after save
+// without any client-side bookkeeping.
 (function () {
-  [
-    { formSelector: '#pane-llm form',     barId: 'save-bar-llm' },
-    { formSelector: '#pane-sources form', barId: 'save-bar-sources' }
-  ].forEach(function (cfg) {
-    var form = document.querySelector(cfg.formSelector);
-    var bar  = document.getElementById(cfg.barId);
-    if (!form || !bar) return;
+  // ── Inline error helper ─────────────────────────────────────────────────
+  // Injects a transient error paragraph near the save bar.  Shared by all
+  // pane handlers.
+  function showSaveError(bar, message) {
+    var existing = bar.parentNode.querySelector('.save-bar-error');
+    if (existing) { existing.remove(); }
+    var el = document.createElement('p');
+    el.className = 'save-error save-bar-error';
+    el.textContent = message;
+    bar.parentNode.insertBefore(el, bar.nextSibling);
+    setTimeout(function () { if (el.parentNode) { el.remove(); } }, 5000);
+  }
 
-    // Keep the native submit button as a no-JS fallback but hide it when JS
-    // is running — the save-bar button drives submission instead.
-    var originalSubmit = form.querySelector('button[type="submit"].btn-save');
-    if (originalSubmit) { originalSubmit.style.display = 'none'; }
+  // ── Per-pane reinit registry ────────────────────────────────────────────
+  // Each setupFormTracking() call registers a reinit function keyed by pane
+  // ID.  replacePane() calls the registered function after swapping the DOM
+  // so that dirty tracking, listeners, and SortableJS are all re-initialized
+  // on the new content.
+  //
+  // Both paneReinit and replacePane are exposed on window so that the
+  // SortableJS IIFE (which runs in a separate <script> block) can call
+  // replacePane after a successful reorder POST and override paneReinit for
+  // the LLM pane to include SortableJS re-initialization.
+  var paneReinit = window.paneReinit = {};
+
+  // ── replacePane(responseHtml, paneId) ───────────────────────────────────
+  // Core shared function called by all save handlers and the drag handler.
+  // 1. Parse the full page HTML from the server response.
+  // 2. Extract the named pane element.
+  // 3. Replace the current pane's innerHTML with the fresh content.
+  // 4. Re-process HTMX attributes on the new content.
+  // 5. Call the per-pane reinit function to re-snapshot state and re-bind
+  //    listeners.
+  //
+  // Returns true on success, false if the pane could not be found in the
+  // response (caller should show an error).
+  //
+  // Exposed on window so the SortableJS IIFE can call it.
+  var replacePane = window.replacePane = function replacePane(responseHtml, paneId) {
+    var parser   = new DOMParser();
+    var doc      = parser.parseFromString(responseHtml, 'text/html');
+    var freshPane = doc.getElementById(paneId);
+    if (!freshPane) {
+      return false;
+    }
+    var currentPane = document.getElementById(paneId);
+    if (!currentPane) { return false; }
+    currentPane.innerHTML = freshPane.innerHTML;
+    if (typeof htmx !== 'undefined') { htmx.process(currentPane); }
+    // Re-initialize tab-specific JS (dirty tracking, SortableJS, etc.)
+    if (paneReinit[paneId]) { paneReinit[paneId](); }
+    return true;
+  }
+
+  // ── setupFormTracking({ paneId, formSelector, barId }) ──────────────────
+  // Initialises dirty-tracking for one tab pane.  Registers a reinit() in
+  // paneReinit so replacePane() can call it after a DOM swap.
+  //
+  // paneId        — the id of the containing .tab-pane element
+  // formSelector  — CSS selector for the <form> within that pane
+  // barId         — id of the save-bar element
+  function setupFormTracking(cfg) {
+    var paneId       = cfg.paneId;
+    var formSelector = cfg.formSelector;
+    var barId        = cfg.barId;
+
+    var pane = document.getElementById(paneId);
+    var bar  = document.getElementById(barId);
+    if (!pane || !bar) return;
+
+    // Mutable reference — updated when the pane is replaced.
+    var form = pane.querySelector('form');
+    if (!form) return;
 
     // Track which field names the user has actually changed.
     var dirtyNames = new Set();
 
-    // Capture original values for text/password inputs at page load so we
-    // can detect when a field is restored to its original value.
-    var fields = Array.from(
-      form.querySelectorAll('input[type="text"], input[type="password"]')
-    );
+    // originalValues: keyed by input name, stores value/checked at last
+    // snapshot time (page load or after a pane swap).
     var originalValues = {};
-    fields.forEach(function (input) {
-      originalValues[input.name] = input.value;
-    });
 
-    // Checkboxes: store original checked boolean keyed by name.
-    Array.from(form.querySelectorAll('input[type="checkbox"]')).forEach(function (cb) {
-      originalValues[cb.name] = cb.checked;
-    });
+    function snapshotOriginalValues() {
+      originalValues = {};
+      Array.from(
+        form.querySelectorAll('input[type="text"], input[type="password"]')
+      ).forEach(function (input) {
+        originalValues[input.name] = input.value;
+      });
+      Array.from(form.querySelectorAll('input[type="checkbox"]')).forEach(function (cb) {
+        originalValues[cb.name] = cb.checked;
+      });
+    }
+    snapshotOriginalValues();
+
+    // Keep the native submit button hidden when JS is running.
+    function hideNativeSubmit() {
+      var originalSubmit = form.querySelector('button[type="submit"].btn-save');
+      if (originalSubmit) { originalSubmit.style.display = 'none'; }
+    }
+    hideNativeSubmit();
 
     function updateBarVisibility() {
       if (dirtyNames.size > 0) {
@@ -626,9 +702,6 @@
       }
     }
 
-    // Named listener references stored at forEach-callback scope so that
-    // bindFormListeners() can removeEventListener before re-adding, preventing
-    // duplicate listener accumulation after each sources-tab DOM swap.
     function onFormInput(e) {
       var t = e.target;
       if (t.tagName !== 'INPUT') { return; }
@@ -636,7 +709,6 @@
       if (t.value !== originalValues[t.name]) {
         dirtyNames.add(t.name);
       } else {
-        // Restored to original — remove from dirty set.
         dirtyNames.delete(t.name);
       }
       updateBarVisibility();
@@ -645,6 +717,10 @@
     function onFormChange(e) {
       var t = e.target;
       if (t.tagName !== 'INPUT' || t.type !== 'checkbox') { return; }
+      // Source toggle checkboxes carry an hx-post attribute — they are
+      // persisted immediately by HTMX and must not also be added to the
+      // form's dirty set (issue #138, double-fire guard).
+      if (t.hasAttribute('hx-post')) { return; }
       if (t.checked !== originalValues[t.name]) {
         dirtyNames.add(t.name);
       } else {
@@ -707,11 +783,8 @@
       form.removeEventListener('submit', onFormSubmit);
       form.removeEventListener('click',  onFormClick);
 
-      // Listen for input changes on text/password fields.
       form.addEventListener('input',  onFormInput);
-      // Listen for change events on checkboxes (checkboxes do not fire 'input').
       form.addEventListener('change', onFormChange);
-      // Native submit fallback (no-JS path).
       form.addEventListener('submit', onFormSubmit);
       // Clear button clicks (delegated — works after DOM swap).
       form.addEventListener('click',  onFormClick);
@@ -721,7 +794,6 @@
     // Build and submit a sparse FormData containing only dirty fields + tab.
     function submitDirty() {
       if (dirtyNames.size === 0) {
-        // Nothing changed — surface a brief "no changes" hint on the label.
         var label = bar.querySelector('.save-bar-label');
         if (!label) { return; }
         var prev = label.textContent;
@@ -730,9 +802,8 @@
         return;
       }
 
-      // Capture form from the DOM at call time rather than relying on the outer
-      // closure variable, which may be reassigned by a concurrent DOM swap.
-      // This makes the dependency explicit and safe across refactors.
+      // Capture the form reference at call time — it may be reassigned by a
+      // concurrent DOM swap between the click and this line.
       var currentForm = form;
 
       var saveBtn = bar.querySelector('.btn-save');
@@ -741,19 +812,14 @@
       saveBtn.textContent = 'Saving\u2026';
 
       var body = new URLSearchParams();
-      // Always include the tab discriminator.
       var tabInput = currentForm.querySelector('input[name="tab"]');
       if (tabInput) { body.append('tab', tabInput.value); }
 
-      // Include only dirty fields.
       dirtyNames.forEach(function (name) {
         var el = currentForm.elements[name];
         if (!el) { return; }
         if (el.type === 'checkbox') {
           // 'on' = checked; '' = explicitly unchecked (dirty).
-          // Only dirty checkboxes reach here, so '' means "user unchecked this".
-          // The server checks for field presence to distinguish "not changed"
-          // (absent) from "explicitly disabled" (present but empty/falsy).
           body.append(name, el.checked ? 'on' : '');
         } else {
           body.append(name, el.value);
@@ -764,8 +830,6 @@
         method:  'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body:    body.toString(),
-        // Follow redirects (fetch follows by default); we only care about
-        // whether the final response was ok.
         redirect: 'follow',
       })
       .then(function (resp) {
@@ -776,67 +840,22 @@
           return;
         }
 
-        // For the sources tab, replace the pane HTML with the server's
-        // freshly rendered version so that toggle pills, disabled states,
-        // and HTMX attributes reflect the just-saved credential state.
-        var pane = currentForm.closest('.tab-pane');
-        if (pane && pane.id === 'pane-sources') {
-          resp.text().then(function (html) {
-            // The server responds with a full-page redirect after saving.
-            // We parse the entire document to extract just the #pane-sources
-            // pane with its freshly rendered state (toggle pills, badges, etc.).
-            var doc = new DOMParser().parseFromString(html, 'text/html');
-            var freshPane = doc.getElementById('pane-sources');
-            if (!freshPane) {
-              showSaveError(bar, 'Failed to refresh \u2014 unexpected response format.');
-              saveBtn.textContent = prevLabel;
-              return;
-            }
-            pane.innerHTML = freshPane.innerHTML;
-            // Re-process HTMX attributes on the new DOM content.
-            if (typeof htmx !== 'undefined') { htmx.process(pane); }
-            // Re-acquire the form reference and re-snapshot original values
-            // so dirty tracking works on the refreshed DOM.
-            form = pane.querySelector('form');
-            if (!form) {
-              showSaveError(bar, 'Failed to re-initialize form after refresh.');
-              saveBtn.textContent = prevLabel;
-              return;
-            }
-            var originalSubmit = form.querySelector('button[type="submit"].btn-save');
-            if (originalSubmit) { originalSubmit.style.display = 'none'; }
-            fields = Array.from(
-              form.querySelectorAll('input[type="text"], input[type="password"]')
-            );
-            originalValues = {};
-            fields.forEach(function (input) {
-              originalValues[input.name] = input.value;
-            });
-            Array.from(form.querySelectorAll('input[type="checkbox"]')).forEach(function (cb) {
-              originalValues[cb.name] = cb.checked;
-            });
-            // Re-attach dirty-tracking listeners to the new form element.
-            bindFormListeners();
-            dirtyNames.clear();
-            bar.classList.remove('save-bar--visible');
-            bar.setAttribute('aria-hidden', 'true');
-            saveBtn.textContent = 'Saved!';
-            setTimeout(function () { saveBtn.textContent = prevLabel; }, 2000);
-          });
-          return;
-        }
-
-        // Non-sources tabs: update original values in place (no DOM swap).
-        dirtyNames.forEach(function (name) {
-          var el = currentForm.elements[name];
-          if (!el) { return; }
-          originalValues[name] = el.type === 'checkbox' ? el.checked : el.value;
+        // After a successful save, replace the entire active tab pane with
+        // the server-rendered version from the response (issue #138).  This
+        // ensures badges, toggle pills, and HTMX attributes are always
+        // derived from authoritative server state — no client-side mirroring.
+        resp.text().then(function (html) {
+          var ok = replacePane(html, paneId);
+          if (!ok) {
+            // replacePane could not find the pane in the response; most
+            // likely the server returned an unexpected format.
+            showSaveError(bar, 'Save succeeded but refresh failed \u2014 please reload.');
+          }
+          // replacePane → paneReinit already reset dirtyNames and hid the
+          // bar; just update the save button label.
+          saveBtn.textContent = 'Saved!';
+          setTimeout(function () { saveBtn.textContent = prevLabel; }, 2000);
         });
-        dirtyNames.clear();
-        bar.classList.remove('save-bar--visible');
-        bar.setAttribute('aria-hidden', 'true');
-        saveBtn.textContent = 'Saved!';
-        setTimeout(function () { saveBtn.textContent = prevLabel; }, 2000);
       })
       .catch(function () {
         saveBtn.disabled = false;
@@ -846,18 +865,34 @@
     }
 
     bar.querySelector('.btn-save').addEventListener('click', submitDirty);
-  });
 
-  // Inline error helper — injects a transient error span near the save bar.
-  function showSaveError(bar, message) {
-    var existing = bar.parentNode.querySelector('.save-bar-error');
-    if (existing) { existing.remove(); }
-    var el = document.createElement('p');
-    el.className = 'save-error save-bar-error';
-    el.textContent = message;
-    bar.parentNode.insertBefore(el, bar.nextSibling);
-    setTimeout(function () { if (el.parentNode) { el.remove(); } }, 5000);
+    // ── Per-pane reinit ─────────────────────────────────────────────────
+    // Called by replacePane() after the DOM has been swapped.  Re-acquires
+    // the form reference from the refreshed pane, re-snapshots original
+    // values, clears dirty state, re-binds listeners, and hides the save bar.
+    //
+    // The LLM pane additionally re-initializes SortableJS — that is handled
+    // in the drag-to-reorder block below via its own paneReinit entry, which
+    // overrides (wraps) this one.
+    paneReinit[paneId] = function () {
+      var newForm = document.getElementById(paneId).querySelector('form');
+      if (!newForm) { return; }
+      form = newForm;
+      snapshotOriginalValues();
+      dirtyNames.clear();
+      hideNativeSubmit();
+      bindFormListeners();
+      bar.classList.remove('save-bar--visible');
+      bar.setAttribute('aria-hidden', 'true');
+    };
   }
+
+  // ── Initialise form tracking for each tab ───────────────────────────────
+  [
+    { paneId: 'pane-llm',     formSelector: '#pane-llm form',     barId: 'save-bar-llm' },
+    { paneId: 'pane-sources', formSelector: '#pane-sources form', barId: 'save-bar-sources' },
+  ].forEach(setupFormTracking);
+
 }());
 </script>
 {# ── SortableJS drag-to-reorder ──────────────────────────────── #}
@@ -918,16 +953,29 @@
         })
         .then(function (resp) {
           if (resp.ok) {
-            resp.text().then(function (html) {
-              container.innerHTML = html;
-              listEl = container.querySelector('#provider-order-list');
-              sortable.destroy();
-              /* Fresh config — never reuse sortable.options */
-              sortable = initSortable(listEl);
-              if (errorEl) errorEl.style.display = 'none';
-              inFlight = false;
-              /* New sortable starts enabled; no need to re-enable old one */
-            });
+            // Reorder succeeded — replace the entire LLM pane so that the
+            // credential form section reflects the new order (issue #138).
+            // Option A: follow-up GET to /settings?tab=llm for the full page,
+            // then use replacePane() to swap only #pane-llm.  This keeps the
+            // reorder endpoint simple (returns only the order fragment).
+            if (errorEl) errorEl.style.display = 'none';
+            fetch('/settings?tab=llm', { redirect: 'follow' })
+              .then(function (pageResp) { return pageResp.text(); })
+              .then(function (html) {
+                // window.replacePane is set by the dirty-tracking IIFE above.
+                // paneReinit['pane-llm'] is overridden below to include
+                // SortableJS re-initialization on the fresh DOM.
+                if (typeof window.replacePane === 'function') {
+                  window.replacePane(html, 'pane-llm');
+                }
+                inFlight = false;
+              })
+              .catch(function () {
+                /* Follow-up GET failed — optimistic badge update already done;
+                   just re-enable dragging so the user can retry. */
+                sortable.option('disabled', false);
+                inFlight = false;
+              });
           } else {
             if (savedOrder) sortable.sort(savedOrder);
             updatePositionBadges();
@@ -954,6 +1002,32 @@
   }
 
   var sortable = initSortable(listEl);
+
+  // Override pane-llm reinit to also destroy and recreate SortableJS after a
+  // DOM swap.  setupFormTracking() registers a base reinit for pane-llm that
+  // handles form tracking (dirty state, listeners, etc.).  We wrap it here
+  // to add the SortableJS step so that after replacePane('pane-llm') both
+  // form tracking and drag-to-reorder are fully re-initialized.
+  var baseLlmReinit = (window.paneReinit && window.paneReinit['pane-llm'])
+    ? window.paneReinit['pane-llm']
+    : function () {};
+
+  if (window.paneReinit) {
+    window.paneReinit['pane-llm'] = function () {
+      baseLlmReinit();
+      /* Re-acquire container and listEl from the freshly swapped DOM. */
+      var newContainer = document.getElementById('provider-order-container');
+      if (!newContainer) { return; }
+      var newListEl = newContainer.querySelector('#provider-order-list');
+      if (!newListEl) { return; }
+      container = newContainer;
+      listEl    = newListEl;
+      if (sortable) {
+        try { sortable.destroy(); } catch (e) { /* already destroyed — ignore */ }
+      }
+      sortable = initSortable(newListEl);
+    };
+  }
 }());
 </script>
 {# ── Danger Zone script ───────────────────────────────────────── #}

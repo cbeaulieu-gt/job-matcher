@@ -432,6 +432,31 @@ Used specifically for the Primary Skills field, which has three columns (Skill, 
 
 **Exposed globals** — `_makeSkillRow(idx, desc, years, active)` and `_reindexSkillRows()` are exposed on `window` by the row-JS IIFE so the PDF-import IIFE (loaded first in the page) can repopulate the table from import results via `_fillSkillsTable()`.
 
+#### Profile form — education table
+
+Used for the Education field. Four columns (Type, Field of Study, School, Year) plus a remove button. Styles are defined in the same `<style>` block as the skills table in `profile.html`. Use only CSS custom properties from `:root`.
+
+| Class | Element | Notes |
+|---|---|---|
+| `.edu-table` | `<table>` | Full-width, `border-collapse: collapse`; contains `<thead>` + `<tbody id="edu-tbody">` |
+| `.edu-th` | `<th>` | `--font-mono` 0.62rem uppercase 0.08em, `--text-muted`; left-aligned; modifiers below |
+| `.edu-th--year` | modifier on `.edu-th` | Fixed 72px width, centered |
+| `.edu-th--remove` | modifier on `.edu-th` | Fixed 32px width (no header text) |
+| `.edu-td` | `<td>` | `padding: 3px 6px 3px 0`, `vertical-align: middle` |
+| `.edu-td--year` | modifier on `.edu-td` | Centered |
+| `.edu-td--remove` | modifier on `.edu-td` | Right-aligned |
+| `.edu-row` | `<tr>` | One degree per row; added/removed by JS |
+| `.edu-input` | `<input>` or `<select>` | Same transparent-at-rest / `--bg-raised`-on-hover / `--border-strong`-on-focus style as `.skills-input` |
+| `.edu-input--year` | modifier on `.edu-input` | Fixed 72px width, centered |
+| `.btn-edu-remove` | modifier on `.btn-row-remove` | Same style as `.btn-row-remove`; delegated click handler calls `removeEducationRow()` |
+| `#btn-add-edu` | `<button type="button">` | Handled by `#btn-add-edu` id selector in the delegated click handler; calls `addEducationRow()` |
+
+**Form field names** — `edu_type[]`, `edu_field[]`, `edu_school[]`, `edu_year[]`. The server's `_parse_education_rows()` zips these parallel arrays into structured dicts.
+
+**Type column** — rendered as a `<select>` with options: `—` (empty), Associate, B.A., B.S., M.A., M.S., MBA, Ph.D., J.D., M.D., Other.
+
+**Exposed globals** — `_makeEduRow(degType, degField, school, year)` is exposed on `window` by the row-JS IIFE so the PDF-import IIFE can repopulate the table from import results via `_fillEduTable()`.
+
 ### Save Bar
 
 A sticky bar that slides up from the bottom of the form when the user edits a credential field. Dismisses on form submit. HTMX checkbox toggles do **not** trigger it — only `<input type="text">` and `<input type="password">` changes do.

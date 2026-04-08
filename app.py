@@ -1145,6 +1145,48 @@ def settings():
     )
 
 
+def _parse_education_rows(form) -> list[dict]:
+    """Extract a list of structured education objects from the education table form fields.
+
+    Reads the four parallel ``edu_type[]``, ``edu_field[]``, ``edu_school[]``,
+    and ``edu_year[]`` arrays from the submitted form and zips them into
+    structured dicts.  Rows where all four fields are empty are silently
+    discarded.
+
+    Args:
+        form: The Flask ``request.form`` ImmutableMultiDict.
+
+    Returns:
+        List of dicts, each with keys ``degree_type``, ``degree_field``,
+        ``school``, and ``graduation_year``.
+    """
+    types = form.getlist("edu_type[]")
+    fields = form.getlist("edu_field[]")
+    schools = form.getlist("edu_school[]")
+    years = form.getlist("edu_year[]")
+
+    # Zip to the shortest list to guard against mismatched row counts.
+    rows = []
+    for deg_type, deg_field, school, year in zip(types, fields, schools, years):
+        deg_type = deg_type.strip()
+        deg_field = deg_field.strip()
+        school = school.strip()
+        year = year.strip()
+        # Discard non-numeric year values to prevent nonsense input from being persisted.
+        if year and not year.isdigit():
+            year = ""
+        # Skip rows where every field is empty.
+        if not any([deg_type, deg_field, school, year]):
+            continue
+        rows.append({
+            "degree_type": deg_type,
+            "degree_field": deg_field,
+            "school": school,
+            "graduation_year": year,
+        })
+    return rows
+
+
 def _parse_repeating_rows(form, field_name: str) -> list[str]:
     """Extract a list of non-empty strings from repeating form row inputs.
 
@@ -1196,7 +1238,7 @@ Extract the following fields and respond with ONLY a JSON object. No explanation
 
 The JSON must have exactly these keys:
 - "primary_skills": array of objects, each with "skill" (string), "years" (integer estimate), "status" ("active" or "dormant")
-- "education": array of strings, each formatted as "Degree, Institution, Year" (e.g. "BS Computer Science, MIT, 2015")
+- "education": array of objects, each with "degree_type" (e.g. "B.S.", "M.S."), "degree_field" (e.g. "Computer Science"), "school" (institution name), "graduation_year" (four-digit year string)
 - "seniority": string inferred from job titles (e.g. "Junior", "Mid-level", "Senior", "Staff", "Lead", "Principal")
 - "preferred_industries": array of strings inferred from work history (e.g. "fintech", "healthtech", "developer tooling")
 - "location_center": string from contact info if present (e.g. "Miami, FL"), or null if not found
@@ -1217,7 +1259,7 @@ Extract the following fields and respond with ONLY a JSON object. No explanation
 
 The JSON must have exactly these keys:
 - "primary_skills": array of objects, each with "skill" (string), "years" (integer estimate), "status" ("active" or "dormant"). Include ALL skills from both the resume and existing profile. Do not remove existing skills.
-- "education": array of strings, each formatted as "Degree, Institution, Year". Include entries from both resume and existing profile. Do not duplicate identical entries.
+- "education": array of objects, each with "degree_type" (e.g. "B.S.", "M.S."), "degree_field" (e.g. "Computer Science"), "school" (institution name), "graduation_year" (four-digit year string). Include entries from both resume and existing profile. Do not duplicate identical entries.
 - "seniority": string inferred from job titles. If the existing profile already has a seniority value, keep it unchanged. Only fill this if the existing value is empty.
 - "preferred_industries": array of strings inferred from work history. Include industries from both resume and existing profile without duplicates.
 - "location_center": string from contact info if present (e.g. "Miami, FL"), or null if not found. If the existing profile has a location, keep it.
@@ -1327,13 +1369,32 @@ def _merge_import_result(current: dict, imported: dict) -> dict:
             existing_skill_names.add(name.lower())
     result["primary_skills"] = existing_skills
 
-    # Education: append new, skip duplicates (case-insensitive)
-    existing_edu = list(current.get("education", []))
-    existing_edu_lower = {e.lower() for e in existing_edu}
+    # Education: append new structured objects, skip duplicates (all four fields, case-insensitive).
+    # Existing entries may be structured dicts or legacy flat strings — normalise to dicts.
+    def _normalise_edu(e: object) -> dict:
+        """Convert a legacy flat string or a structured dict to an education object."""
+        if isinstance(e, dict):
+            return e
+        # Legacy free-text: keep as a pseudo-object with only degree_field filled.
+        return {"degree_type": "", "degree_field": str(e), "school": "", "graduation_year": ""}
+
+    def _edu_key(e: dict) -> tuple:
+        """Return a case-folded 4-tuple for dedup comparison."""
+        return (
+            e.get("degree_type", "").lower(),
+            e.get("degree_field", "").lower(),
+            e.get("school", "").lower(),
+            e.get("graduation_year", "").lower(),
+        )
+
+    existing_edu: list[dict] = [_normalise_edu(e) for e in current.get("education", [])]
+    existing_edu_keys = {_edu_key(e) for e in existing_edu}
     for entry in imported.get("education", []):
-        if entry.lower() not in existing_edu_lower:
-            existing_edu.append(entry)
-            existing_edu_lower.add(entry.lower())
+        entry_norm = _normalise_edu(entry)
+        key = _edu_key(entry_norm)
+        if key not in existing_edu_keys:
+            existing_edu.append(entry_norm)
+            existing_edu_keys.add(key)
     result["education"] = existing_edu
 
     # Seniority: keep existing if set, fill from import if empty
@@ -1778,7 +1839,7 @@ def profile():
             new_profile: dict = {
                 "primary_skills": primary_skills,
                 "anti_preferences": _parse_repeating_rows(request.form, "anti_preferences"),
-                "education": _parse_repeating_rows(request.form, "education"),
+                "education": _parse_education_rows(request.form),
                 "seniority": request.form.get("seniority", "").strip(),
                 "preferred_industries": _parse_repeating_rows(request.form, "preferred_industries"),
                 "location": location_block,

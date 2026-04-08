@@ -291,7 +291,9 @@
               {{ field.label }}
             </label>
             {% if field.type == "password" %}
-              <div style="display: flex; gap: 8px; align-items: center;">
+              {# data-field-id links the Clear button to its input — JS uses it to construct
+                 the __clear__ hidden field name for the server-side clear mechanism #}
+              <div class="password-field-wrapper">
                 <input
                   id="{{ provider_key }}__{{ field.name }}"
                   class="settings-input"
@@ -410,7 +412,7 @@
               {{ field.label }}
             </label>
             {% if field.type == "password" %}
-              <div style="display: flex; gap: 8px; align-items: center;">
+              <div class="password-field-wrapper">
                 <input
                   id="{{ source_key }}__{{ field.name }}"
                   class="settings-input"

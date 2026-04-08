@@ -1733,6 +1733,13 @@ body {
   outline-offset: 2px;
 }
 
+/* Flex row wrapping a password input and its accompanying Clear button. */
+.password-field-wrapper {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
 /* Applied to a password input after the Clear button is clicked — red border
    signals that the field will be cleared on the next save. */
 .input--clearing {

@@ -315,6 +315,7 @@ All buttons extend `.btn` (base). Add a modifier class for semantic variants.
 | `.settings-label` | `<label>` | `--font-mono` 0.68rem uppercase 0.08em, `--text-muted` |
 | `.settings-label--mt` | modifier on `.settings-label` | Adds `margin-top: 1rem`; use when a label follows a `.row-list` without a natural gap |
 | `.settings-input` | `<input>`, `<textarea>` | `--font-mono` 0.76rem; `--bg-raised` bg; width 100% |
+| `.password-field-wrapper` | `<div>` | Flex row wrapping a password input + Clear button; `gap: 8px`, `align-items: center` |
 | `.input--clearing` | modifier on `.settings-input` | Added by JS when the Clear button is clicked; `border-color: var(--score-low-border)` — signals the field will be cleared on save |
 | `.filter-input` | `<input type="text">` | Filter bar text input; width 220px |
 | `.filter-select` | `<select>` | Filter bar dropdown; custom SVG arrow |

@@ -152,6 +152,19 @@
       text-align: center;
     }
 
+    /* Suppress the native OS arrow on the Type <select> and replace it with
+       a themed SVG chevron that matches the dark background. Without this,
+       the browser renders its own white/light-chrome arrow. */
+    select.edu-input {
+      appearance: none;
+      -webkit-appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23545c6b'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 8px center;
+      padding-right: 24px;
+      cursor: pointer;
+    }
+
     /* ── Skill active/dormant toggle ─────────────────────────────────────── */
     .skill-toggle {
       display: inline-flex;
@@ -520,7 +533,7 @@
           {% endif %}
         </tbody>
       </table>
-      <button type="button" id="btn-add-edu">+ Add education</button>
+      <button type="button" class="btn-row-add" id="btn-add-edu">+ Add education</button>
 
       <hr class="form-section-divider">
 

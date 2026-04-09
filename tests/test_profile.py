@@ -387,6 +387,39 @@ class TestProfileGet:
         assert "M.S. in Data Science from Stanford" in body
         assert "Ph.D. in Machine Learning from CMU" in body
 
+    def test_renders_already_structured_education(
+        self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
+    ):
+        """GET must pass already-structured education dicts through unchanged.
+
+        Verifies that the migration guard does not re-wrap dicts that are already
+        in the correct structured format — structured data should render its fields.
+        """
+        _write_config(tmp_config_path)
+        _write_profile(tmp_profile_path, {
+            "primary_skills": [],
+            "anti_preferences": [],
+            "seniority": "",
+            "preferred_industries": [],
+            "location": {"geocode_fallback": "pass"},
+            "scoring_notes": [],
+            "education": [
+                {
+                    "degree_type": "M.S.",
+                    "degree_field": "Software Engineering",
+                    "school": "Stanford",
+                    "graduation_year": "2015",
+                }
+            ],
+        })
+        resp = client.get("/profile")
+        assert resp.status_code == 200
+        body = resp.data.decode()
+        assert "M.S." in body
+        assert 'value="Software Engineering"' in body
+        assert 'value="Stanford"' in body
+        assert 'value="2015"' in body
+
     def test_renders_empty_education_array(
         self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
     ):
@@ -403,6 +436,7 @@ class TestProfileGet:
         })
         resp = client.get("/profile")
         assert resp.status_code == 200
+
 
 
 # ===========================================================================

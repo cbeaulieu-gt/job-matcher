@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Note (2026-04-09):** PR #162 simplified the import architecture — `_IMPORT_PROMPT_MERGE` was removed and `_build_import_prompt()` now takes a single `resume_text` argument. Both fresh and merge modes use the extraction-only prompt; merging is handled by `_merge_import_result()` in code. See issue #161.
+
 **Goal:** Add PDF resume upload to `/profile` that extracts candidate data via LLM and pre-fills the profile form for review before saving.
 
 **Architecture:** Refactor `LLMProvider` to expose a generic `generate()` method (decoupled from scoring), add a `POST /profile/import-pdf` endpoint that extracts PDF text via `pypdf` and sends it through the provider chain, and add a collapsible UI section at the top of the profile form with vanilla JS to distribute the response across form fields.

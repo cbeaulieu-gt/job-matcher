@@ -1347,7 +1347,7 @@ def _normalise_education(entries: list) -> list[dict]:
         year_m = _YEAR_RE.search(s)
         if year_m:
             result["graduation_year"] = year_m.group(0)
-            s = (s[: year_m.start()] + s[year_m.end() :]).strip().strip(",").strip()
+            s = (s[: year_m.start()] + s[year_m.end() :]).strip(" ,").lstrip()
 
         # Attempt to match a known degree prefix at the start.
         prefix_m = _DEGREE_PREFIX_RE.match(s)
@@ -1360,7 +1360,7 @@ def _normalise_education(entries: list) -> list[dict]:
             # Remaining text split by ", " gives field then school (or just field).
             parts = [p.strip() for p in remainder.split(",", 1)]
             result["degree_field"] = parts[0] if parts else ""
-            result["school"] = parts[1].strip() if len(parts) > 1 else ""
+            result["school"] = parts[1] if len(parts) > 1 else ""
         else:
             # No recognised degree prefix — split by "," and use heuristics.
             parts = [p.strip() for p in s.split(",")]

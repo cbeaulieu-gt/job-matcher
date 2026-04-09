@@ -790,3 +790,10 @@ class TestNormaliseEducation:
         assert result[0]["graduation_year"] == "2016"
         # Dict entry should pass through intact
         assert result[1]["school"] == "Stanford"
+
+    def test_flat_string_year_at_beginning(self):
+        """Year appearing at the start of the string is still extracted correctly."""
+        result = app_module._normalise_education(["2016 BS Computer Science, MIT"])
+        assert result[0]["graduation_year"] == "2016"
+        assert result[0]["degree_type"] == "BS"
+        assert result[0]["school"] == "MIT"

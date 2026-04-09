@@ -306,6 +306,34 @@ class TestProfileGet:
         resp = client.get("/profile")
         assert resp.status_code == 200
 
+    def test_renders_legacy_string_education(
+        self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
+    ):
+        """GET must not 500 when profile.json has old-format plain-string education entries.
+
+        Regression test for issue #149: PR #140 restructured education from free-text
+        strings to dicts.  Profiles written before the migration still contain strings;
+        load_profile() must normalise them so the template never receives a str where
+        it expects a dict with .get().
+        """
+        _write_config(tmp_config_path)
+        _write_profile(tmp_profile_path, {
+            "primary_skills": [],
+            "anti_preferences": [],
+            "seniority": "",
+            "preferred_industries": [],
+            "location": {"geocode_fallback": "pass"},
+            "scoring_notes": [],
+            "education": ["B.S. in Computer Science from MIT"],  # old free-text format
+        })
+        resp = client.get("/profile")
+        assert resp.status_code == 200
+        body = resp.data.decode()
+        # The legacy string must be surfaced in the degree_field column.
+        assert "B.S. in Computer Science from MIT" in body
+        # Must use structured field names, not a raw textarea.
+        assert 'name="edu_field[]"' in body
+
 
 # ===========================================================================
 # POST /profile — happy path

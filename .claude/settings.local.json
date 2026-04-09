@@ -18,7 +18,9 @@
       "mcp__plugin_github_github__update_pull_request",
       "PowerShell(git:*)",
       "Bash(pytest:*)",
-      "Bash(gh run:*)"
+      "Bash(gh run:*)",
+      "Bash(docker compose:*)",
+      "Bash(docker run:*)"
     ]
   }
 }

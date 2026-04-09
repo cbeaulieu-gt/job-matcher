@@ -1,4 +1,4 @@
-# publish.yml — refs #341
+# publish.yml — fixes #166
 #
 # Mirrors the private repo (cbeaulieu-gt/job-matcher-pr) to the
 # public repo (cbeaulieu-gt/job-matcher).
@@ -6,27 +6,23 @@
 # Prerequisites:
 #   - A secret named PUBLIC_REPO_PAT must be set in the private repo's
 #     Settings → Secrets and variables → Actions. The PAT must have
-#     the "repo" write scope on the public repo.
+#     the "repo" write scope on both the public code repo and the
+#     public wiki repo.
 #
 # Manual trigger (workflow_dispatch):
-#   - Publishes `main` by default.
-#   - Set the `ref` input to publish a specific branch or tag instead
-#     (e.g. `refs/tags/v1.2.3` or `my-branch`).
+#   - Always pushes main + all tags to the public repo.
+#   - Also syncs the wiki.
+#   - Does NOT create a release (no tag context available).
 #
 # Automatic trigger:
 #   - Any tag matching `v*` pushed to the private repo triggers this
-#     workflow and publishes that tag (plus all other tags) to the
-#     public repo.
+#     workflow, pushes main + tags, syncs the wiki, and copies the
+#     release notes to the public repo.
 
 name: Publish to public repo
 
 on:
   workflow_dispatch:
-    inputs:
-      ref:
-        description: "Branch or tag to publish (default: main)"
-        required: false
-        default: "main"
   push:
     tags:
       - "v*"
@@ -41,7 +37,28 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Push to public repo
+      - name: Push code to public repo
         run: |
           git remote add public https://x-access-token:${{ secrets.PUBLIC_REPO_PAT }}@github.com/cbeaulieu-gt/job-matcher.git
-          git push public ${{ inputs.ref || github.ref }} --tags
+          git push public main --force
+          git push public --tags --force
+
+      - name: Sync wiki
+        run: |
+          git clone https://x-access-token:${{ secrets.PUBLIC_REPO_PAT }}@github.com/cbeaulieu-gt/job-matcher-pr.wiki.git wiki
+          cd wiki
+          git remote add public https://x-access-token:${{ secrets.PUBLIC_REPO_PAT }}@github.com/cbeaulieu-gt/job-matcher.wiki.git
+          git push public master --force
+
+      - name: Sync release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_REPO_PAT }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          TITLE=$(gh release view "$TAG" --repo cbeaulieu-gt/job-matcher-pr --json name -q .name)
+          BODY=$(gh release view "$TAG" --repo cbeaulieu-gt/job-matcher-pr --json body -q .body)
+          gh release create "$TAG" \
+            --repo cbeaulieu-gt/job-matcher \
+            --title "$TITLE" \
+            --notes "$BODY" || echo "Release may already exist — skipping"

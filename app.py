@@ -1301,7 +1301,7 @@ def _parse_import_response(raw: str) -> dict | None:
         cleaned = strip_fences(raw)
         data = json.loads(cleaned)
     except (json.JSONDecodeError, ValueError):
-        print(f"[import] _parse_import_response: failed to parse LLM response (first 500 chars): {raw[:500]!r}")
+        app.logger.warning("[import] _parse_import_response: failed to parse LLM response (first 500 chars): %r", raw[:500])
         return None
     data.setdefault("primary_skills", [])
     data.setdefault("education", [])

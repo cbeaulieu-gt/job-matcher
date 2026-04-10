@@ -280,14 +280,27 @@ class TestIngestRunningHelper:
         assert app_module._ingest_process is None
 
     def test_sets_last_run_after_exit(self, monkeypatch):
-        """When process exits, _last_run should be populated from parsed log output."""
-        # Use the real format that ingest.py produces.
+        """When process exits, _last_run should be populated from the event queue
+        complete event (subprocess stdout is now piped through StdoutReader, not
+        a temp file — summary is extracted from the queue instead)."""
+        from ingest_events import EventQueue
         summary_line = (
             "Run complete: 1 source(s) | 5 fetched | 10 pre-filtered | 2 dupes skipped | "
             "3 scored (0 failed) | 0 scrape fallbacks | ~500 tok | ~$0.0001"
         )
+        # Seed a fresh queue with the complete event so _ingest_running() finds it.
+        q = EventQueue()
+        q.push({
+            "type": "complete",
+            "source": None,
+            "title": None,
+            "url": None,
+            "detail": {"summary": summary_line},
+            "timestamp": "2026-04-09T00:00:00+00:00",
+        })
+        monkeypatch.setattr(app_module, "event_queue", q)
         monkeypatch.setattr(app_module, "_ingest_process", _make_mock_process(exited=True))
-        monkeypatch.setattr(app_module, "_ingest_log_file", _make_log_file(summary_line))
+        monkeypatch.setattr(app_module, "_ingest_log_file", None)
         monkeypatch.setattr(app_module, "_last_run", None)
         app_module._ingest_running()
         assert app_module._last_run is not None

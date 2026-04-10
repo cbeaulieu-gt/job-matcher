@@ -690,6 +690,8 @@ Slide-out panel for real-time ingest log stream. Fixed to the right edge of the 
 
 **Accessibility:** The FAB carries `aria-label="Open ingest log"`, `aria-controls="ingest-drawer"`, and `aria-expanded="false"` (initial state in HTML; JS toggles it to `"true"` on open). The event list has `role="log"` and `aria-label="Ingest events"` — `aria-live` is intentionally absent from the list (see `#ingest-sr-announce` above). Escape key closes the drawer. All interactive elements have `:focus-visible` amber outlines.
 
+**Focus management:** `openDrawer({ focus: true })` moves focus to `.ingest-drawer-close` so keyboard users land inside the drawer immediately after activation. This is only done for user-initiated opens (FAB click, keyboard). Programmatic opens (SSE auto-connect, sessionStorage restore) pass `{ focus: false }` to avoid stealing focus from the user. `closeDrawer()` always returns focus to `#ingest-fab`, so Tab continues from a predictable place.
+
 ### Ingest Trigger (feed page)
 
 Rendered via `templates/_ingest_trigger.html`, included in `index.html` inside a `.ingest-trigger-container` div. Has two states:

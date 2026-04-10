@@ -11,7 +11,6 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 import threading
 import time as _time
 from concurrent.futures import ThreadPoolExecutor
@@ -696,8 +695,9 @@ _ingest_lock: threading.Lock = threading.Lock()
 # Holds the running Popen handle while ingest.py is active. None when idle.
 _ingest_process: subprocess.Popen | None = None
 
-# Temp file that receives subprocess stdout, avoiding OS pipe-buffer deadlock.
-_ingest_log_file: "tempfile.SpooledTemporaryFile | None" = None
+# Legacy handle — no longer written; kept so existing tests/monkeypatches that
+# set _ingest_log_file still work without AttributeError.
+_ingest_log_file: "object | None" = None
 
 # Stores the result of the most recently completed ingest run.
 _last_run: dict | None = None
@@ -853,11 +853,9 @@ def ingest_trigger():
     Uses sys.executable so the subprocess runs in the same virtualenv as the
     app server, picking up all installed dependencies automatically.
 
-    stdout is redirected to a NamedTemporaryFile rather than subprocess.PIPE.
-    This avoids the OS pipe-buffer deadlock: if the process emits more than
-    ~64 KB of output (common with 200+ listings), a PIPE write blocks until the
-    reader drains it — but app.py only reads after the process exits, causing
-    a hang.  A temp file has no such size limit.
+    stdout is redirected through subprocess.PIPE to the _stdout_reader daemon
+    thread, which parses each line into a structured event and pushes it to
+    the global event_queue for SSE consumers.
     """
     global _ingest_process, _ingest_log_file
 

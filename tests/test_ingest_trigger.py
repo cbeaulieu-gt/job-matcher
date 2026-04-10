@@ -38,15 +38,27 @@ def client():
         yield c
 
 
-def _make_mock_process(*, exited: bool = False, stdout: str = "") -> MagicMock:
+def _make_mock_process(*, exited: bool = False, stdout_lines: list | None = None) -> MagicMock:
     """Return a MagicMock that behaves like a running or finished Popen handle.
 
-    For exited processes, the caller should also set ``app_module._ingest_log_file``
-    to a file-like object containing ``stdout`` so that ``_ingest_running()``
-    can read it.  Use ``_make_log_file(stdout)`` as a convenience.
+    ``stdout_lines`` controls what the _stdout_reader thread sees.  Each element
+    is returned by successive readline() calls; a final empty string signals EOF
+    and terminates the reader loop.  Defaults to [""] (immediate clean EOF) so
+    the reader thread exits without producing MagicMock noise in stderr.
     """
+    if stdout_lines is None:
+        stdout_lines = [""]  # clean EOF by default
+
     proc = MagicMock()
     proc.poll.return_value = None if not exited else 0
+
+    # Give the mock a real readline() sequence so _stdout_reader terminates
+    # cleanly instead of trying to iterate a raw MagicMock.
+    readline_returns = list(stdout_lines)
+    if readline_returns[-1] != "":
+        readline_returns.append("")  # ensure EOF terminator
+    proc.stdout.readline.side_effect = readline_returns
+
     return proc
 
 
@@ -71,7 +83,6 @@ class TestIngestTrigger:
             return _make_mock_process()
 
         monkeypatch.setattr(app_module.subprocess, "Popen", mock_popen)
-        monkeypatch.setattr(app_module.tempfile, "TemporaryFile", lambda **kw: io.StringIO())
         resp = client.post("/ingest/trigger")
         assert resp.status_code == 202
         assert len(spawned) == 1
@@ -81,7 +92,6 @@ class TestIngestTrigger:
         monkeypatch.setattr(
             app_module.subprocess, "Popen", lambda *a, **kw: _make_mock_process()
         )
-        monkeypatch.setattr(app_module.tempfile, "TemporaryFile", lambda **kw: io.StringIO())
         resp = client.post("/ingest/trigger")
         body = resp.data.decode()
         assert "ingest-status" in body
@@ -96,7 +106,6 @@ class TestIngestTrigger:
             return _make_mock_process()
 
         monkeypatch.setattr(app_module.subprocess, "Popen", mock_popen)
-        monkeypatch.setattr(app_module.tempfile, "TemporaryFile", lambda **kw: io.StringIO())
         client.post("/ingest/trigger")
         assert "--hours" in spawned[0]
         assert "25" in spawned[0]
@@ -110,7 +119,6 @@ class TestIngestTrigger:
             return _make_mock_process()
 
         monkeypatch.setattr(app_module.subprocess, "Popen", mock_popen)
-        monkeypatch.setattr(app_module.tempfile, "TemporaryFile", lambda **kw: io.StringIO())
         client.post("/ingest/trigger", data={"hours": "48"})
         assert "48" in spawned[0]
 
@@ -123,7 +131,6 @@ class TestIngestTrigger:
             return _make_mock_process()
 
         monkeypatch.setattr(app_module.subprocess, "Popen", mock_popen)
-        monkeypatch.setattr(app_module.tempfile, "TemporaryFile", lambda **kw: io.StringIO())
         client.post("/ingest/trigger", data={"rescore": "1"})
         assert "--rescore" in spawned[0]
 
@@ -136,7 +143,6 @@ class TestIngestTrigger:
             return _make_mock_process()
 
         monkeypatch.setattr(app_module.subprocess, "Popen", mock_popen)
-        monkeypatch.setattr(app_module.tempfile, "TemporaryFile", lambda **kw: io.StringIO())
         client.post("/ingest/trigger")
         assert "--rescore" not in spawned[0]
 
@@ -149,7 +155,6 @@ class TestIngestTrigger:
             return _make_mock_process()
 
         monkeypatch.setattr(app_module.subprocess, "Popen", mock_popen)
-        monkeypatch.setattr(app_module.tempfile, "TemporaryFile", lambda **kw: io.StringIO())
         client.post("/ingest/trigger", data={"hours": "not-a-number"})
         assert "25" in spawned[0]
 
@@ -162,7 +167,6 @@ class TestIngestTrigger:
             return _make_mock_process()
 
         monkeypatch.setattr(app_module.subprocess, "Popen", mock_popen)
-        monkeypatch.setattr(app_module.tempfile, "TemporaryFile", lambda **kw: io.StringIO())
         client.post("/ingest/trigger")
         assert spawned[0][0] == sys.executable
 
@@ -171,7 +175,6 @@ class TestIngestTrigger:
         def failing_popen(cmd, **kwargs):
             raise OSError("python not found")
         monkeypatch.setattr(app_module.subprocess, "Popen", failing_popen)
-        monkeypatch.setattr(app_module.tempfile, "TemporaryFile", lambda **kw: io.StringIO())
         resp = client.post("/ingest/trigger")
         assert resp.status_code == 500
 

@@ -785,7 +785,7 @@ closes #93"
 
 ### Step 3.1: Write failing tests for SSE endpoint
 
-- [ ] Create `tests/test_ingest_stream.py`:
+- [x] Create `tests/test_ingest_stream.py`:
 
 ```python
 """Integration tests for the /ingest/stream SSE endpoint."""
@@ -913,7 +913,7 @@ class TestIngestStream:
         assert resp.status_code == 429
 ```
 
-- [ ] Run tests to verify they fail:
+- [x] Run tests to verify they fail:
 
 ```
 pytest tests/test_ingest_stream.py -v
@@ -923,7 +923,7 @@ Expected: FAIL — no `/ingest/stream` route exists yet
 
 ### Step 3.2: Implement StdoutReader and SSE endpoint in app.py
 
-- [ ] Add imports at top of `app.py` (near existing imports):
+- [x] Add imports at top of `app.py` (near existing imports):
 
 ```python
 from datetime import datetime, timezone
@@ -932,13 +932,13 @@ from ingest_events import IngestEventParser, event_queue
 
 (If `datetime` is already imported, just add the `timezone` name to the existing import.)
 
-- [ ] Add constant after `_last_run` declaration (around line 702):
+- [x] Add constant after `_last_run` declaration (around line 702):
 
 ```python
 MAX_SSE_CONNECTIONS: int = 2
 ```
 
-- [ ] Add the StdoutReader function (after the `_parse_ingest_summary` function, around line 740):
+- [x] Add the StdoutReader function (after the `_parse_ingest_summary` function, around line 740):
 
 ```python
 def _stdout_reader(proc: subprocess.Popen) -> None:
@@ -989,7 +989,7 @@ def _stdout_reader(proc: subprocess.Popen) -> None:
         })
 ```
 
-- [ ] Modify the `/ingest/trigger` route to use PIPE + reader thread instead of temp file.
+- [x] Modify the `/ingest/trigger` route to use PIPE + reader thread instead of temp file.
 
 In `app.py`, replace the subprocess launch block inside `ingest_trigger()` (the `try` block around lines 829–834):
 
@@ -1034,7 +1034,7 @@ In `app.py`, replace the subprocess launch block inside `ingest_trigger()` (the 
         reader.start()
 ```
 
-- [ ] Update the `_ingest_running()` function: remove the temp file read logic since `StdoutReader` now handles parsing. The function still needs to detect process completion and parse the summary for backward compatibility with `/ingest/status`.
+- [x] Update the `_ingest_running()` function: remove the temp file read logic since `StdoutReader` now handles parsing. The function still needs to detect process completion and parse the summary for backward compatibility with `/ingest/status`.
 
 Replace the `_ingest_running()` exit-handling block. The section that reads from `_ingest_log_file` should be simplified — the StdoutReader handles event streaming, but `_ingest_running()` still needs to set `_last_run` for the `/ingest/status` endpoint. Since we no longer have a temp file, extract the summary from the event queue instead:
 
@@ -1073,7 +1073,7 @@ Replace the `_ingest_running()` exit-handling block. The section that reads from
         _ingest_log_file = None
 ```
 
-- [ ] Add the SSE endpoint (after the `/ingest/status` route, around line 863):
+- [x] Add the SSE endpoint (after the `/ingest/status` route, around line 863):
 
 ```python
 @app.route("/ingest/stream")
@@ -1127,9 +1127,9 @@ def ingest_stream():
     )
 ```
 
-- [ ] Also add `import json` to `app.py` imports if not already present.
+- [x] Also add `import json` to `app.py` imports if not already present.
 
-- [ ] Run SSE integration tests:
+- [x] Run SSE integration tests:
 
 ```
 pytest tests/test_ingest_stream.py -v
@@ -1137,7 +1137,7 @@ pytest tests/test_ingest_stream.py -v
 
 Expected: ALL PASS
 
-- [ ] Run existing ingest trigger tests to verify backward compat:
+- [x] Run existing ingest trigger tests to verify backward compat:
 
 ```
 pytest tests/test_ingest_trigger.py -v
@@ -1145,7 +1145,7 @@ pytest tests/test_ingest_trigger.py -v
 
 Expected: ALL PASS (may need minor fixture updates for the subprocess change — if `tempfile.TemporaryFile` is still patched, it should be harmless since it's no longer called)
 
-- [ ] Commit:
+- [x] Commit:
 
 ```
 git add app.py tests/test_ingest_stream.py

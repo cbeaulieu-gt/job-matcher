@@ -757,6 +757,7 @@ def _stdout_reader(proc: subprocess.Popen) -> None:
     parser = IngestEventParser()
     saw_complete = False
     try:
+        # readline() returns '' (empty string, not '\n') at EOF — iter sentinel stops on that
         for raw_line in iter(proc.stdout.readline, ""):
             line = raw_line.rstrip("\n")
             if not line:
@@ -877,7 +878,6 @@ def ingest_trigger():
         if _ingest_process is not None and _ingest_process.poll() is None:
             return jsonify({"error": "already running"}), 409
 
-        event_queue.clear()
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -888,6 +888,7 @@ def ingest_trigger():
             )
         except (OSError, PermissionError) as e:
             return jsonify({"error": f"Failed to start ingestion: {e}"}), 500
+        event_queue.clear()
 
         _ingest_process = proc
         _ingest_log_file = None  # no longer used; kept for backward compat

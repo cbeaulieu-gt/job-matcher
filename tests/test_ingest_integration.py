@@ -19,8 +19,6 @@ from __future__ import annotations
 
 import io
 import json
-import threading
-import time
 
 import pytest
 
@@ -87,7 +85,7 @@ def _make_fake_proc(lines: list[str]) -> object:
         stdout = fake_stdout
 
         def wait(self):
-            return 0 if any("complete" in l.lower() for l in lines) else 1
+            return 0 if any("complete" in line.lower() for line in lines) else 1
 
         def kill(self):
             pass

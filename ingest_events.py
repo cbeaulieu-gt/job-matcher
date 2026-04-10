@@ -239,6 +239,7 @@ class EventQueue:
         """Schedule queue cleanup 60s after last SSE disconnect."""
         if self._cleanup_timer is not None:
             self._cleanup_timer.cancel()
+            self._cleanup_timer = None
         self._cleanup_timer = threading.Timer(60.0, self._cleanup_if_idle)
         self._cleanup_timer.daemon = True
         self._cleanup_timer.start()
@@ -318,9 +319,16 @@ class EventQueue:
     def subscribe(self, last_id: int = 0) -> Generator[dict, None, None]:
         """Yield events from last_id onward, blocking when caught up.
 
-        Returns when a terminal event (complete/aborted) is yielded.
-        If the queue is empty and has no terminal event, yields a synthetic
-        idle event and returns immediately.
+        - Normal path: events with id > last_id are yielded in order; when
+          caught up the generator blocks on ``_new_event`` until new events
+          arrive.  ``last_id`` enables resume after a reconnect by skipping
+          events the client has already seen.
+        - Idle path: if the queue is empty and no run is active (no terminal
+          event present), a synthetic ``idle`` event is yielded immediately so
+          the SSE client receives traffic at connect time rather than hanging on
+          a silent stream.  The generator returns after yielding it.
+        - Termination: the generator returns after yielding a terminal event
+          (``complete`` or ``aborted``), signalling the SSE response to close.
         """
         # Empty queue with no active run -> immediate idle
         if self.is_empty() and not self.has_terminal():

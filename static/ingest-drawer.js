@@ -364,6 +364,10 @@
     // reconnect; we only need the query param for the initial connection when
     // we want to resume a previous run (not currently needed, so we just open
     // the plain URL and rely on the header mechanism for reconnects).
+    // Note: the browser EventSource API does not expose response headers, so
+    // the client cannot verify that the server returned Content-Type: text/event-stream.
+    // If the server returns an error page (text/html), the browser silently fails to
+    // parse it. Server-side Content-Type assertions are covered in the Flask tests.
     eventSource = new EventSource("/ingest/stream");
 
     eventSource.onmessage = function (e) {

@@ -4,9 +4,7 @@ import threading
 import time
 import uuid
 
-import pytest
-
-from ingest_events import IngestEventParser
+from ingest_events import EventQueue, IngestEventParser
 
 
 class TestIngestEventParser:
@@ -173,8 +171,6 @@ class TestIngestEventParser:
 # ---------------------------------------------------------------------------
 # EventQueue tests (Task 2)
 # ---------------------------------------------------------------------------
-
-from ingest_events import EventQueue
 
 
 class TestEventQueue:

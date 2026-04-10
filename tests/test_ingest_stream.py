@@ -5,7 +5,7 @@ import pytest
 
 import app as app_module
 from app import app as flask_app
-from ingest_events import EventQueue, event_queue
+from ingest_events import EventQueue
 
 
 @pytest.fixture(autouse=True)
@@ -50,7 +50,7 @@ class TestIngestStream:
         assert "data: " in text
         # Both events should appear
         lines = text.split("\n")
-        id_lines = [l for l in lines if l.startswith("id: ")]
+        id_lines = [line for line in lines if line.startswith("id: ")]
         assert len(id_lines) == 2
 
     def test_last_event_id_replay(self, client, fresh_queue):
@@ -106,7 +106,7 @@ class TestIngestStream:
         })
         resp = client.get("/ingest/stream")
         text = resp.get_data(as_text=True)
-        lines = [l for l in text.split("\n") if l.startswith("data: ")]
+        lines = [line for line in text.split("\n") if line.startswith("data: ")]
         last_data = json.loads(lines[-1].removeprefix("data: "))
         assert last_data["type"] == "complete"
 
@@ -117,7 +117,7 @@ class TestIngestStream:
         })
         resp = client.get("/ingest/stream")
         text = resp.get_data(as_text=True)
-        lines = [l for l in text.split("\n") if l.startswith("data: ")]
+        lines = [line for line in text.split("\n") if line.startswith("data: ")]
         last_data = json.loads(lines[-1].removeprefix("data: "))
         assert last_data["type"] == "aborted"
 

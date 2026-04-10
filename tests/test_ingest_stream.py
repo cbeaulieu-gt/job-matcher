@@ -7,6 +7,8 @@ import time
 import urllib.request
 
 import pytest
+import waitress
+import waitress.server
 import werkzeug.serving
 
 import app as app_module
@@ -386,4 +388,137 @@ class TestStreamingLatency:
                 for i, lag, etype in over_budget
             )
             + f"\nAll lags (ms): {[round(lag_ms*1000, 1) for lag_ms in lags]}"
+        )
+
+
+class TestWaitressStreamingLatency:
+    """Regression test: SSE events must flush immediately through a real waitress
+    server, not accumulate in an output buffer until the stream closes.
+
+    Reproduces the deployed-environment symptom: a small SSE event (< 100 bytes)
+    must arrive at the client within 1 second of being pushed, even though the
+    stream stays open for 3+ seconds afterward before sending the terminal event.
+
+    If waitress were buffering (e.g. due to a send_bytes threshold the event
+    payload cannot reach on its own), the first event would only arrive when the
+    stream closes, causing this test to fail with a lag > 1 s.
+
+    Differences from TestStreamingLatency (which uses Werkzeug):
+    - Uses a real waitress server (the actual production server) via
+      waitress.server.create_server + asyncore.loop in a daemon thread.
+    - The gap between first event and stream close is 2 s, far longer than the
+      1 s deadline — buffering would be unambiguously detected.
+    - Total stream duration is ~3 s; the test budget is generous at 5 s.
+    """
+
+    FIRST_EVENT_DEADLINE_S = 1.0   # first event must arrive within 1 s of push
+    GAP_BEFORE_TERMINAL_S = 2.0    # stream stays open this long after first event
+    TOTAL_TIMEOUT_S = 10           # urllib.request timeout for the whole stream
+
+    @pytest.fixture()
+    def waitress_server(self, monkeypatch):
+        """Start a real waitress HTTP server in a daemon thread.
+
+        Patches the global event_queue with a fresh instance that has a long
+        idle_grace so the pusher thread has time to push the first event.
+        Yields (server_url, queue).
+        """
+        q = EventQueue(idle_grace=5.0)
+        monkeypatch.setattr(app_module, "event_queue", q)
+        monkeypatch.setattr("ingest_events.event_queue", q)
+
+        port = _find_free_port()
+        # create_server returns a MultiSocketServer; run its asyncore loop in a thread.
+        server = waitress.server.create_server(flask_app, host="127.0.0.1", port=port)
+        srv_thread = threading.Thread(target=server.run, daemon=True)
+        srv_thread.start()
+        time.sleep(0.15)  # allow the socket to start accepting connections
+        yield f"http://127.0.0.1:{port}", q
+        # Shut down: close the server so asyncore.loop exits
+        server.close()
+        srv_thread.join(timeout=3)
+
+    def test_first_event_arrives_before_stream_closes(self, waitress_server):
+        """A single small SSE event must reach the client well before the stream ends.
+
+        Push one scored event (< 100 bytes), then wait GAP_BEFORE_TERMINAL_S before
+        pushing the terminal 'complete' event.  The first event must arrive within
+        FIRST_EVENT_DEADLINE_S of being pushed.
+
+        If waitress is buffering (e.g. accumulating until the response ends),
+        the first event would only arrive at t ≈ GAP_BEFORE_TERMINAL_S, which
+        is far beyond the 1 s deadline — the assertion would catch that.
+        """
+        server_url, q = waitress_server
+
+        push_time: list[float] = []
+
+        def pusher():
+            # Let the HTTP connection open before the first push
+            time.sleep(0.2)
+            push_time.append(time.monotonic())
+            q.push({
+                "type": "scored",
+                "source": "T",
+                "title": "Job",
+                "url": None,
+                "detail": {"score": 7},
+                "timestamp": "2026-04-10T00:00:00Z",
+            })
+            # Hold the stream open long enough that any buffer would have to
+            # wait until this terminal push before flushing the first event.
+            time.sleep(self.GAP_BEFORE_TERMINAL_S)
+            q.push({
+                "type": "complete",
+                "source": None,
+                "title": None,
+                "url": None,
+                "detail": {},
+                "timestamp": "2026-04-10T00:00:00Z",
+            })
+
+        push_thread = threading.Thread(target=pusher, daemon=True)
+        push_thread.start()
+
+        first_arrival: list[float] = []
+        event_types: list[str] = []
+
+        req = urllib.request.Request(f"{server_url}/ingest/stream")
+        with urllib.request.urlopen(req, timeout=self.TOTAL_TIMEOUT_S) as resp:
+            buf = b""
+            while True:
+                chunk = resp.read(1)
+                if not chunk:
+                    break
+                buf += chunk
+                if buf.endswith(b"\n\n"):
+                    t_now = time.monotonic()
+                    for line in buf.decode().split("\n"):
+                        if line.startswith("data: "):
+                            try:
+                                ev = json.loads(line[6:])
+                                etype = ev.get("type", "?")
+                                event_types.append(etype)
+                                if not first_arrival:
+                                    first_arrival.append(t_now)
+                            except (json.JSONDecodeError, KeyError):
+                                pass
+                    buf = b""
+                    if event_types and event_types[-1] in ("complete", "aborted"):
+                        break
+
+        push_thread.join(timeout=5)
+
+        assert len(event_types) >= 2, (
+            f"Expected at least 2 events (scored + complete), got: {event_types}"
+        )
+        assert first_arrival, "No events received before stream closed"
+
+        lag = first_arrival[0] - push_time[0]
+        assert lag <= self.FIRST_EVENT_DEADLINE_S, (
+            f"First SSE event arrived {lag*1000:.1f} ms after push — "
+            f"exceeds {self.FIRST_EVENT_DEADLINE_S*1000:.0f} ms deadline. "
+            f"This indicates waitress buffered the event until stream close "
+            f"(stream stayed open {self.GAP_BEFORE_TERMINAL_S*1000:.0f} ms after push). "
+            f"Event types received: {event_types}"
         )

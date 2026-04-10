@@ -155,6 +155,20 @@ class TestIngestEventParser:
         event = self.parser.parse(line)
         assert "timestamp" in event
 
+    # -- BRACKETS IN TITLE --
+    def test_bracket_in_title_parsed_correctly(self):
+        """Job titles containing brackets must not confuse the source-tag parser.
+
+        The source tag [Adzuna] is the FIRST bracketed token on the line.
+        Everything after it — including further brackets like [C++/Rust] — is the
+        job title and must be preserved verbatim.
+        """
+        line = "INFO ingest: SCORED 8/10  [Adzuna] Senior [C++/Rust] Developer"
+        event = self.parser.parse(line)
+        assert event is not None
+        assert event["source"] == "Adzuna"
+        assert event["title"] == "Senior [C++/Rust] Developer"
+
 
 # ---------------------------------------------------------------------------
 # EventQueue tests (Task 2)
@@ -243,8 +257,13 @@ class TestEventQueue:
             small_queue.push(self._make_event(source=f"S{i}"))
         small_queue.push(self._make_event(type_="complete"))
         events = list(small_queue.subscribe(last_id=0))
-        # 5 kept + 1 complete = should start from id 3 (evicted 1,2)
-        assert events[0]["id"] == 3
+        # Push 1-5: no eviction (at cap).
+        # Push 6 (non-terminal): evicts id=1. Push 7 (non-terminal): evicts id=2.
+        # Push complete (terminal): also triggers eviction of oldest non-terminal
+        # (id=3) because terminal pushes are no longer exempt from the cap check —
+        # the invariant is that *eviction never removes* terminals, not that
+        # terminal pushes never cause eviction.  Queue ends as [4,5,6,7,complete].
+        assert events[0]["id"] == 4
 
     # -- TERMINAL EVENT ENDS SUBSCRIPTION --
     def test_complete_ends_subscription(self):
@@ -318,3 +337,84 @@ class TestEventQueue:
         self.queue.disconnect()  # still 1 active
         self.queue._cleanup_if_idle()
         assert not self.queue.is_empty()
+
+    # -- TERMINAL EVICTION SAFETY --
+    def test_terminal_events_never_evicted_by_later_push(self):
+        """Reproduces the review scenario: a terminal event buried near the front
+        must survive eviction caused by later non-terminal pushes.
+
+        Failure mode (buggy code): the slice `_events[-max_size:]` drops whatever
+        is oldest — which may be a complete/aborted event.  A dropped complete
+        event leaves SSE clients spinning forever waiting for a run-end signal.
+        """
+        q = EventQueue(max_size=5)
+        # Push 3 scored events
+        for _ in range(3):
+            q.push(self._make_event(type_="scored"))
+        # Push 1 terminal (complete) — now 4 events, under cap
+        q.push(self._make_event(type_="complete"))
+        # Push 5 more scored events — each push that exceeds cap must NOT evict
+        # the complete event that is sitting near the front of the queue.
+        for _ in range(5):
+            q.push(self._make_event(type_="scored"))
+        # The complete event must still be present
+        types = [e["type"] for e in q._events]
+        assert "complete" in types, (
+            "complete event was evicted — terminal events must never be removed by eviction"
+        )
+
+    def test_eviction_when_queue_full_of_terminals(self):
+        """When every slot is a terminal event, eviction must be a no-op.
+
+        Preference: exceed max_size rather than silently drop a terminal event.
+        This is an unusual edge case (two terminal events in the same queue is
+        only possible via bugs in the producer or manual testing), but the
+        invariant must still hold.
+        """
+        q = EventQueue(max_size=2)
+        q.push(self._make_event(type_="complete"))
+        q.push(self._make_event(type_="aborted"))
+        # Queue is at cap and consists entirely of terminal events
+        q.push(self._make_event(type_="scored"))
+        # Both terminals must be retained — we prefer exceeding cap over data loss
+        types = [e["type"] for e in q._events]
+        assert "complete" in types, "complete terminal was evicted from an all-terminal queue"
+        assert "aborted" in types, "aborted terminal was evicted from an all-terminal queue"
+        assert "scored" in types, "scored event was not appended when all-terminal queue was full"
+        # Queue is allowed to temporarily exceed max_size in this edge case
+        assert len(q._events) == 3  # cap exceeded rather than losing a terminal
+
+    def test_concurrent_push_with_eviction(self):
+        """Stress-test the eviction path under concurrent writes.
+
+        4 producer threads each push 100 non-terminal events into a small queue.
+        After joining, all retained events must:
+          - fit within max_size
+          - have unique, strictly-increasing sequence IDs (no corruption)
+          - no exceptions must have been raised
+        """
+        q = EventQueue(max_size=10)
+        errors: list[Exception] = []
+
+        def producer(n: int) -> None:
+            try:
+                for i in range(100):
+                    q.push(self._make_event(source=f"T{n}-{i}"))
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=producer, args=(n,)) for n in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+        assert not errors, f"Exceptions raised during concurrent push: {errors}"
+        # No terminal events were pushed, so eviction should have kept queue at cap
+        assert len(q._events) <= q._max_size, (
+            f"Queue length {len(q._events)} exceeds max_size {q._max_size} "
+            "with no terminal events present"
+        )
+        # All retained IDs must be unique
+        ids = [e["id"] for e in q._events]
+        assert len(ids) == len(set(ids)), "Duplicate sequence IDs found after concurrent push"

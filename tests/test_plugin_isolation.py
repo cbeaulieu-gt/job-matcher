@@ -212,3 +212,89 @@ class TestSafePagesIsolation:
 
             pages = list(ingest._safe_pages(_DynCrash()))
             assert pages == [], f"Expected empty pages for {exc_class.__name__} crash"
+
+
+# ---------------------------------------------------------------------------
+# Tests: _safe_pages() catches SystemExit (regression for silent process kill)
+# ---------------------------------------------------------------------------
+
+class TestSafePagesSystemExit:
+    """SystemExit raised inside a plugin must be caught by _safe_pages so the
+    outer sources loop can continue.  Before the fix, SystemExit (a BaseException,
+    not an Exception) would propagate straight through the ``except Exception:``
+    clause and silently kill the process with no traceback logged.
+    """
+
+    def _make_exit_source(self, code: int):
+        """Return a JobSource whose pages() calls sys.exit(code)."""
+        class _ExitSource(_GoodSource):
+            SOURCE = "exit_source"
+            _exit_code = code
+
+            def pages(self):
+                import sys
+                sys.exit(self._exit_code)
+                yield  # make it a generator
+
+        return _ExitSource()
+
+    def test_sys_exit_does_not_propagate(self):
+        """_safe_pages() must not let SystemExit escape — process must survive."""
+        client = self._make_exit_source(1)
+        # If SystemExit propagates, list() will raise and pytest will mark this
+        # test as an error rather than a failure.
+        pages = list(ingest._safe_pages(client))
+        assert pages == [], "No pages should be yielded when a plugin calls sys.exit()"
+
+    def test_sys_exit_is_logged_at_error_level(self, caplog):
+        """_safe_pages() must log an ERROR that includes the exit code."""
+        client = self._make_exit_source(1)
+        with caplog.at_level(logging.ERROR, logger="ingest"):
+            list(ingest._safe_pages(client))
+
+        assert any(
+            record.levelno == logging.ERROR and "exit_source" in record.message
+            for record in caplog.records
+        ), f"Expected ERROR log mentioning 'exit_source'; got:\n{caplog.text}"
+
+    def test_sys_exit_log_includes_exit_code(self, caplog):
+        """The ERROR log must include the exit code so the cause is diagnosable."""
+        client = self._make_exit_source(1)
+        with caplog.at_level(logging.ERROR, logger="ingest"):
+            list(ingest._safe_pages(client))
+
+        error_msgs = [r.message for r in caplog.records if r.levelno == logging.ERROR]
+        assert error_msgs, "No ERROR records found"
+        # The exit code (1) must appear in the message.
+        assert any("1" in msg for msg in error_msgs), (
+            f"Exit code not mentioned in ERROR message. Got: {error_msgs}"
+        )
+
+    def test_sys_exit_traceback_is_included(self, caplog):
+        """The ERROR record must have exc_info set so the full traceback is emitted."""
+        client = self._make_exit_source(1)
+        with caplog.at_level(logging.ERROR, logger="ingest"):
+            list(ingest._safe_pages(client))
+
+        error_records = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert error_records, "No ERROR records found"
+        assert error_records[0].exc_info is not None, (
+            "exc_info must be set so the traceback appears in the log file"
+        )
+        exc_type = error_records[0].exc_info[0]
+        assert exc_type is SystemExit
+
+    def test_loop_continues_after_sys_exit(self):
+        """A plugin that calls sys.exit() must not prevent subsequent sources."""
+        exit_source = self._make_exit_source(1)
+        good = _GoodSource()
+
+        all_pages = []
+        for client in [exit_source, good]:
+            for page in ingest._safe_pages(client):
+                all_pages.append(page)
+
+        # exit_source yields nothing; good_source yields 2 pages.
+        assert len(all_pages) == 2, (
+            "good_source pages were not reached after exit_source called sys.exit()"
+        )

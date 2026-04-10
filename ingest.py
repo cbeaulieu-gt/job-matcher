@@ -966,7 +966,19 @@ def _safe_pages(client):
     _log = logging.getLogger("ingest")
     try:
         yield from client.pages()
-    except Exception:  # noqa: BLE001
+    except SystemExit as exc:  # noqa: BLE001
+        # SystemExit is a BaseException, not an Exception — it bypasses a plain
+        # ``except Exception:`` clause and would otherwise silently kill the
+        # entire process with no traceback.  Catch it here, log the exit code,
+        # and let the outer sources loop continue to the next plugin.
+        _log.error(
+            "Plugin %r called sys.exit(%r) — aborting this source only. "
+            "Full traceback follows.",
+            client.SOURCE,
+            exc.code,
+            exc_info=True,
+        )
+    except BaseException:  # noqa: BLE001
         _log.error(
             "Plugin %r raised an unhandled exception — skipping source. "
             "Full traceback follows.",

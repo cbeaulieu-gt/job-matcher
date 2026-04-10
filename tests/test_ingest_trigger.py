@@ -5,7 +5,6 @@ Uses Flask's built-in test client and monkeypatches the module-level
 _ingest_process handle so no real subprocess is ever spawned.
 """
 
-import io
 import os
 import sys
 import pytest
@@ -60,13 +59,6 @@ def _make_mock_process(*, exited: bool = False, stdout_lines: list | None = None
     proc.stdout.readline.side_effect = readline_returns
 
     return proc
-
-
-def _make_log_file(content: str) -> io.StringIO:
-    """Return a StringIO positioned at the start, as a stand-in for the temp log file."""
-    buf = io.StringIO(content)
-    buf.seek(0)
-    return buf
 
 
 # ---------------------------------------------------------------------------
@@ -243,7 +235,6 @@ class TestIngestStatus:
     def test_completed_process_resets_to_idle(self, client, monkeypatch):
         """Once poll() returns non-None the handle is cleared and idle HTML is returned."""
         monkeypatch.setattr(app_module, "_ingest_process", _make_mock_process(exited=True))
-        monkeypatch.setattr(app_module, "_ingest_log_file", _make_log_file(""))
         resp = client.get("/ingest/status")
         body = resp.data.decode()
         assert "Run Ingestion" in body
@@ -277,7 +268,6 @@ class TestIngestRunningHelper:
 
     def test_returns_false_and_clears_handle_after_exit(self, monkeypatch):
         monkeypatch.setattr(app_module, "_ingest_process", _make_mock_process(exited=True))
-        monkeypatch.setattr(app_module, "_ingest_log_file", _make_log_file(""))
         result = app_module._ingest_running()
         assert result is False
         assert app_module._ingest_process is None

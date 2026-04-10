@@ -177,7 +177,9 @@ class TestEventQueue:
     """Tests for thread-safe event storage and subscription."""
 
     def setup_method(self):
-        self.queue = EventQueue()
+        # idle_grace=0 disables the startup grace-period wait so tests that
+        # exercise the idle path complete immediately rather than sleeping 3 s.
+        self.queue = EventQueue(idle_grace=0)
 
     def _make_event(self, type_: str = "scored", source: str = "Adzuna") -> dict:
         return {
@@ -224,13 +226,16 @@ class TestEventQueue:
         old_run_id = self.queue.run_id
         self.queue.clear()
         assert self.queue.run_id != old_run_id
-        # Queue should be empty after clear — subscribe yields idle
+        # Queue should be empty after clear — subscribe yields idle.
+        # The queue was constructed with idle_grace=0 (see setup_method) so
+        # this completes immediately rather than sleeping.
         events = list(self.queue.subscribe(last_id=0))
         assert len(events) == 1
         assert events[0]["type"] == "idle"
 
     # -- IDLE --
     def test_empty_queue_yields_idle(self):
+        # Queue was constructed with idle_grace=0 in setup_method.
         events = list(self.queue.subscribe(last_id=0))
         assert len(events) == 1
         assert events[0]["type"] == "idle"
@@ -497,3 +502,70 @@ class TestIngestEventParserEdgeCases:
         line = "INFO ingest: FILTERED  [Adzuna] Some Job — created_at older than 25 hours"
         event = self.parser.parse(line)
         assert event["detail"]["reason"] == "created_at older than 25 hours"
+
+
+class TestSubscribeGracePeriod:
+    """Regression tests for the idle-grace startup race-condition fix.
+
+    Root cause: when a run was just launched (Popen succeeded) but the
+    subprocess had not yet emitted its first log line, subscribe() would
+    immediately yield 'idle' and return.  The JS EventSource handler treated
+    'idle' as "no run is happening" and permanently closed the connection,
+    silently dropping every subsequent event from the run.
+
+    Fix: subscribe() waits up to idle_grace seconds for the first event before
+    yielding 'idle'.  If events arrive during the grace period the generator
+    falls through to the normal while-True loop and delivers them.
+    """
+
+    def _make_event(self, type_: str = "scored") -> dict:
+        return {
+            "type": type_,
+            "source": "Adzuna",
+            "title": "Test Job",
+            "url": None,
+            "detail": {},
+            "timestamp": "2026-04-10T00:00:00+00:00",
+        }
+
+    def test_events_arriving_during_grace_period_are_not_preceded_by_idle(self):
+        """Events pushed during the grace window must be delivered without a
+        preceding 'idle' event.
+
+        Regression: before the fix, subscribe() on an empty queue would yield
+        'idle' immediately even when a run was in the process of starting.
+        The JS would close the EventSource on 'idle', dropping all events.
+        """
+        q = EventQueue(idle_grace=1.0)  # 1 s grace
+
+        def push_after_delay():
+            time.sleep(0.1)  # 100 ms — well within the 1 s grace
+            q.push(self._make_event(type_="fetched"))
+            q.push(self._make_event(type_="complete"))
+
+        t = threading.Thread(target=push_after_delay)
+        t.start()
+
+        events = list(q.subscribe(last_id=0))
+        t.join(timeout=2)
+
+        types = [e["type"] for e in events]
+        assert "idle" not in types, (
+            "subscribe() yielded 'idle' even though events arrived during the "
+            "grace period — the race condition fix is broken"
+        )
+        assert "fetched" in types, "fetched event was not delivered"
+        assert "complete" in types, "complete event was not delivered"
+
+    def test_truly_idle_queue_still_yields_idle_after_grace(self):
+        """When no events arrive within the grace period, 'idle' is still
+        yielded so the SSE client knows no run is happening.
+        """
+        q = EventQueue(idle_grace=0)  # skip wait for test speed
+
+        events = list(q.subscribe(last_id=0))
+
+        assert len(events) == 1
+        assert events[0]["type"] == "idle", (
+            "subscribe() on a genuinely idle queue must still yield 'idle'"
+        )

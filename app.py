@@ -885,6 +885,9 @@ def ingest_trigger():
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,  # line-buffered
+                # Force unbuffered output from the child so log lines reach
+                # the parent pipe immediately even when stderr is not a tty.
+                env={**os.environ, "PYTHONUNBUFFERED": "1"},
             )
         except (OSError, PermissionError) as e:
             return jsonify({"error": f"Failed to start ingestion: {e}"}), 500

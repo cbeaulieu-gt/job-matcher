@@ -202,13 +202,21 @@ class EventQueue:
     Events are pushed by the reader thread and consumed by SSE generators via
     subscribe(). A single global instance is used in production; tests create
     their own instances.
+
+    Args:
+        max_size:   Maximum number of events retained in the buffer.
+        idle_grace: Seconds to wait for the first event before yielding
+                    ``idle`` in subscribe().  Default 3.0 s covers typical
+                    subprocess startup latency.  Set to 0 in tests that
+                    exercise the idle path to avoid waiting.
     """
 
-    def __init__(self, max_size: int = 5000) -> None:
+    def __init__(self, max_size: int = 5000, idle_grace: float = 3.0) -> None:
         self._lock = threading.Lock()
         self._events: list[dict] = []
         self._next_id = 1
         self._max_size = max_size
+        self._idle_grace = idle_grace
         self._new_event = threading.Event()
         self.run_id: str = str(uuid.uuid4())
         self._connection_count = 0
@@ -316,7 +324,7 @@ class EventQueue:
                     return ev["detail"]["summary"]
         return ""
 
-    def subscribe(self, last_id: int = 0) -> Generator[dict, None, None]:
+    def subscribe(self, last_id: int = 0, idle_grace: float | None = None) -> Generator[dict, None, None]:
         """Yield events from last_id onward, blocking when caught up.
 
         - Normal path: events with id > last_id are yielded in order; when
@@ -324,25 +332,49 @@ class EventQueue:
           arrive.  ``last_id`` enables resume after a reconnect by skipping
           events the client has already seen.
         - Idle path: if the queue is empty and no run is active (no terminal
-          event present), a synthetic ``idle`` event is yielded immediately so
-          the SSE client receives traffic at connect time rather than hanging on
-          a silent stream.  The generator returns after yielding it.
+          event present), the generator waits up to ``idle_grace`` seconds for
+          events to arrive before yielding a synthetic ``idle`` event.  This
+          grace period prevents a race condition where a run has just started
+          (Popen succeeded) but the subprocess hasn't emitted its first log
+          line yet — without it, the SSE client would receive ``idle``
+          immediately and close the connection, missing all subsequent events.
+          The generator returns after yielding ``idle``.
         - Termination: the generator returns after yielding a terminal event
           (``complete`` or ``aborted``), signalling the SSE response to close.
+
+        Args:
+            last_id:    Resume cursor; events with id <= last_id are skipped.
+            idle_grace: Seconds to wait for events before declaring idle.
+                        Defaults to ``self._idle_grace`` (set at construction,
+                        default 3.0 s).  Pass 0 in tests that exercise the
+                        idle path to avoid sleeping.
         """
-        # Empty queue with no active run -> immediate idle
+        if idle_grace is None:
+            idle_grace = self._idle_grace
+
+        # Empty queue with no active run -> wait briefly for a run to start
+        # before declaring idle.  A run may have just been launched (Popen
+        # returned) but not yet produced any log output, causing a transient
+        # empty-queue window.  Without this grace period the SSE client
+        # receives 'idle' and closes the connection, silently dropping every
+        # event from the run.
         if self.is_empty() and not self.has_terminal():
-            yield {
-                "id": 0,
-                "run_id": self.run_id,
-                "type": "idle",
-                "source": None,
-                "title": None,
-                "url": None,
-                "detail": {},
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
-            return
+            self._new_event.wait(timeout=idle_grace)
+            # If still empty after the grace period, declare idle.
+            if self.is_empty() and not self.has_terminal():
+                yield {
+                    "id": 0,
+                    "run_id": self.run_id,
+                    "type": "idle",
+                    "source": None,
+                    "title": None,
+                    "url": None,
+                    "detail": {},
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+                return
+            # Events arrived during the grace period — fall through to the
+            # normal while True loop below.
 
         while True:
             # Grab pending events beyond our cursor

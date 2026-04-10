@@ -10,8 +10,12 @@ from ingest_events import EventQueue
 
 @pytest.fixture(autouse=True)
 def fresh_queue(monkeypatch):
-    """Replace global event_queue with a fresh instance for each test."""
-    q = EventQueue()
+    """Replace global event_queue with a fresh instance for each test.
+
+    idle_grace=0 disables the startup grace-period wait so tests that
+    exercise the idle path complete immediately rather than sleeping 3 s.
+    """
+    q = EventQueue(idle_grace=0)
     monkeypatch.setattr(app_module, "event_queue", q)
     monkeypatch.setattr("ingest_events.event_queue", q)
     yield q

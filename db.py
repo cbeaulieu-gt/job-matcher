@@ -307,13 +307,12 @@ def init_db() -> None:
                      AND description_source = 'snippet'"""
             )
             if cur.rowcount:
-                logger.info(
-                    "Migration #114: reclassified %d JSearch listings from "
-                    "'snippet' to 'full'",
-                    cur.rowcount,
+                print(
+                    f"Migration #114: reclassified {cur.rowcount} JSearch listings from "
+                    "'snippet' to 'full'"
                 )
-        except Exception:
-            logger.debug("Migration #114 (JSearch reclassify): skipped or already applied")
+        except (psycopg2.ProgrammingError, psycopg2.DataError) as e:
+            print(f"Migration #114 (JSearch reclassify): {e}")
 
         # Geocache table — stores resolved lat/lon for location strings so that
         # repeated ingest runs do not re-call Nominatim for the same location.

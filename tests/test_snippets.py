@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import db
 import ingest
 from app import app as flask_app
+from ingest import _SCRAPE_MIN_LENGTH
 
 
 # ---------------------------------------------------------------------------
@@ -353,7 +354,6 @@ class TestIngestDescriptionSource:
     """Tests that the ingest pipeline sets listing['description_source'] correctly."""
 
     def _run_ingest_stage(self, listing: dict, scrape_ok: bool, skip_scrape: bool = False):
-        _SCRAPE_MIN_LENGTH = 100
         listing = dict(listing)
         if skip_scrape:
             listing["skip_scrape"] = True

@@ -70,11 +70,24 @@
   // Drawer open / close
   // ---------------------------------------------------------------------------
 
-  function openDrawer() {
+  /**
+   * Open the drawer.
+   *
+   * @param {Object} [opts]
+   * @param {boolean} [opts.focus=false] - When true, move focus to the close
+   *   button so keyboard users land inside the drawer.  Pass false (default)
+   *   for programmatic opens (SSE trigger, sessionStorage restore) so focus is
+   *   not yanked away from wherever the user is typing.
+   */
+  function openDrawer(opts) {
+    var shouldFocus = opts && opts.focus === true;
     drawer.classList.add("ingest-drawer--open");
     fab.classList.add("ingest-fab--hidden");
     fab.setAttribute("aria-expanded", "true");
     sessionStorage.setItem("ingest-drawer-open", "1");
+    if (shouldFocus) {
+      closeBtn.focus();
+    }
     // Re-establish the SSE stream if it was closed (e.g. drawer was dismissed
     // mid-run via closeDrawer → closeSSE). connectSSE() is a no-op if the
     // stream is already open.
@@ -87,30 +100,43 @@
     fab.classList.remove("ingest-fab--hidden");
     fab.setAttribute("aria-expanded", "false");
     sessionStorage.setItem("ingest-drawer-open", "0");
+    // Return focus to the FAB so keyboard users don't lose their place.
+    fab.focus();
   }
 
   closeBtn.addEventListener("click", closeDrawer);
-  fab.addEventListener("click", openDrawer);
+  // User-initiated open: move focus into the drawer for keyboard navigation.
+  fab.addEventListener("click", function () { openDrawer({ focus: true }); });
 
-  // Dismiss on Escape key when drawer is open
+  // Dismiss on Escape key when drawer is open; return focus to FAB via closeDrawer().
   document.addEventListener("keydown", function (e) {
     if (e.key === "Escape" && drawer.classList.contains("ingest-drawer--open")) {
       closeDrawer();
     }
   });
 
-  // Restore open state from sessionStorage across page reloads
+  // Restore open state from sessionStorage across page reloads — no focus
+  // shift since the page is still loading and the user hasn't interacted yet.
   if (sessionStorage.getItem("ingest-drawer-open") === "1") {
-    openDrawer();
+    openDrawer({ focus: false });
   }
 
   // ---------------------------------------------------------------------------
   // Auto-scroll
   // ---------------------------------------------------------------------------
 
-  eventList.addEventListener("scroll", function () {
+  function onEventListScroll() {
     var distFromBottom = eventList.scrollHeight - eventList.scrollTop - eventList.clientHeight;
     autoScrollPinned = distFromBottom < SCROLL_THRESHOLD;
+  }
+
+  eventList.addEventListener("scroll", onEventListScroll);
+
+  // Clean up the scroll listener when the page is unloaded / put in bfcache.
+  // pagehide is preferred over unload because it fires reliably on all browsers
+  // including those that use back/forward cache (where unload would block caching).
+  window.addEventListener("pagehide", function () {
+    eventList.removeEventListener("scroll", onEventListScroll);
   });
 
   function scrollToBottom() {
@@ -328,8 +354,9 @@
     setPulseLive(true);
     removeConnectionLost();
 
-    // Open the drawer so the user sees events arrive
-    openDrawer();
+    // Open the drawer so the user sees events arrive — no focus shift here
+    // since this is a programmatic open triggered by the SSE connection.
+    openDrawer({ focus: false });
 
     // Build URL — include Last-Event-ID as query param for environments
     // where custom request headers aren't forwarded to SSE endpoints.

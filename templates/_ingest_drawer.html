@@ -4,7 +4,7 @@
 
 {# -- Floating action button (visible when drawer is closed) -- #}
 <button id="ingest-fab" class="ingest-fab ingest-fab--hidden" type="button"
-        aria-label="Open ingest log" aria-controls="ingest-drawer">
+        aria-label="Open ingest log" aria-controls="ingest-drawer" aria-expanded="false">
   <span class="ingest-pulse-dot" id="ingest-pulse" aria-hidden="true"></span>
   <span class="ingest-fab-icon" aria-hidden="true">&#9776;</span>
 </button>
@@ -20,9 +20,14 @@
             aria-label="Close drawer">&times;</button>
   </header>
 
-  {# -- Event list (auto-scrolls, aria-live for screen readers) -- #}
+  {# -- Event list (auto-scrolls) -- #}
+  {# aria-live removed from the list — at 500+ events per run it would drown out all other SR audio.
+     Terminal-event announcements are surfaced via #ingest-sr-announce below instead. #}
   <div id="ingest-event-list" class="ingest-event-list"
-       role="log" aria-live="polite" aria-relevant="additions" aria-label="Ingest events"></div>
+       role="log" aria-label="Ingest events"></div>
+
+  {# -- Screen-reader-only live region: announces terminal events only -- #}
+  <div id="ingest-sr-announce" class="sr-only" aria-live="polite" aria-atomic="true"></div>
 
   {# -- Rolling tally (sticky footer) -- #}
   <footer class="ingest-tally" id="ingest-tally">

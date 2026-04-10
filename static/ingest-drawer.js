@@ -33,6 +33,9 @@
   var pulseHeader = document.getElementById("ingest-pulse-header");
   var pulseFab    = document.getElementById("ingest-pulse");
 
+  // Screen-reader-only live region for terminal event announcements
+  var srAnnounce = document.getElementById("ingest-sr-announce");
+
   // Tally counter elements (keyed by tally category)
   var tallyEls = {
     fetched:  document.getElementById("tally-fetched"),
@@ -72,9 +75,14 @@
     fab.classList.add("ingest-fab--hidden");
     fab.setAttribute("aria-expanded", "true");
     sessionStorage.setItem("ingest-drawer-open", "1");
+    // Re-establish the SSE stream if it was closed (e.g. drawer was dismissed
+    // mid-run via closeDrawer → closeSSE). connectSSE() is a no-op if the
+    // stream is already open.
+    connectSSE();
   }
 
   function closeDrawer() {
+    closeSSE();
     drawer.classList.remove("ingest-drawer--open");
     fab.classList.remove("ingest-fab--hidden");
     fab.setAttribute("aria-expanded", "false");
@@ -163,7 +171,7 @@
 
   function trackTally(event) {
     var type   = event.type;
-    var source = event.source;
+    var source = (event && event.source) || null;
 
     if (type === "fetched") {
       tally.fetched += (event.detail && event.detail.fetched_count) || 0;
@@ -286,7 +294,6 @@
     }
 
     eventList.appendChild(el);
-    trackTally(event);
     scrollToBottom();
   }
 
@@ -352,7 +359,15 @@
         return;
       }
 
-      renderEvent(data, isReplay);
+      var currentlyReplay = isReplay;
+      renderEvent(data, currentlyReplay);
+
+      // Only count live (non-replayed) events toward tallies.
+      // Replayed events still render to the DOM so the user can see them,
+      // but they must not double-count on reconnect.
+      if (!currentlyReplay) {
+        trackTally(data);
+      }
 
       // Switch out of replay mode after the first animation frame — by then the
       // browser has synchronously dispatched all buffered/replayed events.
@@ -360,10 +375,15 @@
         requestAnimationFrame(function () { isReplay = false; });
       }
 
-      // Terminal events: close the stream — do not let the browser reconnect.
+      // Terminal events: close the stream and announce to screen readers.
       if (data.type === "complete" || data.type === "aborted") {
         isLive = false;
         setPulseLive(false);
+        if (srAnnounce) {
+          srAnnounce.textContent = data.type === "complete"
+            ? "Ingest run complete. " + tally.scored + " scored, " + tally.filtered + " filtered."
+            : "Ingest run aborted. Connection lost.";
+        }
         closeSSE();
       }
     };

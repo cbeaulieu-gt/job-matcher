@@ -337,6 +337,7 @@ Transitions on `border-color` and `background` at 120ms ease. Size is 14×14px; 
 | `.save-bar-label` | `<span>` | "Unsaved changes" text; `--font-mono` 0.8rem, `--score-mid-text` (amber — warning semantics) |
 | `.file-input-wrap` | `<div>` | Flex row wrapper around the hidden file input + styled label + filename display |
 | `.file-input-hidden` | `<input type="file">` | Visually hidden native file input; accessible via `aria-label`; positioned absolutely off-screen |
+| `.sr-only` | any element | Generic screen-reader-only utility — visually hidden (1×1px, clipped, off-margin) but readable by assistive technology. Use for elements that carry meaning only for SR (e.g. `#ingest-sr-announce`). |
 | `.file-input-label` | `<label for="...">` | Styled trigger that acts as the visible "Choose File" button; inherits `.btn` visual language |
 | `.file-input-name` | `<span>` | Filename display beside the label; shows "No file chosen" by default, updated via JS on `change` |
 
@@ -661,7 +662,7 @@ Slide-out panel for real-time ingest log stream. Fixed to the right edge of the 
 | `.ingest-pulse-dot--live` | Overrides dot to `--score-high-text` with 1.5s pulse animation |
 | `.ingest-fab` | Floating action button (bottom-right corner); visible when drawer is closed |
 | `.ingest-fab--hidden` | Hides FAB: `opacity: 0`, `pointer-events: none`, `transform: scale(0.8)` |
-| `.ingest-event-list` | Scrollable event log container, `flex: 1`, `overflow-y: auto`; has `role="log"` and `aria-live="polite"` |
+| `.ingest-event-list` | Scrollable event log container, `flex: 1`, `overflow-y: auto`; has `role="log"` — `aria-live` is intentionally absent (see `#ingest-sr-announce` below) |
 | `.ingest-event` | Single event row; `--font-mono` 0.78rem; slides in via 0.2s animation |
 | `.ingest-event--{type}` | Type modifier: `scored`, `rescored`, `filtered`, `dupe`, `score_failed`, `rescore_failed`, `scrape_skip`, `fetched`, `complete`, `aborted` |
 | `.ingest-event--replay` | Applied during replay burst to suppress the slide-in animation |
@@ -681,10 +682,13 @@ Slide-out panel for real-time ingest log stream. Fixed to the right edge of the 
 | `.ingest-source-breakdown` | Per-source stats grid below the tally row; injected by JS |
 | `.ingest-source-row` | Single source row: name left, "N fetched / N filtered / N passed" right |
 | `.ingest-source-name` | Source name cell; `--font-mono` uppercase, `--text-secondary` |
+| `#ingest-sr-announce` | Visually-hidden `aria-live="polite" aria-atomic="true"` region; populated by JS on terminal events only (`complete`/`aborted`) so screen readers announce once ("Ingest run complete. N scored, N filtered.") instead of announcing every one of 500+ individual events |
+
+**Accessibility — why `aria-live` is off the event list:** At 500+ events per run, `aria-live="polite"` on the event list floods a screen reader's audio queue. `aria-live` is removed from `.ingest-event-list`; the `#ingest-sr-announce` hidden div handles announcements at the right granularity (terminal events only).
 
 **JS integration:** `connectSSE()` opens `EventSource("/ingest/stream")` on page load to pick up any active or already-completed run. On HTMX `htmx:afterRequest` for `/ingest/trigger`, the drawer resets (`resetDrawer()`) and reconnects after a 500ms delay. The `EventSource` sends `Last-Event-ID` automatically on reconnect; the server uses the `run_id:event_id` format to support replay. On `idle` or terminal events (`complete`/`aborted`), `eventSource.close()` is called — the browser does not reconnect to a finished run.
 
-**Accessibility:** The FAB carries `aria-label="Open ingest log"` and `aria-controls="ingest-drawer"`. The event list has `role="log"`, `aria-live="polite"`, and `aria-relevant="additions"`. Escape key closes the drawer. All interactive elements have `:focus-visible` amber outlines.
+**Accessibility:** The FAB carries `aria-label="Open ingest log"`, `aria-controls="ingest-drawer"`, and `aria-expanded="false"` (initial state in HTML; JS toggles it to `"true"` on open). The event list has `role="log"` and `aria-label="Ingest events"` — `aria-live` is intentionally absent from the list (see `#ingest-sr-announce` above). Escape key closes the drawer. All interactive elements have `:focus-visible` amber outlines.
 
 ### Ingest Trigger (feed page)
 

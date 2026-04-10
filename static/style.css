@@ -2617,3 +2617,20 @@ input[type="number"] {
   letter-spacing: 0.04em;
 }
 
+/* ── Accessibility utility ─────────────────────────────────────────────────── */
+
+/* Visually hidden but accessible to screen readers.
+   Use for elements that carry meaning only for assistive technology
+   (e.g. the #ingest-sr-announce live region). */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+

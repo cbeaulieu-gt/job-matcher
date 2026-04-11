@@ -589,6 +589,18 @@ class TestFetchedOrderingInvariant:
                     f"any fetched event — ordering invariant violated for multi-page run"
                 )
 
+    def test_empty_page_does_not_break_parser(self):
+        """Empty pages should emit fetched=0 without breaking event flow."""
+        lines = [
+            "INFO ingest: Fetched 0 listing(s) from Adzuna",
+            "INFO ingest: Fetched 2 listing(s) from Adzuna",
+            "INFO ingest: SCORED 8/10  [Adzuna] Engineer A",
+        ]
+        events = self._parse_lines(lines)
+        assert len(events) == 3
+        assert events[0]["detail"]["fetched_count"] == 0
+        assert events[1]["detail"]["fetched_count"] == 2
+
     def test_fetched_count_accumulates_correctly_across_pages(self):
         """Multiple fetched events for the same source must sum to the total page sizes.
 

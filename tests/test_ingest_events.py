@@ -78,11 +78,23 @@ class TestIngestEventParser:
         assert event["type"] == "scrape_skip"
         assert event["detail"]["reason"] == "snippet"
 
-    # -- SCRAPE FALLBACK (sets flag, no event returned) --
-    def test_scrape_fallback_returns_none(self):
+    # -- SCRAPE FALLBACK (sets flag, emits event) --
+    def test_scrape_fallback_emits_event(self):
         line = "INFO ingest: SCRAPE FALLBACK  [Adzuna] Fallback Job"
         event = self.parser.parse(line)
-        assert event is None  # flag set, no event emitted
+        assert event is not None
+        assert event["type"] == "scrape_fallback"
+        assert event["source"] == "Adzuna"
+        assert event["title"] == "Fallback Job"
+
+    def test_scrape_fallback_still_annotates_subsequent_scored(self):
+        """SCRAPE FALLBACK sets the flag so the next scored event has scraped=False."""
+        self.parser.parse("INFO ingest: SCRAPE FALLBACK  [Adzuna] Some Job")
+        event = self.parser.parse("INFO ingest: SCORED 6/10  [Adzuna] Some Job")
+        assert event["detail"]["scraped"] is False
+        # Flag resets after use
+        next_event = self.parser.parse("INFO ingest: SCORED 9/10  [Adzuna] Another Job")
+        assert next_event["detail"]["scraped"] is True
 
     # -- FETCHED --
     def test_fetched_event(self):
@@ -726,3 +738,99 @@ class TestSubscribeGracePeriod:
         assert events[0]["type"] == "idle", (
             "subscribe() on a genuinely idle queue must still yield 'idle'"
         )
+
+
+class TestScrapeFallbackEvent:
+    """Tests for the scrape_fallback SSE event type (issue #202).
+
+    SCRAPE FALLBACK lines now emit a ``scrape_fallback`` event so the live
+    drawer can display them.  The parser also sets an internal flag so that the
+    subsequent ``scored`` event is annotated with ``scraped=False``.
+    """
+
+    def setup_method(self):
+        self.parser = IngestEventParser()
+
+    def _parse_lines(self, lines: list[str]) -> list[dict]:
+        """Parse a list of log lines and return only non-None events."""
+        events = []
+        for line in lines:
+            event = self.parser.parse(line)
+            if event is not None:
+                events.append(event)
+        return events
+
+    def test_happy_path_basic(self):
+        """A well-formed SCRAPE FALLBACK line produces a scrape_fallback event."""
+        line = "INFO ingest: SCRAPE FALLBACK [Adzuna] Senior Python Engineer"
+        event = self.parser.parse(line)
+        assert event is not None
+        assert event["type"] == "scrape_fallback"
+        assert event["source"] == "Adzuna"
+        assert event["title"] == "Senior Python Engineer"
+        assert "timestamp" in event
+
+    def test_title_with_special_characters(self):
+        """Titles containing brackets, slashes, commas, and dashes parse correctly.
+
+        The source must still be just the token inside the first bracket pair.
+        """
+        line = "INFO ingest: SCRAPE FALLBACK [Jobicy] Engineer (Remote/EU) - Senior Level"
+        event = self.parser.parse(line)
+        assert event is not None
+        assert event["type"] == "scrape_fallback"
+        assert event["source"] == "Jobicy"
+        assert event["title"] == "Engineer (Remote/EU) - Senior Level"
+
+    def test_source_with_spaces(self):
+        """Source names containing spaces (e.g. 'We Work Remotely') are captured intact."""
+        line = "INFO ingest: SCRAPE FALLBACK [We Work Remotely] Staff Engineer"
+        event = self.parser.parse(line)
+        assert event is not None
+        assert event["source"] == "We Work Remotely"
+        assert event["title"] == "Staff Engineer"
+
+    def test_no_false_positive_on_scrape_skip(self):
+        """SCRAPE SKIP lines must NOT produce a scrape_fallback event."""
+        line = "INFO ingest: SCRAPE SKIP (full) [Adzuna] Foo"
+        event = self.parser.parse(line)
+        assert event is None or event["type"] != "scrape_fallback"
+
+    def test_no_false_positive_on_scrape_failed(self):
+        """A hypothetical SCRAPE FAILED line must NOT produce a scrape_fallback event."""
+        line = "INFO ingest: SCRAPE FAILED [Adzuna] Foo"
+        event = self.parser.parse(line)
+        assert event is None or event["type"] != "scrape_fallback"
+
+    def test_no_false_positive_on_fetched(self):
+        """Fetched lines must NOT produce a scrape_fallback event."""
+        line = "INFO ingest: Fetched 5 listing(s) from Adzuna"
+        event = self.parser.parse(line)
+        assert event is None or event["type"] != "scrape_fallback"
+
+    def test_ordering_preserved_in_mixed_sequence(self):
+        """A SCRAPE FALLBACK event appears in correct position among other events.
+
+        The event must be emitted at the position the log line was seen,
+        before the subsequent scored event for the same listing.
+        """
+        lines = [
+            "INFO ingest: Fetched 2 listing(s) from Adzuna",
+            "INFO ingest: SCORED 8/10  [Adzuna] Clean Listing",
+            "INFO ingest: SCRAPE FALLBACK [Adzuna] Degraded Listing",
+            "INFO ingest: SCORED 5/10  [Adzuna] Degraded Listing",
+        ]
+        events = self._parse_lines(lines)
+        types = [e["type"] for e in events]
+
+        # Expected order: fetched, scored, scrape_fallback, scored
+        assert types == ["fetched", "scored", "scrape_fallback", "scored"], (
+            f"Unexpected event order: {types}"
+        )
+        # The scrape_fallback source and title are correct
+        fallback_event = events[2]
+        assert fallback_event["source"] == "Adzuna"
+        assert fallback_event["title"] == "Degraded Listing"
+        # The scored event following the fallback is annotated scraped=False
+        scored_after = events[3]
+        assert scored_after["detail"]["scraped"] is False

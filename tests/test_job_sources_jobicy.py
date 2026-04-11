@@ -225,6 +225,28 @@ class TestJobicyNormalise:
         result = client.normalise({**_RAW_JOB, "jobType": None})
         assert result["contract_time"] is None
 
+    def test_contract_time_list_with_none_element_becomes_none(self):
+        """normalise() yields None when jobType list contains None (regression PR #196).
+
+        [None] previously stringified to "None" via str(None), which prefilter()
+        would then lowercase and treat as a legitimate contract_time value.
+        Non-str list elements must collapse the field to None.
+        """
+        client = _client()
+        result = client.normalise({**_RAW_JOB, "jobType": [None]})
+        assert result["contract_time"] is None
+
+    def test_contract_time_list_with_int_element_becomes_none(self):
+        """normalise() yields None when jobType list contains an int (regression PR #196).
+
+        [123] previously stringified to "123" via str(123), which prefilter()
+        would then lowercase and treat as a legitimate contract_time value.
+        Non-str list elements must collapse the field to None.
+        """
+        client = _client()
+        result = client.normalise({**_RAW_JOB, "jobType": [123]})
+        assert result["contract_time"] is None
+
     def test_source_is_jobicy_string(self):
         """source field is always the literal string 'jobicy'."""
         client = _client()

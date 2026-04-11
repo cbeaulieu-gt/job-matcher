@@ -30,13 +30,15 @@ def _coerce_contract_field(value: object) -> str | None:
     never a list.
 
     Rules:
-    - list with at least one element → first element as a string
+    - list with at least one non-empty ``str`` element → first element as-is
+    - list whose first element is not a ``str`` (e.g. ``None``, ``int``) → ``None``
     - empty list → ``None``
     - non-empty string → returned as-is
     - ``None`` / falsy scalar → ``None``
     """
     if isinstance(value, list):
-        return str(value[0]) if value else None
+        element = value[0] if value else None
+        return element if isinstance(element, str) and element else None
     if value:
         return str(value)
     return None

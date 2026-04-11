@@ -404,12 +404,15 @@
       var currentlyReplay = isReplay;
       renderEvent(data, currentlyReplay);
 
-      // Only count live (non-replayed) events toward tallies.
-      // Replayed events still render to the DOM so the user can see them,
-      // but they must not double-count on reconnect.
-      if (!currentlyReplay) {
-        trackTally(data);
-      }
+      // Count every event — replayed or live — toward the tallies.
+      // On first connect (or cross-page navigation), the server replays the
+      // full run history; tallies must rebuild from that replay so counters
+      // are correct after any tab switch or page navigation.
+      // Double-counting is not possible within a single SSE session: the
+      // server uses Last-Event-ID to resume, so each event ID is delivered
+      // exactly once per connection (either as a replay or as a new live
+      // event, never both).
+      trackTally(data);
 
       // Switch out of replay mode after the first animation frame — by then the
       // browser has synchronously dispatched all buffered/replayed events.

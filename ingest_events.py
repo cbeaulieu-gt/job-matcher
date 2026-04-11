@@ -37,8 +37,10 @@ _RESCORE_COMPLETE_RE = re.compile(r"Rescore complete:\s+.+")
 class IngestEventParser:
     """Stateful parser that converts raw log lines into structured events.
 
-    Tracks current source and a scrape-fallback flag that propagates to the
-    next scored event.
+    Tracks a scrape-fallback flag that propagates to the next scored event so
+    the scored event can be annotated with ``scraped=False``.  The
+    ``scrape_fallback`` log line also emits its own event so the drawer can
+    display it in the live stream.
     """
 
     def __init__(self) -> None:
@@ -55,11 +57,18 @@ class IngestEventParser:
 
         now = datetime.now(timezone.utc).isoformat()
 
-        # -- SCRAPE FALLBACK (sets flag, returns None) --
+        # -- SCRAPE FALLBACK (sets flag, emits event) --
         m = _SCRAPE_FALLBACK_RE.match(stripped)
         if m:
             self._scrape_fallback = True
-            return None
+            return {
+                "type": "scrape_fallback",
+                "source": m.group(1),
+                "title": m.group(2),
+                "url": None,
+                "detail": {},
+                "timestamp": now,
+            }
 
         # -- SCORED --
         m = _SCORED_RE.match(stripped)

@@ -313,6 +313,15 @@
           '<span class="ingest-event-tag">full from source</span>';
         break;
 
+      case "scrape_fallback":
+        el.innerHTML =
+          (event.source
+            ? '<span class="ingest-event-source">' + escapeHtml(event.source) + "</span>"
+            : "") +
+          '<span class="ingest-event-title">' + escapeHtml(event.title || "") + "</span>" +
+          '<span class="ingest-event-tag">FALLBACK</span>';
+        break;
+
       case "complete":
         el.textContent = "Run complete";
         break;

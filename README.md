@@ -261,7 +261,7 @@ You can deploy any branch on demand without waiting for a push-triggered CI run:
 **What happens:**
 
 - `pytest` runs first (PostgreSQL service spun up automatically). If tests fail, the deploy is cancelled.
-- Lint (ruff) is **not** required for a manual deploy — only broken tests block it.
+- Lint (ruff) is **not** required for a manual deploy — only broken tests block it. Linting (`ruff`) is intentionally not a blocker for manual dispatches: a lint violation doesn't change runtime behavior, and gating dev testing on style rules slows down the feedback loop. Tests are still required because deploying code that doesn't pass its own test suite would waste the environment.
 - The Docker image is built and pushed to GHCR for the selected branch.
 - Branch → environment routing follows the same logic as auto-deploy:
   - `main` → prod stack (port 5001, `docker-compose.prod.yml`)

@@ -26,7 +26,7 @@ jobs:
       packages: write
 
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
@@ -152,7 +152,7 @@ jobs:
           --health-retries 5
 
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Set up Python 3.11
@@ -183,13 +183,17 @@ jobs:
       packages: write
 
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
         # github.sha is HEAD of the branch selected in the "Run workflow" UI
 
       - name: Compute short SHA
         id: sha
         run: echo "short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Compute safe branch tag
+        id: branch_tag
+        run: echo "safe=${GITHUB_REF_NAME//\//-}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -209,7 +213,7 @@ jobs:
           push: true
           tags: |
             ghcr.io/${{ github.repository_owner }}/job-matcher-pr:${{ github.sha }}
-            ghcr.io/${{ github.repository_owner }}/job-matcher-pr:${{ steps.sha.outputs.short }}-${{ github.ref_name }}
+            ghcr.io/${{ github.repository_owner }}/job-matcher-pr:${{ steps.sha.outputs.short }}-${{ steps.branch_tag.outputs.safe }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -222,7 +226,7 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository_owner }}/job-matcher-pr:latest
             ghcr.io/${{ github.repository_owner }}/job-matcher-pr:${{ github.sha }}
-            ghcr.io/${{ github.repository_owner }}/job-matcher-pr:${{ steps.sha.outputs.short }}-${{ github.ref_name }}
+            ghcr.io/${{ github.repository_owner }}/job-matcher-pr:${{ steps.sha.outputs.short }}-${{ steps.branch_tag.outputs.safe }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

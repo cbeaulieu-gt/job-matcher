@@ -309,7 +309,7 @@ deploy-dev-manual  (if branch != main) → dev stack, port 5000
 deploy-prod-manual (if branch == main) → prod stack, port 5001
 ```
 
-If `pytest` fails the deploy jobs are skipped. Lint (ruff) is not a gate for manual deploys — see issue #197 for rationale.
+If `pytest` fails the deploy jobs are skipped. Lint (ruff) is not a gate for manual deploys — see issue #197 for rationale. Linting (`ruff`) is intentionally not a blocker for manual dispatches: a lint violation doesn't change runtime behavior, and gating dev testing on style rules slows down the feedback loop. Tests are still required because deploying code that doesn't pass its own test suite would waste the environment.
 
 ### Registering the self-hosted runner
 

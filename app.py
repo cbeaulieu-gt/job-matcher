@@ -2149,6 +2149,12 @@ def settings_config_redirect():
 # Admin actions
 # ---------------------------------------------------------------------------
 
+@app.route("/admin")
+def admin():
+    """Administration page — runtime info, log downloads, ingest schedule, and database ops."""
+    return render_template("admin.html", view="admin")
+
+
 @app.route("/admin/clear-db", methods=["POST"])
 def admin_clear_db():
     """Delete all rows from the listings table.

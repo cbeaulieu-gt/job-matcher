@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Job Matcher · Administration</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="stylesheet" href="/static/style.css">
+  <!-- htmx 1.9.10 — to update: bump the version in the URL, then regenerate the hash with:
+       curl -fsSL https://unpkg.com/htmx.org@<VERSION>/dist/htmx.min.js | openssl dgst -sha384 -binary | openssl base64 -A
+       curl -fsSL https://unpkg.com/htmx.org@<VERSION>/dist/ext/json-enc.js | openssl dgst -sha384 -binary | openssl base64 -A -->
+  <script src="https://unpkg.com/htmx.org@1.9.10/dist/htmx.min.js" integrity="sha384-D1Kt99CQMDuVetoL1lrYwg5t+9QdHe7NLX/SoJYkXDFfX37iInKRy5xLSi8nO7UC" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/htmx.org@1.9.10/dist/ext/json-enc.js" integrity="sha384-nRnAvEUI7N/XvvowiMiq7oEI04gOXMCqD3Bidvedw+YNbj7zTQACPlRI3Jt3vYM4" crossorigin="anonymous"></script>
+</head>
+<body>
+{% include '_status_bar.html' %}
+<div class="page-wrap">
+
+  {# ── Header ─────────────────────────────────────────────────── #}
+  <header class="site-header">
+    <span class="site-logo">job<span>_</span>matcher</span>
+    <nav class="site-nav">
+      <a href="/"
+         class="nav-tab{% if view == 'feed' %} active{% endif %}">feed</a>
+      <a href="/bookmarks"
+         class="nav-tab{% if view == 'bookmarks' %} active{% endif %}">bookmarks</a>
+      <a href="/applied"
+         class="nav-tab{% if view == 'applied' %} active{% endif %}">applied</a>
+      <a href="/stats"
+         class="nav-tab{% if view == 'stats' %} active{% endif %}">stats</a>
+      <a href="/profile"
+         class="nav-tab{% if view == 'profile' %} active{% endif %}">profile</a>
+      <a href="/settings"
+         class="nav-tab{% if view == 'settings' %} active{% endif %}">settings</a>
+      <a href="/admin"
+         class="nav-tab{% if view == 'admin' %} active{% endif %}">admin</a>
+    </nav>
+  </header>
+
+  {# ── Page heading ─────────────────────────────────────────────── #}
+  <h1 class="page-heading">Administration</h1>
+
+  {# ── Admin sub-tabs ───────────────────────────────────────────── #}
+  <div class="settings-tabs" role="tablist">
+    <button
+      class="settings-tab-btn active"
+      role="tab"
+      aria-selected="true"
+      aria-controls="pane-runtime"
+      data-tab="runtime"
+      type="button">Runtime</button>
+    <button
+      class="settings-tab-btn"
+      role="tab"
+      aria-selected="false"
+      aria-controls="pane-logs"
+      data-tab="logs"
+      type="button">Logs</button>
+    <button
+      class="settings-tab-btn"
+      role="tab"
+      aria-selected="false"
+      aria-controls="pane-schedule"
+      data-tab="schedule"
+      type="button">Schedule</button>
+    <button
+      class="settings-tab-btn"
+      role="tab"
+      aria-selected="false"
+      aria-controls="pane-danger"
+      data-tab="danger"
+      type="button">Danger Zone</button>
+  </div>
+
+  {# ── Runtime pane ─────────────────────────────────────────────── #}
+  <div
+    id="pane-runtime"
+    class="tab-pane active"
+    role="tabpanel">
+    <!-- Phase 2 content -->
+  </div>
+
+  {# ── Logs pane ────────────────────────────────────────────────── #}
+  <div
+    id="pane-logs"
+    class="tab-pane"
+    role="tabpanel">
+    <!-- Phase 3 content -->
+  </div>
+
+  {# ── Schedule pane ────────────────────────────────────────────── #}
+  <div
+    id="pane-schedule"
+    class="tab-pane"
+    role="tabpanel">
+    <!-- Phase 4 content -->
+  </div>
+
+  {# ── Danger Zone pane ─────────────────────────────────────────── #}
+  <div
+    id="pane-danger"
+    class="tab-pane"
+    role="tabpanel">
+    <!-- Phase 5 content -->
+  </div>
+
+</div>
+
+{# ── Tab switching script ──────────────────────────────────────── #}
+<script>
+(function () {
+  var buttons = document.querySelectorAll('.settings-tab-btn');
+  var panes   = document.querySelectorAll('.tab-pane');
+
+  function activateTab(tabId) {
+    buttons.forEach(function (btn) {
+      var isActive = btn.dataset.tab === tabId;
+      btn.classList.toggle('active', isActive);
+      btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    });
+    panes.forEach(function (pane) {
+      pane.classList.toggle('active', pane.id === 'pane-' + tabId);
+    });
+  }
+
+  buttons.forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      activateTab(btn.dataset.tab);
+    });
+  });
+
+  // On page load, read ?tab= and activate that tab (overrides server-side default).
+  var params = new URLSearchParams(window.location.search);
+  var tabParam = params.get('tab');
+  if (tabParam && document.getElementById('pane-' + tabParam)) {
+    activateTab(tabParam);
+  }
+}());
+</script>
+
+</body>
+</html>

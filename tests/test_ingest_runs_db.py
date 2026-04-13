@@ -46,11 +46,10 @@ def _get_run(run_id: int) -> dict | None:
         cur = conn.execute(
             "SELECT * FROM ingest_runs WHERE id = %s", (run_id,)
         )
-        columns = [desc[0] for desc in cur.description]
         row = cur.fetchone()
     if row is None:
         return None
-    return dict(zip(columns, row))
+    return dict(row)
 
 
 # ---------------------------------------------------------------------------

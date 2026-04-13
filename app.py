@@ -513,6 +513,55 @@ def feed():
     )
 
 
+@app.route("/feed/fragment")
+def feed_fragment():
+    """Feed content fragment — returns only the listing cards (or empty state).
+
+    Used by the ``ingestComplete`` HTMX listener to refresh just the
+    ``#feed-content`` container after an ingest run completes, without
+    reloading the full page (which would destroy the ingest drawer).
+
+    Accepts the same filter query params as ``/``:
+      - min_score, remote_only, search, job_type, sort
+    """
+    threshold = CONFIG["scoring"]["threshold"]
+    if not isinstance(threshold, (int, float)) or threshold < 0:
+        threshold = 7.0
+
+    min_score_raw = request.args.get("min_score")
+    try:
+        min_score = float(min_score_raw) if min_score_raw else None
+    except ValueError:
+        min_score = None
+    remote_only = request.args.get("remote_only") == "1"
+    search = request.args.get("search", "").strip() or None
+    job_type = request.args.get("job_type", "").strip() or None
+    sort = request.args.get("sort", "").strip() or None
+
+    listings = db.get_feed(
+        threshold=threshold,
+        min_score=min_score,
+        remote_only=remote_only,
+        search=search,
+        job_type=job_type,
+        sort=sort,
+    )
+    last_fetch_time = db.get_last_fetch_time()
+    new_count = sum(1 for listing in listings if listing["opened_at"] is None)
+    resp = make_response(
+        render_template(
+            "_feed_fragment.html",
+            listings=listings,
+            threshold=threshold,
+            new_count=new_count,
+            last_fetch_time=last_fetch_time,
+        ),
+        200,
+    )
+    resp.headers["Content-Type"] = "text/html"
+    return resp
+
+
 @app.route("/bookmarks")
 def bookmarks():
     """Bookmarked listings only."""
@@ -706,6 +755,12 @@ _ingest_log_file: "object | None" = None
 # Stores the result of the most recently completed ingest run.
 _last_run: dict | None = None
 
+# Set to True when _ingest_running() first observes that the subprocess has
+# exited.  Consumed (cleared back to False) by the first /ingest/status
+# response that sends HX-Trigger: ingestComplete, so the event fires exactly
+# once per run — not on every subsequent idle poll.
+_ingest_just_completed: bool = False
+
 # Maximum number of concurrent SSE connections to /ingest/stream.
 # Limited to 2 to prevent resource exhaustion — each connection holds an open
 # HTTP connection plus an event queue subscription. Typical use case is 1
@@ -812,16 +867,18 @@ def _ingest_running() -> bool:
 
     Polls the process exit code: if poll() returns None the process is still
     running. If it has exited, read the temp log file to capture stdout, parse
-    the summary into ``_last_run``, and reset the handle to None so a new run
-    can start.
+    the summary into ``_last_run``, reset the handle to None so a new run can
+    start, and set ``_ingest_just_completed`` so the next /ingest/status
+    response fires ``HX-Trigger: ingestComplete`` exactly once.
     """
-    global _ingest_process, _ingest_log_file, _last_run
+    global _ingest_process, _ingest_log_file, _last_run, _ingest_just_completed
     with _ingest_lock:
         if _ingest_process is None:
             return False
         if _ingest_process.poll() is not None:
-            # Process has exited — extract summary from event queue for backward compat.
-            # Clean up legacy log file handle if present (no-op for new PIPE-based runs).
+            # Process has exited — extract summary from event queue for
+            # backward compat.  Clean up legacy log file handle if present
+            # (no-op for new PIPE-based runs).
             if _ingest_log_file is not None:
                 try:
                     _ingest_log_file.close()
@@ -830,6 +887,9 @@ def _ingest_running() -> bool:
                 _ingest_log_file = None
             _last_run = _parse_ingest_summary(event_queue.get_latest_summary())
             _ingest_process = None
+            # Mark the running→idle transition so /ingest/status sends
+            # HX-Trigger: ingestComplete exactly once (not on every idle poll).
+            _ingest_just_completed = True
             return False
         return True
 
@@ -917,15 +977,21 @@ def ingest_status():
     """Poll endpoint — returns an HTML partial reflecting current ingest state.
 
     While the process is running, returns the polling div so HTMX keeps
-    refreshing. Once it stops, returns the idle button and triggers a feed
-    refresh by setting HX-Trigger so the caller can react.
+    refreshing. Once it stops, returns the idle button.
+
+    ``HX-Trigger: ingestComplete`` is sent only on the running→idle transition
+    (i.e. the first idle response after a run finishes), not on every
+    subsequent idle poll. This prevents the ``ingestComplete`` listener from
+    firing repeatedly and causing an infinite refresh loop.
     """
+    global _ingest_just_completed
     running = _ingest_running()
     html = _render_ingest_running() if running else _render_ingest_idle()
     resp = make_response(html, 200)
     resp.headers["Content-Type"] = "text/html"
-    if not running:
-        # Signal HTMX to reload the feed once the job completes.
+    if not running and _ingest_just_completed:
+        # Consume the flag — subsequent idle polls will NOT carry this header.
+        _ingest_just_completed = False
         resp.headers["HX-Trigger"] = "ingestComplete"
     return resp
 

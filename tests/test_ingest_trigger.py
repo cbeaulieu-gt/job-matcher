@@ -1,5 +1,4 @@
-"""
-tests/test_ingest_trigger.py — Tests for POST /ingest/trigger and GET /ingest/status.
+"""Tests for POST /ingest/trigger and GET /ingest/status.
 
 Uses Flask's built-in test client and monkeypatches the module-level
 _ingest_process handle so no real subprocess is ever spawned.
@@ -8,7 +7,7 @@ _ingest_process handle so no real subprocess is ever spawned.
 import os
 import sys
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -22,12 +21,18 @@ from app import app as flask_app, _parse_ingest_summary
 
 @pytest.fixture(autouse=True)
 def reset_ingest_process(monkeypatch):
-    """Ensure _ingest_process and _ingest_log_file are always None before and after each test."""
+    """Reset all ingest-related globals before and after each test.
+
+    Resets _ingest_process, _ingest_log_file, and _ingest_just_completed
+    so tests do not bleed state into one another.
+    """
     monkeypatch.setattr(app_module, "_ingest_process", None)
     monkeypatch.setattr(app_module, "_ingest_log_file", None)
+    monkeypatch.setattr(app_module, "_ingest_just_completed", False)
     yield
     monkeypatch.setattr(app_module, "_ingest_process", None)
     monkeypatch.setattr(app_module, "_ingest_log_file", None)
+    monkeypatch.setattr(app_module, "_ingest_just_completed", False)
 
 
 @pytest.fixture()
@@ -241,16 +246,49 @@ class TestIngestStatus:
         # Handle must be cleared.
         assert app_module._ingest_process is None
 
-    def test_idle_response_carries_hx_trigger_header(self, client):
-        """When returning idle state, HX-Trigger header signals ingestComplete."""
+    def test_idle_poll_without_prior_run_has_no_hx_trigger(self, client):
+        """An idle poll with no completed run must NOT carry HX-Trigger.
+
+        Regression test: the old code sent HX-Trigger on every idle poll,
+        which caused an infinite feed refresh loop (bug #223).
+        """
         resp = client.get("/ingest/status")
-        assert resp.headers.get("HX-Trigger") == "ingestComplete"
+        assert "HX-Trigger" not in resp.headers
 
     def test_running_response_has_no_hx_trigger_header(self, client, monkeypatch):
         """While still running, HX-Trigger must not be present."""
         monkeypatch.setattr(app_module, "_ingest_process", _make_mock_process())
         resp = client.get("/ingest/status")
         assert "HX-Trigger" not in resp.headers
+
+    def test_hx_trigger_sent_on_running_to_idle_transition(
+        self, client, monkeypatch
+    ):
+        """HX-Trigger: ingestComplete must fire on the first idle response
+        after a run finishes — the running→idle transition.
+        """
+        # Simulate an exited process so _ingest_running() sets the flag.
+        monkeypatch.setattr(
+            app_module, "_ingest_process", _make_mock_process(exited=True)
+        )
+        resp = client.get("/ingest/status")
+        assert resp.headers.get("HX-Trigger") == "ingestComplete"
+
+    def test_hx_trigger_not_sent_on_second_idle_poll(self, client, monkeypatch):
+        """HX-Trigger must only fire once per run, not on every idle poll.
+
+        After the transition response consumes the flag, subsequent idle
+        polls must not carry HX-Trigger — otherwise the feed would reload
+        on every poll (bug #223).
+        """
+        monkeypatch.setattr(
+            app_module, "_ingest_process", _make_mock_process(exited=True)
+        )
+        # First poll — transition fires
+        client.get("/ingest/status")
+        # Second poll — flag already consumed, no header
+        resp2 = client.get("/ingest/status")
+        assert "HX-Trigger" not in resp2.headers
 
 
 # ---------------------------------------------------------------------------
@@ -399,3 +437,53 @@ class TestIngestStatusLastRun:
         resp = client.get("/ingest/status")
         body = resp.data.decode()
         assert "Last run" not in body
+
+
+# ---------------------------------------------------------------------------
+# GET /feed/fragment — partial feed refresh endpoint
+# ---------------------------------------------------------------------------
+
+class TestFeedFragment:
+    """Tests for the /feed/fragment endpoint used by the ingestComplete swap."""
+
+    @pytest.fixture(autouse=True)
+    def patch_db(self):
+        """Patch db.get_feed and db.get_last_fetch_time for all fragment
+        tests so they do not require a live Postgres connection."""
+        with patch("db.get_feed", return_value=[]) as _get_feed, \
+                patch("db.get_last_fetch_time", return_value=None) as _glft:
+            self._get_feed = _get_feed
+            yield
+
+    def test_returns_200(self, client):
+        """Endpoint must return HTTP 200."""
+        resp = client.get("/feed/fragment")
+        assert resp.status_code == 200
+
+    def test_response_is_html(self, client):
+        """Content-Type must be text/html."""
+        resp = client.get("/feed/fragment")
+        assert "text/html" in resp.content_type
+
+    def test_response_contains_feed_content_wrapper(self, client):
+        """Response must include the #feed-content wrapper element so HTMX
+        can perform an outerHTML swap on the target."""
+        resp = client.get("/feed/fragment")
+        body = resp.data.decode()
+        assert 'id="feed-content"' in body
+
+    def test_response_does_not_contain_full_page_chrome(self, client):
+        """Fragment must not include the full page shell (nav, head, etc.)
+        — only the swappable content region."""
+        resp = client.get("/feed/fragment")
+        body = resp.data.decode()
+        assert "<html" not in body
+        assert "<head" not in body
+        assert "site-header" not in body
+
+    def test_accepts_filter_params(self, client):
+        """Filter query params must be accepted without error."""
+        resp = client.get(
+            "/feed/fragment?min_score=7&remote_only=1&sort=score"
+        )
+        assert resp.status_code == 200

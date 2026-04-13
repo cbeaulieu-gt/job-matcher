@@ -162,8 +162,19 @@ class TestClearAllListings:
 @pytest.fixture()
 def client():
     flask_app.config["TESTING"] = True
+    flask_app.config["SECRET_KEY"] = "test-secret-key"
     with flask_app.test_client() as c:
         yield c
+
+
+def _get_csrf_token(client) -> str:
+    """GET /admin to establish a session and return the CSRF token from the session."""
+    with client.session_transaction() as sess:
+        # Seed the session directly — avoids a real DB call in GET /admin.
+        import secrets as _secrets
+        token = _secrets.token_urlsafe(32)
+        sess["csrf_token"] = token
+    return token
 
 
 class TestAdminClearDbRoute:
@@ -172,6 +183,9 @@ class TestAdminClearDbRoute:
     These tests operate against the real PostgreSQL database.  We insert
     test rows, exercise the route, and check outcomes using db helpers.
     After each test we ensure the table is restored to a known state.
+
+    All POST requests must include a valid CSRF token — obtained by seeding
+    the session via ``_get_csrf_token(client)``.
     """
 
     def teardown_method(self):
@@ -181,9 +195,10 @@ class TestAdminClearDbRoute:
         """POST /admin/clear-db with wrong phrase returns 400 and leaves rows intact."""
         _insert("cdb-rt-001")
         count_before = db.get_listing_count()
+        token = _get_csrf_token(client)
         resp = client.post(
             "/admin/clear-db",
-            data={"confirmation": "delete"},  # wrong case
+            data={"confirmation": "delete", "csrf_token": token},  # wrong case
         )
         assert resp.status_code == 400
         assert db.get_listing_count() == count_before
@@ -192,17 +207,19 @@ class TestAdminClearDbRoute:
         """POST /admin/clear-db with no phrase returns 400."""
         _insert("cdb-rt-002")
         count_before = db.get_listing_count()
-        resp = client.post("/admin/clear-db", data={})
+        token = _get_csrf_token(client)
+        resp = client.post("/admin/clear-db", data={"csrf_token": token})
         assert resp.status_code == 400
         assert db.get_listing_count() == count_before
 
     def test_accepts_correct_confirmation_and_deletes(self, client):
-        """POST /admin/clear-db with 'DELETE' clears all rows and returns 200."""
+        """POST /admin/clear-db with 'DELETE' and valid CSRF clears all rows and returns 200."""
         _insert("cdb-rt-003")
         _insert("cdb-rt-004")
+        token = _get_csrf_token(client)
         resp = client.post(
             "/admin/clear-db",
-            data={"confirmation": "DELETE"},
+            data={"confirmation": "DELETE", "csrf_token": token},
         )
         assert resp.status_code == 200
         assert db.get_listing_count() == 0
@@ -214,9 +231,10 @@ class TestAdminClearDbRoute:
             db.clear_all_listings(conn)
         _insert("cdb-rt-005")
         _insert("cdb-rt-006")
+        token = _get_csrf_token(client)
         resp = client.post(
             "/admin/clear-db",
-            data={"confirmation": "DELETE"},
+            data={"confirmation": "DELETE", "csrf_token": token},
         )
         body = resp.data.decode()
         assert "2" in body
@@ -226,9 +244,10 @@ class TestAdminClearDbRoute:
         """Clearing an already-empty DB returns 200 with a 0-deleted message."""
         with db.get_connection() as conn:
             db.clear_all_listings(conn)
+        token = _get_csrf_token(client)
         resp = client.post(
             "/admin/clear-db",
-            data={"confirmation": "DELETE"},
+            data={"confirmation": "DELETE", "csrf_token": token},
         )
         assert resp.status_code == 200
         body = resp.data.decode()
@@ -236,9 +255,10 @@ class TestAdminClearDbRoute:
 
     def test_error_fragment_contains_message(self, client):
         """400 response body contains an explanatory error message."""
+        token = _get_csrf_token(client)
         resp = client.post(
             "/admin/clear-db",
-            data={"confirmation": "WRONG"},
+            data={"confirmation": "WRONG", "csrf_token": token},
         )
         body = resp.data.decode()
         assert "did not match" in body.lower() or "confirmation" in body.lower()
@@ -248,9 +268,10 @@ class TestAdminClearDbRoute:
         with db.get_connection() as conn:
             db.clear_all_listings(conn)
         _insert("cdb-rt-solo")
+        token = _get_csrf_token(client)
         resp = client.post(
             "/admin/clear-db",
-            data={"confirmation": "DELETE"},
+            data={"confirmation": "DELETE", "csrf_token": token},
         )
         body = resp.data.decode()
         assert "1 listing deleted" in body
@@ -261,16 +282,77 @@ class TestAdminClearDbRoute:
             db.clear_all_listings(conn)
         _insert("cdb-rt-001p")
         _insert("cdb-rt-002p")
+        token = _get_csrf_token(client)
         resp = client.post(
             "/admin/clear-db",
-            data={"confirmation": "DELETE"},
+            data={"confirmation": "DELETE", "csrf_token": token},
         )
         body = resp.data.decode()
         assert "listings deleted" in body
 
 
 # ---------------------------------------------------------------------------
-# GET /settings includes listing_count
+# CSRF protection tests — do not require a database connection
+# ---------------------------------------------------------------------------
+
+class TestAdminClearDbCsrf:
+    """Verify that /admin/clear-db enforces CSRF token validation.
+
+    These tests only need the Flask app; no PostgreSQL connection is required
+    because CSRF rejection happens before any DB access.
+    """
+
+    def test_missing_csrf_token_returns_400(self, client):
+        """POST with confirmation=DELETE but no csrf_token is rejected with 400."""
+        resp = client.post(
+            "/admin/clear-db",
+            data={"confirmation": "DELETE"},
+        )
+        assert resp.status_code == 400
+        body = resp.data.decode()
+        assert "csrf" in body.lower() or "token" in body.lower()
+
+    def test_wrong_csrf_token_returns_400(self, client):
+        """POST with confirmation=DELETE and a mismatched csrf_token is rejected with 400."""
+        # Seed a real token in the session, but send a different value.
+        with client.session_transaction() as sess:
+            sess["csrf_token"] = "correct-token"
+        resp = client.post(
+            "/admin/clear-db",
+            data={"confirmation": "DELETE", "csrf_token": "wrong-token"},
+        )
+        assert resp.status_code == 400
+        body = resp.data.decode()
+        assert "csrf" in body.lower() or "token" in body.lower()
+
+    def test_empty_csrf_token_returns_400(self, client):
+        """POST with csrf_token='' is rejected with 400."""
+        with client.session_transaction() as sess:
+            sess["csrf_token"] = "correct-token"
+        resp = client.post(
+            "/admin/clear-db",
+            data={"confirmation": "DELETE", "csrf_token": ""},
+        )
+        assert resp.status_code == 400
+
+    def test_valid_csrf_and_confirmation_returns_200(self, client):
+        """POST with a matching csrf_token and confirmation=DELETE succeeds (200)."""
+        token = _get_csrf_token(client)
+        # Clear DB first so we don't depend on DB state for this assertion.
+        try:
+            with db.get_connection() as conn:
+                db.clear_all_listings(conn)
+        except Exception:
+            pytest.skip("No DATABASE_URL available — skipping DB-dependent CSRF success test")
+        resp = client.post(
+            "/admin/clear-db",
+            data={"confirmation": "DELETE", "csrf_token": token},
+        )
+        assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# GET /settings and GET /admin page render tests
 # ---------------------------------------------------------------------------
 
 @pytest.fixture()
@@ -290,20 +372,18 @@ def tmp_keys_path(tmp_path, monkeypatch):
     return path
 
 
-class TestSettingsListingCount:
+class TestSettingsPageRenders:
     def teardown_method(self):
         _cleanup(_PREFIX)
 
-    def test_settings_page_renders_listing_count(
+    def test_settings_page_renders_ok(
         self, client, tmp_providers_path, tmp_keys_path
     ):
-        """GET /settings page renders without error and includes the listing count."""
+        """GET /settings page renders without error (listing_count is no longer shown here)."""
         _insert("cdb-st-001")
         _insert("cdb-st-002")
         resp = client.get("/settings")
         assert resp.status_code == 200
-        # The count should appear somewhere in the page — we can't assert
-        # exact count since other tests may have rows, but it renders without error.
         assert resp.data
 
     def test_settings_page_renders_ok_when_empty(
@@ -312,3 +392,27 @@ class TestSettingsListingCount:
         """GET /settings renders without error even when no listings inserted."""
         resp = client.get("/settings")
         assert resp.status_code == 200
+
+
+class TestAdminPageRenders:
+    """Tests for GET /admin that mock the DB so they run without PostgreSQL."""
+
+    def test_admin_page_renders_with_listing_count(self, client, monkeypatch):
+        """GET /admin renders without error and includes the danger zone markup."""
+        import app as app_module
+        monkeypatch.setattr(app_module.db, "get_listing_count", lambda: 42)
+        resp = client.get("/admin")
+        assert resp.status_code == 200
+        body = resp.data.decode()
+        # The danger zone section should be present.
+        assert "Danger Zone" in body
+        assert "Clear Database" in body
+
+    def test_admin_page_sets_csrf_token_in_session(self, client, monkeypatch):
+        """GET /admin establishes a CSRF token in the session."""
+        import app as app_module
+        monkeypatch.setattr(app_module.db, "get_listing_count", lambda: 0)
+        client.get("/admin")
+        with client.session_transaction() as sess:
+            assert "csrf_token" in sess
+            assert len(sess["csrf_token"]) > 0

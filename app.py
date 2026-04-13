@@ -9,6 +9,7 @@ import ipaddress
 import json
 import os
 import re
+import secrets
 import subprocess
 import sys
 import threading
@@ -17,7 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from importlib.metadata import version as pkg_version, PackageNotFoundError
 
-from flask import Flask, render_template, make_response, request, jsonify, redirect, url_for, Response, stream_with_context
+from flask import Flask, render_template, make_response, request, jsonify, redirect, url_for, Response, session, stream_with_context
 
 import db
 from credentials import CredentialError, load_providers, save_providers
@@ -33,6 +34,9 @@ from providers.base import _sanitise_detail
 from job_sources import get_sources
 
 app = Flask(__name__)
+# A stable secret key is required for session-based CSRF tokens.  In production
+# this should be overridden via the SECRET_KEY environment variable.
+app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
 
 # Inject environment and version globals so all templates can render the status bar.
 app.jinja_env.globals['APP_ENV'] = os.environ.get('APP_ENV', 'local')
@@ -1265,8 +1269,6 @@ def settings():
     if request.method == "POST" and error:
         pass  # fall through to render with error
 
-    listing_count = db.get_listing_count()
-
     # Pass technical search fields to the Search Settings tab.
     search_cfg = load_config(_CONFIG_PATH).get("search") or {}
 
@@ -1278,7 +1280,6 @@ def settings():
         active_tab=active_tab,
         saved=saved,
         error=error,
-        listing_count=listing_count,
         search_cfg=search_cfg,
     )
 
@@ -2152,7 +2153,15 @@ def settings_config_redirect():
 @app.route("/admin")
 def admin():
     """Administration page — runtime info, log downloads, ingest schedule, and database ops."""
-    return render_template("admin.html", view="admin")
+    if "csrf_token" not in session:
+        session["csrf_token"] = secrets.token_urlsafe(32)
+    listing_count = db.get_listing_count()
+    return render_template(
+        "admin.html",
+        view="admin",
+        listing_count=listing_count,
+        csrf_token=session["csrf_token"],
+    )
 
 
 @app.route("/admin/clear-db", methods=["POST"])
@@ -2174,6 +2183,16 @@ def admin_clear_db():
         400 HTML fragment when the confirmation phrase is wrong.
         500 HTML fragment on database error.
     """
+    # CSRF check — token must match the session value established on GET /admin.
+    csrf_token = request.form.get("csrf_token", "")
+    if not csrf_token or csrf_token != session.get("csrf_token"):
+        html = (
+            '<p class="save-error" id="clear-db-result">'
+            "Invalid or missing CSRF token — request rejected."
+            "</p>"
+        )
+        return make_response(html, 400)
+
     confirmation = request.form.get("confirmation", "").strip()
 
     if confirmation != "DELETE":

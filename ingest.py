@@ -66,10 +66,8 @@ def _configure_file_logging() -> None:
     """
     MAX_LOG_FILES = 30
 
-    log_dir = os.environ.get(
-        "LOG_DIR",
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
-    )
+    from paths import LOG_DIR
+    log_dir = str(LOG_DIR)
     try:
         os.makedirs(log_dir, exist_ok=True)
     except (PermissionError, OSError) as exc:

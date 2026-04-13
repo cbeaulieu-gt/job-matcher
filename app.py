@@ -18,10 +18,11 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from importlib.metadata import version as pkg_version, PackageNotFoundError
 
-from flask import Flask, render_template, make_response, request, jsonify, redirect, url_for, Response, session, stream_with_context
+from flask import Flask, render_template, make_response, request, jsonify, redirect, url_for, Response, session, stream_with_context, send_from_directory, abort
 
 import db
 from credentials import CredentialError, load_providers, save_providers
+from paths import LOG_DIR
 from ingest_events import IngestEventParser, event_queue
 from io import BytesIO
 
@@ -2149,6 +2150,9 @@ def settings_config_redirect():
 # Admin actions
 # ---------------------------------------------------------------------------
 
+_LOG_FILENAME_RE = re.compile(r"^ingest_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})\.log$")
+
+
 @app.route("/admin")
 def admin():
     """Administration page — runtime info, log downloads, ingest schedule, and database ops."""
@@ -2232,6 +2236,62 @@ def admin_clear_db():
         f'<div id="clear-db-panel" style="display:none"></div>'
     )
     return make_response(html, 200)
+
+
+@app.route("/admin/logs")
+def admin_logs():
+    """Return an HTML fragment listing available ingest log files."""
+    logs = []
+    try:
+        for entry in os.scandir(LOG_DIR):
+            if not entry.is_file():
+                continue
+            m = _LOG_FILENAME_RE.match(entry.name)
+            if not m:
+                continue
+            # Check readability
+            try:
+                size = entry.stat().st_size
+            except OSError:
+                continue
+            timestamp = f"{m.group(1)}-{m.group(2)}-{m.group(3)} {m.group(4)}:{m.group(5)}:{m.group(6)}"
+            # Human-readable size
+            if size >= 1_048_576:
+                size_str = f"{size / 1_048_576:.1f} MB"
+            elif size >= 1024:
+                size_str = f"{size / 1024:.1f} KB"
+            else:
+                size_str = f"{size} B"
+            logs.append({"filename": entry.name, "timestamp": timestamp, "size": size_str})
+    except FileNotFoundError:
+        pass  # LOG_DIR doesn't exist yet — empty list
+
+    logs.sort(key=lambda x: x["filename"], reverse=True)  # newest first
+    return render_template("admin/_log_list.html", logs=logs)
+
+
+@app.route("/admin/logs/<filename>/download")
+def admin_log_download(filename):
+    """Download an ingest log file."""
+    # Validate filename against strict regex
+    if not _LOG_FILENAME_RE.match(filename):
+        abort(404)
+
+    target = (LOG_DIR / filename).resolve()
+
+    # Symlink escape check — resolved path must be inside LOG_DIR
+    if not str(target).startswith(str(LOG_DIR.resolve())):
+        abort(404)
+
+    if not target.is_file():
+        abort(404)
+
+    return send_from_directory(
+        LOG_DIR,
+        filename,
+        as_attachment=True,
+        mimetype="text/plain; charset=utf-8",
+    )
 
 
 # ---------------------------------------------------------------------------

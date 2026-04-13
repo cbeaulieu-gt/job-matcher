@@ -101,7 +101,8 @@
     id="pane-logs"
     class="tab-pane"
     role="tabpanel">
-    <!-- Phase 3 content -->
+    <h2 class="stats-section-heading">Ingest Logs</h2>
+    <div id="admin-logs-list" hx-get="/admin/logs" hx-trigger="load"></div>
   </div>
 
   {# ── Schedule pane ────────────────────────────────────────────── #}

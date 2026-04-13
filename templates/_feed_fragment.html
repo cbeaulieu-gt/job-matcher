@@ -1,0 +1,41 @@
+{#- _feed_fragment.html — partial returned by /feed/fragment for HTMX swaps.
+
+     Renders just the feed-meta count line, the card list (or empty state), all
+     wrapped in #feed-content so the ingestComplete listener can swap it in
+     without touching the rest of the page shell (nav, drawer, ingest trigger).
+-#}
+<div id="feed-content">
+
+  {# ── Feed subtitle ───────────────────────────────────────────── #}
+  <div class="feed-meta">
+    <strong>{{ listings | length }}</strong>
+    {%- if listings | length == 1 %} role{% else %} roles{% endif %}
+    {%- if new_count > 0 %}
+      &nbsp;·&nbsp; <span class="feed-new-count">{{ new_count }} new</span>
+    {%- endif %}
+    {%- if last_fetch_time is not none %}
+      &nbsp;·&nbsp; <span class="last-fetch">last updated {{ last_fetch_time | timeago }}</span>
+    {%- endif %}
+  </div>
+
+  {# ── Listing cards ───────────────────────────────────────────── #}
+  {% if listings %}
+    <div class="card-list">
+      {% for listing in listings %}
+        {% include "_card.html" %}
+      {% endfor %}
+    </div>
+
+  {# ── Empty state ─────────────────────────────────────────────── #}
+  {% else %}
+    <div class="empty-state">
+      <span class="empty-state-icon">&#9678;</span>
+      <p class="empty-state-title">No listings yet</p>
+      <p class="empty-state-body">
+        Run <code>python ingest.py</code> to fetch and score new listings.<br>
+        Results scored {{ threshold | round(1) }}+ will appear here.
+      </p>
+    </div>
+  {% endif %}
+
+</div>

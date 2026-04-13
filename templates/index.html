@@ -10,7 +10,8 @@
        curl -fsSL https://unpkg.com/htmx.org@<VERSION>/dist/htmx.min.js | openssl dgst -sha384 -binary | openssl base64 -A -->
   <script src="https://unpkg.com/htmx.org@1.9.10/dist/htmx.min.js" integrity="sha384-D1Kt99CQMDuVetoL1lrYwg5t+9QdHe7NLX/SoJYkXDFfX37iInKRy5xLSi8nO7UC" crossorigin="anonymous"></script>
 </head>
-<body>
+<body
+  hx-on:ingestComplete="htmx.ajax('GET', '/feed/fragment', {target: '#feed-content', swap: 'outerHTML'})">
 {% include '_status_bar.html' %}
 {% if demo_mode %}
 <div class="demo-banner" role="status">&#x2697; Demo Mode &mdash; sample data only, no real API calls</div>
@@ -48,19 +49,9 @@
   </nav>
   {% endif %}
 
-  {# ── Feed subtitle ───────────────────────────────────────────── #}
-  {% if view == "feed" %}
-    <div class="feed-meta">
-      <strong>{{ listings | length }}</strong>
-      {%- if listings | length == 1 %} role{% else %} roles{% endif %}
-      {%- if new_count > 0 %}
-        &nbsp;·&nbsp; <span class="feed-new-count">{{ new_count }} new</span>
-      {%- endif %}
-      {%- if last_fetch_time is not none %}
-        &nbsp;·&nbsp; <span class="last-fetch">last updated {{ last_fetch_time | timeago }}</span>
-      {%- endif %}
-    </div>
-  {% elif view == "bookmarks" %}
+  {# ── Feed subtitle (non-feed views only; feed view renders this   #}
+  {# inside #feed-content so it refreshes on partial HTMX swap)    #}
+  {% if view == "bookmarks" %}
     <div class="feed-meta">
       <strong>{{ listings | length }}</strong>
       {%- if listings | length == 1 %} saved role{% else %} saved roles{% endif %}
@@ -91,13 +82,55 @@
 
   {# ── Ingestion trigger (feed only) ──────────────────────────── #}
   {% if view == "feed" %}
-    <div class="ingest-trigger-container"
-         hx-on:ingestComplete="window.location.reload()">
+    <div class="ingest-trigger-container">
       {% include "_ingest_trigger.html" %}
     </div>
   {% endif %}
 
-  {# ── Listing cards ───────────────────────────────────────────── #}
+  {# ── Feed content (swappable via ingestComplete) ─────────────── #}
+  {# The #feed-content wrapper is the HTMX swap target for the     #}
+  {# ingestComplete listener on <body>. The listener calls          #}
+  {# /feed/fragment which returns a new #feed-content div, so the  #}
+  {# outer wrapper is replaced in-place — no full page reload.      #}
+  {% if view == "feed" %}
+  <div id="feed-content">
+
+    {# ── Feed subtitle (inside swap target so it refreshes) ──────── #}
+    <div class="feed-meta">
+      <strong>{{ listings | length }}</strong>
+      {%- if listings | length == 1 %} role{% else %} roles{% endif %}
+      {%- if new_count > 0 %}
+        &nbsp;·&nbsp; <span class="feed-new-count">{{ new_count }} new</span>
+      {%- endif %}
+      {%- if last_fetch_time is not none %}
+        &nbsp;·&nbsp; <span class="last-fetch">last updated {{ last_fetch_time | timeago }}</span>
+      {%- endif %}
+    </div>
+
+    {# ── Listing cards ─────────────────────────────────────────── #}
+    {% if listings %}
+      <div class="card-list">
+        {% for listing in listings %}
+          {% include "_card.html" %}
+        {% endfor %}
+      </div>
+
+    {# ── Empty state ───────────────────────────────────────────── #}
+    {% else %}
+      <div class="empty-state">
+        <span class="empty-state-icon">◎</span>
+        <p class="empty-state-title">No listings yet</p>
+        <p class="empty-state-body">
+          Run <code>python ingest.py</code> to fetch and score new listings.<br>
+          Results scored {{ threshold | round(1) }}+ will appear here.
+        </p>
+      </div>
+    {% endif %}
+
+  </div>
+  {% else %}
+
+  {# ── Non-feed listing cards (bookmarks, applied) ─────────────── #}
   {% if listings %}
     <div class="card-list">
       {% for listing in listings %}
@@ -105,7 +138,7 @@
       {% endfor %}
     </div>
 
-  {# ── Empty state ─────────────────────────────────────────────── #}
+  {# ── Empty state ───────────────────────────────────────────────── #}
   {% else %}
     <div class="empty-state">
       {% if view == "bookmarks" %}
@@ -124,11 +157,11 @@
         <span class="empty-state-icon">◎</span>
         <p class="empty-state-title">No listings yet</p>
         <p class="empty-state-body">
-          Run <code>python ingest.py</code> to fetch and score new listings.<br>
-          Results scored {{ threshold | round(1) }}+ will appear here.
+          Run <code>python ingest.py</code> to fetch and score new listings.
         </p>
       {% endif %}
     </div>
+  {% endif %}
   {% endif %}
 
 </div>

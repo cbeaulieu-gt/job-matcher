@@ -11,7 +11,6 @@ against a shared dev database.
 
 import os
 import sys
-from datetime import datetime, timezone, timedelta
 
 import pytest
 

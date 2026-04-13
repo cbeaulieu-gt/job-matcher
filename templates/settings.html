@@ -215,6 +215,8 @@
          class="nav-tab{% if view == 'profile' %} active{% endif %}">profile</a>
       <a href="/settings"
          class="nav-tab{% if view == 'settings' %} active{% endif %}">settings</a>
+      <a href="/admin"
+         class="nav-tab{% if view == 'admin' %} active{% endif %}">admin</a>
     </nav>
   </header>
 
@@ -483,68 +485,6 @@
     </form>
   </div>
 
-  {# ── Danger Zone ──────────────────────────────────────────────── #}
-  <div class="danger-zone">
-    <h2 class="danger-zone-heading">Danger Zone</h2>
-
-    {# Result target — HTMX swaps success/error notices here #}
-    <div id="clear-db-result"></div>
-
-    <button
-      type="button"
-      class="btn-danger"
-      id="clear-db-trigger"
-      aria-expanded="false"
-      aria-controls="clear-db-panel">
-      Clear Database
-    </button>
-
-    <div class="clear-db-panel" id="clear-db-panel" role="region" aria-label="Clear database confirmation">
-      <ul class="clear-db-warnings">
-        <li>All job listings will be permanently deleted.</li>
-        <li>This cannot be undone.</li>
-        <li>Bookmarked and applied listings will also be lost.</li>
-      </ul>
-      <p class="clear-db-count">
-        Current record count:
-        <strong>{{ listing_count }}</strong>
-        {{ "listing" if listing_count == 1 else "listings" }}
-      </p>
-
-      <form
-        class="clear-db-form"
-        hx-post="/admin/clear-db"
-        hx-target="#clear-db-result"
-        hx-swap="innerHTML"
-        id="clear-db-form">
-        <label class="clear-db-label" for="clear-db-confirmation">
-          Type DELETE to confirm
-        </label>
-        <input
-          type="text"
-          id="clear-db-confirmation"
-          name="confirmation"
-          class="clear-db-input"
-          autocomplete="off"
-          spellcheck="false"
-          placeholder="DELETE"
-          oninput="document.getElementById('clear-db-submit').disabled = (this.value !== 'DELETE');">
-        <button
-          type="submit"
-          id="clear-db-submit"
-          class="btn-danger-confirm"
-          disabled>
-          Delete All Listings
-        </button>
-        <button
-          type="button"
-          class="clear-db-cancel"
-          id="clear-db-cancel">
-          Cancel
-        </button>
-      </form>
-    </div>
-  </div>
 
 </div>
 
@@ -1041,47 +981,6 @@
       }
       sortable = initSortable(newListEl);
     };
-  }
-}());
-</script>
-{# ── Danger Zone script ───────────────────────────────────────── #}
-<script>
-(function () {
-  var trigger  = document.getElementById('clear-db-trigger');
-  var panel    = document.getElementById('clear-db-panel');
-  var cancel   = document.getElementById('clear-db-cancel');
-  var form     = document.getElementById('clear-db-form');
-  var input    = document.getElementById('clear-db-confirmation');
-  var resultEl = document.getElementById('clear-db-result');
-
-  if (!trigger || !panel) return;
-
-  function showPanel() {
-    panel.classList.add('visible');
-    trigger.setAttribute('aria-expanded', 'true');
-    if (input) input.focus();
-  }
-
-  function hidePanel() {
-    panel.classList.remove('visible');
-    trigger.setAttribute('aria-expanded', 'false');
-    // Reset confirmation input and submit button state for next open
-    if (input) input.value = '';
-    var submit = document.getElementById('clear-db-submit');
-    if (submit) submit.disabled = true;
-  }
-
-  trigger.addEventListener('click', showPanel);
-  if (cancel) cancel.addEventListener('click', hidePanel);
-
-  // After a successful HTMX clear, reload the page so the listing count
-  // and button state are refreshed from the server.
-  if (form) {
-    form.addEventListener('htmx:afterRequest', function (evt) {
-      if (evt.detail.successful) {
-        window.location.reload();
-      }
-    });
   }
 }());
 </script>

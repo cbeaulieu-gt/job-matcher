@@ -9,6 +9,7 @@ import ipaddress
 import json
 import os
 import re
+import secrets
 import subprocess
 import sys
 import threading
@@ -17,10 +18,11 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from importlib.metadata import version as pkg_version, PackageNotFoundError
 
-from flask import Flask, render_template, make_response, request, jsonify, redirect, url_for, Response, stream_with_context
+from flask import Flask, render_template, make_response, request, jsonify, redirect, url_for, Response, session, stream_with_context, send_from_directory, abort
 
 import db
 from credentials import CredentialError, load_providers, save_providers
+from paths import LOG_DIR
 from ingest_events import IngestEventParser, event_queue
 from io import BytesIO
 
@@ -33,6 +35,9 @@ from providers.base import _sanitise_detail
 from job_sources import get_sources
 
 app = Flask(__name__)
+# A stable secret key is required for session-based CSRF tokens.  In production
+# this should be overridden via the SECRET_KEY environment variable.
+app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
 
 # Inject environment and version globals so all templates can render the status bar.
 app.jinja_env.globals['APP_ENV'] = os.environ.get('APP_ENV', 'local')
@@ -615,7 +620,6 @@ def stats():
         stats=data,
         view="stats",
         config_warnings=_config_warnings(),
-        runtime_versions=RUNTIME_VERSIONS,
     )
 
 
@@ -887,7 +891,7 @@ def ingest_trigger():
                 bufsize=1,  # line-buffered
                 # Force unbuffered output from the child so log lines reach
                 # the parent pipe immediately even when stderr is not a tty.
-                env={**os.environ, "PYTHONUNBUFFERED": "1"},
+                env={**os.environ, "PYTHONUNBUFFERED": "1", "INGEST_TRIGGER": "manual_ui"},
             )
         except (OSError, PermissionError) as e:
             return jsonify({"error": f"Failed to start ingestion: {e}"}), 500
@@ -1265,8 +1269,6 @@ def settings():
     if request.method == "POST" and error:
         pass  # fall through to render with error
 
-    listing_count = db.get_listing_count()
-
     # Pass technical search fields to the Search Settings tab.
     search_cfg = load_config(_CONFIG_PATH).get("search") or {}
 
@@ -1278,7 +1280,6 @@ def settings():
         active_tab=active_tab,
         saved=saved,
         error=error,
-        listing_count=listing_count,
         search_cfg=search_cfg,
     )
 
@@ -2149,6 +2150,27 @@ def settings_config_redirect():
 # Admin actions
 # ---------------------------------------------------------------------------
 
+_LOG_FILENAME_RE = re.compile(r"^ingest_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})\.log$")
+
+# Scheduler health thresholds (hours since last scheduled run).
+SCHEDULE_WARN_HOURS = 25
+SCHEDULE_CRITICAL_HOURS = 49
+
+
+@app.route("/admin")
+def admin():
+    """Administration page — runtime info, log downloads, ingest schedule, and database ops."""
+    session.setdefault("csrf_token", secrets.token_urlsafe(32))
+    listing_count = db.get_listing_count()
+    return render_template(
+        "admin.html",
+        view="admin",
+        listing_count=listing_count,
+        csrf_token=session["csrf_token"],
+        runtime_versions=RUNTIME_VERSIONS,
+    )
+
+
 @app.route("/admin/clear-db", methods=["POST"])
 def admin_clear_db():
     """Delete all rows from the listings table.
@@ -2168,6 +2190,16 @@ def admin_clear_db():
         400 HTML fragment when the confirmation phrase is wrong.
         500 HTML fragment on database error.
     """
+    # CSRF check — token must match the session value established on GET /admin.
+    csrf_token = request.form.get("csrf_token", "")
+    if not csrf_token or csrf_token != session.get("csrf_token"):
+        html = (
+            '<p class="save-error" id="clear-db-result">'
+            "Invalid or missing CSRF token — request rejected."
+            "</p>"
+        )
+        return make_response(html, 400)
+
     confirmation = request.form.get("confirmation", "").strip()
 
     if confirmation != "DELETE":
@@ -2207,6 +2239,121 @@ def admin_clear_db():
         f'<div id="clear-db-panel" style="display:none"></div>'
     )
     return make_response(html, 200)
+
+
+@app.route("/admin/logs")
+def admin_logs():
+    """Return an HTML fragment listing available ingest log files."""
+    logs = []
+    try:
+        for entry in os.scandir(LOG_DIR):
+            if not entry.is_file():
+                continue
+            m = _LOG_FILENAME_RE.match(entry.name)
+            if not m:
+                continue
+            # Check readability
+            try:
+                size = entry.stat().st_size
+            except OSError:
+                continue
+            timestamp = f"{m.group(1)}-{m.group(2)}-{m.group(3)} {m.group(4)}:{m.group(5)}:{m.group(6)}"
+            # Human-readable size
+            if size >= 1_048_576:
+                size_str = f"{size / 1_048_576:.1f} MB"
+            elif size >= 1024:
+                size_str = f"{size / 1024:.1f} KB"
+            else:
+                size_str = f"{size} B"
+            logs.append({"filename": entry.name, "timestamp": timestamp, "size": size_str})
+    except FileNotFoundError:
+        pass  # LOG_DIR doesn't exist yet — empty list
+
+    logs.sort(key=lambda x: x["filename"], reverse=True)  # newest first
+    return render_template("admin/_log_list.html", logs=logs)
+
+
+@app.route("/admin/logs/<filename>/download")
+def admin_log_download(filename):
+    """Download an ingest log file."""
+    # Validate filename against strict regex
+    if not _LOG_FILENAME_RE.match(filename):
+        abort(404)
+
+    target = (LOG_DIR / filename).resolve()
+
+    # Symlink escape check — resolved path must be inside LOG_DIR.
+    # Use relative_to() rather than startswith() so the check is
+    # case-insensitive-safe and handles path separators correctly on Windows.
+    try:
+        target.relative_to(LOG_DIR.resolve())
+    except ValueError:
+        abort(404)
+
+    if not target.is_file():
+        abort(404)
+
+    return send_from_directory(
+        LOG_DIR,
+        filename,
+        as_attachment=True,
+        mimetype="text/plain; charset=utf-8",
+    )
+
+
+@app.route("/admin/schedule-state")
+def admin_schedule_state():
+    """Return an HTML fragment showing ingest run history and scheduler health."""
+    try:
+        runs = db.get_recent_ingest_runs(10)
+    # Catch-all: schedule state is best-effort; a DB error must never break the admin page.
+    except Exception:  # noqa: BLE001
+        runs = []
+
+    # Compute health badge
+    badge = "none"  # no data
+    badge_text = "No runs recorded yet"
+
+    if runs:
+        # Find most recent scheduled run
+        scheduled_runs = [r for r in runs if r.get("trigger_source") == "scheduled"]
+
+        if scheduled_runs:
+            last_scheduled = scheduled_runs[0]
+            age_hours = None
+            if last_scheduled.get("started_at"):
+                started = last_scheduled["started_at"]
+                if hasattr(started, "tzinfo") and started.tzinfo:
+                    now = datetime.now(timezone.utc)
+                else:
+                    now = datetime.utcnow()
+                age_hours = (now - started).total_seconds() / 3600
+
+            if last_scheduled.get("status") == "failed":
+                badge = "red"
+                badge_text = "Last scheduled run failed"
+            elif age_hours is not None and age_hours > SCHEDULE_CRITICAL_HOURS:
+                badge = "red"
+                badge_text = f"Scheduler may be down — no scheduled run in {SCHEDULE_CRITICAL_HOURS}+ hours"
+            elif age_hours is not None and age_hours > SCHEDULE_WARN_HOURS:
+                badge = "amber"
+                badge_text = f"Last scheduled run was {SCHEDULE_WARN_HOURS}+ hours ago"
+            elif last_scheduled.get("status") == "running":
+                badge = "amber"
+                badge_text = "Scheduled run in progress"
+            else:
+                badge = "green"
+                badge_text = "Scheduler healthy"
+        else:
+            badge = "none"
+            badge_text = "No scheduled runs recorded"
+
+    return render_template(
+        "admin/_schedule_state.html",
+        runs=runs,
+        badge=badge,
+        badge_text=badge_text,
+    )
 
 
 # ---------------------------------------------------------------------------

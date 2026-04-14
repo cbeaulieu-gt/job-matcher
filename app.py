@@ -1228,9 +1228,9 @@ def settings():
                         field_name = field["name"]
                         if field_name in provider_updates:
                             continue
-                        stored_val = stored_cfg.get(field_name, "") or ""
+                        stored_val = stored_cfg.get(field_name, "")
                         if not stored_val:
-                            default_val = field.get("default") or ""
+                            default_val = field.get("default", "")
                             if default_val:
                                 provider_updates[field_name] = default_val
                     updates["llm"][provider_key] = provider_updates

@@ -134,7 +134,10 @@ def _write_profile(path: str, data: dict | None = None) -> None:
     """Write a minimal profile.json fixture."""
     if data is None:
         data = {
-            "primary_skills": ["Python, 5yr, active", "Go, 2yr, active"],
+            "primary_skills": [
+                {"description": "Python", "years_active": 5, "active": True},
+                {"description": "Go", "years_active": 2, "active": True},
+            ],
             "anti_preferences": ["no QA roles"],
             "seniority": "Senior / Staff",
             "preferred_industries": ["developer tooling", "fintech"],
@@ -167,11 +170,16 @@ class TestProfileGet:
     def test_renders_primary_skills(
         self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
     ):
+        """GET /profile renders skill names and years from structured skill objects."""
         _write_config(tmp_config_path)
         _write_profile(tmp_profile_path)
         body = client.get("/profile").data.decode()
-        assert "Python, 5yr, active" in body
-        assert "Go, 2yr, active" in body
+        # Skill description must appear as an input value in the table.
+        assert 'value="Python"' in body
+        assert 'value="Go"' in body
+        # Years must appear in number inputs.
+        assert 'value="5"' in body
+        assert 'value="2"' in body
 
     def test_renders_seniority(
         self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
@@ -249,6 +257,46 @@ class TestProfileGet:
         body = client.get("/profile").data.decode()
         assert "config_json" not in body
 
+    def test_renders_education_entries(
+        self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
+    ):
+        """GET /profile must pre-populate education table rows from structured objects."""
+        _write_config(tmp_config_path)
+        _write_profile(tmp_profile_path, {
+            **{
+                "primary_skills": [],
+                "anti_preferences": [],
+                "seniority": "",
+                "preferred_industries": [],
+                "location": {"geocode_fallback": "pass"},
+                "scoring_notes": [],
+            },
+            "education": [
+                {
+                    "degree_type": "B.S.",
+                    "degree_field": "Computer Science",
+                    "school": "MIT",
+                    "graduation_year": "2010",
+                }
+            ],
+        })
+        body = client.get("/profile").data.decode()
+        # Table structure must be present.
+        assert "edu-table" in body
+        # Degree type select or input must contain the type value.
+        assert "B.S." in body
+        # Field of study input must appear.
+        assert 'value="Computer Science"' in body
+        # School input must appear.
+        assert 'value="MIT"' in body
+        # Year input must appear.
+        assert 'value="2010"' in body
+        # Structured field names must be used (not the old education[]).
+        assert 'name="edu_type[]"' in body
+        assert 'name="edu_field[]"' in body
+        assert 'name="edu_school[]"' in body
+        assert 'name="edu_year[]"' in body
+
     def test_renders_when_profile_absent(
         self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
     ):
@@ -257,6 +305,138 @@ class TestProfileGet:
         # Intentionally do NOT create tmp_profile_path
         resp = client.get("/profile")
         assert resp.status_code == 200
+
+    def test_renders_legacy_string_education(
+        self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
+    ):
+        """GET must not 500 when profile.json has old-format plain-string education entries.
+
+        Regression test for issue #149: PR #140 restructured education from free-text
+        strings to dicts.  Profiles written before the migration still contain strings;
+        load_profile() must normalise them so the template never receives a str where
+        it expects a dict with .get().
+        """
+        _write_config(tmp_config_path)
+        _write_profile(tmp_profile_path, {
+            "primary_skills": [],
+            "anti_preferences": [],
+            "seniority": "",
+            "preferred_industries": [],
+            "location": {"geocode_fallback": "pass"},
+            "scoring_notes": [],
+            "education": ["B.S. in Computer Science from MIT"],  # old free-text format
+        })
+        resp = client.get("/profile")
+        assert resp.status_code == 200
+        body = resp.data.decode()
+        # The legacy string must be surfaced in the degree_field column.
+        assert "B.S. in Computer Science from MIT" in body
+        # Must use structured field names, not a raw textarea.
+        assert 'name="edu_field[]"' in body
+
+    def test_renders_mixed_format_education(
+        self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
+    ):
+        """GET must not 500 when education contains a dict first and a string second.
+
+        Regression test: the old gate ``if raw_edu and not isinstance(raw_edu[0], dict)``
+        evaluated to False when the first element was already a dict, silently skipping
+        normalisation for subsequent string entries and crashing the template.
+        """
+        _write_config(tmp_config_path)
+        _write_profile(tmp_profile_path, {
+            "primary_skills": [],
+            "anti_preferences": [],
+            "seniority": "",
+            "preferred_industries": [],
+            "location": {"geocode_fallback": "pass"},
+            "scoring_notes": [],
+            "education": [
+                {"degree_type": "B.S.", "degree_field": "Computer Science", "school": "MIT", "graduation_year": "2010"},
+                "M.S. in Data Science from Stanford",  # legacy string after a structured dict
+            ],
+        })
+        resp = client.get("/profile")
+        assert resp.status_code == 200
+        body = resp.data.decode()
+        assert "Computer Science" in body
+        assert "M.S. in Data Science from Stanford" in body
+
+    def test_renders_multiple_legacy_strings_education(
+        self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
+    ):
+        """GET must not 500 when education contains multiple plain strings."""
+        _write_config(tmp_config_path)
+        _write_profile(tmp_profile_path, {
+            "primary_skills": [],
+            "anti_preferences": [],
+            "seniority": "",
+            "preferred_industries": [],
+            "location": {"geocode_fallback": "pass"},
+            "scoring_notes": [],
+            "education": [
+                "B.S. in Computer Science from MIT",
+                "M.S. in Data Science from Stanford",
+                "Ph.D. in Machine Learning from CMU",
+            ],
+        })
+        resp = client.get("/profile")
+        assert resp.status_code == 200
+        body = resp.data.decode()
+        assert "B.S. in Computer Science from MIT" in body
+        assert "M.S. in Data Science from Stanford" in body
+        assert "Ph.D. in Machine Learning from CMU" in body
+
+    def test_renders_already_structured_education(
+        self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
+    ):
+        """GET must pass already-structured education dicts through unchanged.
+
+        Verifies that the migration guard does not re-wrap dicts that are already
+        in the correct structured format — structured data should render its fields.
+        """
+        _write_config(tmp_config_path)
+        _write_profile(tmp_profile_path, {
+            "primary_skills": [],
+            "anti_preferences": [],
+            "seniority": "",
+            "preferred_industries": [],
+            "location": {"geocode_fallback": "pass"},
+            "scoring_notes": [],
+            "education": [
+                {
+                    "degree_type": "M.S.",
+                    "degree_field": "Software Engineering",
+                    "school": "Stanford",
+                    "graduation_year": "2015",
+                }
+            ],
+        })
+        resp = client.get("/profile")
+        assert resp.status_code == 200
+        body = resp.data.decode()
+        assert "M.S." in body
+        assert 'value="Software Engineering"' in body
+        assert 'value="Stanford"' in body
+        assert 'value="2015"' in body
+
+    def test_renders_empty_education_array(
+        self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
+    ):
+        """GET must not 500 when education is an empty array."""
+        _write_config(tmp_config_path)
+        _write_profile(tmp_profile_path, {
+            "primary_skills": [],
+            "anti_preferences": [],
+            "seniority": "",
+            "preferred_industries": [],
+            "location": {"geocode_fallback": "pass"},
+            "scoring_notes": [],
+            "education": [],
+        })
+        resp = client.get("/profile")
+        assert resp.status_code == 200
+
 
 
 # ===========================================================================
@@ -280,14 +460,22 @@ class TestProfilePost:
     def test_writes_primary_skills(
         self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
     ):
+        """POST with structured skill fields writes typed objects to profile.json."""
         _write_config(tmp_config_path)
         self._post(
             client,
-            **{"primary_skills[]": ["Python, 5yr, active", "Go, 2yr, active"]},
+            **{
+                "skill_description[]": ["Python", "Go"],
+                "skill_years_active[]": ["5", "2"],
+                "skill_active_idx[]": ["0", "1"],
+            },
         )
         with open(tmp_profile_path, encoding="utf-8") as f:
             prof = json.load(f)
-        assert prof["primary_skills"] == ["Python, 5yr, active", "Go, 2yr, active"]
+        assert prof["primary_skills"] == [
+            {"description": "Python", "years_active": 5, "active": True},
+            {"description": "Go", "years_active": 2, "active": True},
+        ]
 
     def test_writes_anti_preferences(
         self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
@@ -297,6 +485,56 @@ class TestProfilePost:
         with open(tmp_profile_path, encoding="utf-8") as f:
             prof = json.load(f)
         assert prof["anti_preferences"] == ["no QA", "no frontend"]
+
+    def test_writes_education(
+        self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
+    ):
+        """POST with structured edu_* fields must persist structured objects to profile.json."""
+        _write_config(tmp_config_path)
+        self._post(
+            client,
+            **{
+                "edu_type[]": ["B.S.", "M.S."],
+                "edu_field[]": ["Computer Science", "Software Engineering"],
+                "edu_school[]": ["MIT", "Stanford"],
+                "edu_year[]": ["2010", "2012"],
+            },
+        )
+        with open(tmp_profile_path, encoding="utf-8") as f:
+            prof = json.load(f)
+        assert prof["education"] == [
+            {
+                "degree_type": "B.S.",
+                "degree_field": "Computer Science",
+                "school": "MIT",
+                "graduation_year": "2010",
+            },
+            {
+                "degree_type": "M.S.",
+                "degree_field": "Software Engineering",
+                "school": "Stanford",
+                "graduation_year": "2012",
+            },
+        ]
+
+    def test_writes_education_skips_empty_rows(
+        self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
+    ):
+        """POST with empty education rows must discard rows where all four fields are empty."""
+        _write_config(tmp_config_path)
+        self._post(
+            client,
+            **{
+                "edu_type[]": ["B.S.", ""],
+                "edu_field[]": ["Computer Science", ""],
+                "edu_school[]": ["MIT", ""],
+                "edu_year[]": ["2010", ""],
+            },
+        )
+        with open(tmp_profile_path, encoding="utf-8") as f:
+            prof = json.load(f)
+        assert len(prof["education"]) == 1
+        assert prof["education"][0]["school"] == "MIT"
 
     def test_writes_seniority(
         self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
@@ -437,15 +675,23 @@ class TestProfilePost:
     def test_empty_rows_are_excluded(
         self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
     ):
-        """Whitespace-only rows submitted from the repeating-row widget must be dropped."""
+        """Empty or whitespace-only skill descriptions must be dropped."""
         _write_config(tmp_config_path)
         self._post(
             client,
-            **{"primary_skills[]": ["Python, 5yr, active", "  ", "Go, 2yr, active", ""]},
+            **{
+                "skill_description[]": ["Python", "  ", "Go", ""],
+                "skill_years_active[]": ["5", "0", "2", "0"],
+                "skill_active_idx[]": ["0", "2"],
+            },
         )
         with open(tmp_profile_path, encoding="utf-8") as f:
             prof = json.load(f)
-        assert prof["primary_skills"] == ["Python, 5yr, active", "Go, 2yr, active"]
+        # Indices 0 and 2 are non-empty; index 0 is active (in active_idx), index 2 is active.
+        assert prof["primary_skills"] == [
+            {"description": "Python", "years_active": 5, "active": True},
+            {"description": "Go", "years_active": 2, "active": True},
+        ]
 
 
 # ===========================================================================
@@ -711,3 +957,202 @@ class TestProfileNumericValidation:
         _write_config(tmp_config_path)
         resp = self._post(client, search_max_days_old="two")
         assert resp.status_code == 422
+
+
+# ===========================================================================
+# POST /profile — structured primary_skills validation
+# ===========================================================================
+
+
+class TestStructuredSkillsValidation:
+    """Tests for the new typed primary_skills fields (issue #74)."""
+
+    def _post(self, client, **kwargs):
+        data = {
+            "scoring_threshold": "7.0",
+            "search_country": "us",
+            "search_what": "engineer",
+            "search_where": "miami",
+            "location_geocode_fallback": "pass",
+        }
+        data.update(kwargs)
+        return client.post("/profile", data=data)
+
+    def test_writes_primary_skills_active_flag(
+        self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
+    ):
+        """active=True when index appears in skill_active_idx[], False otherwise."""
+        _write_config(tmp_config_path)
+        self._post(
+            client,
+            **{
+                "skill_description[]": ["Python", "C++"],
+                "skill_years_active[]": ["5", "4"],
+                # Only index 0 (Python) is active; C++ at index 1 is dormant.
+                "skill_active_idx[]": ["0"],
+            },
+        )
+        with open(tmp_profile_path, encoding="utf-8") as f:
+            prof = json.load(f)
+        skills = prof["primary_skills"]
+        assert skills[0] == {"description": "Python", "years_active": 5, "active": True}
+        assert skills[1] == {"description": "C++", "years_active": 4, "active": False}
+
+    def test_years_active_negative_returns_422(
+        self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
+    ):
+        """Negative years_active must be rejected with HTTP 422."""
+        _write_config(tmp_config_path)
+        resp = self._post(
+            client,
+            **{
+                "skill_description[]": ["Python"],
+                "skill_years_active[]": ["-1"],
+                "skill_active_idx[]": ["0"],
+            },
+        )
+        assert resp.status_code == 422
+
+    def test_years_active_non_numeric_returns_422(
+        self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
+    ):
+        """Non-numeric years_active must be rejected with HTTP 422."""
+        _write_config(tmp_config_path)
+        resp = self._post(
+            client,
+            **{
+                "skill_description[]": ["Python"],
+                "skill_years_active[]": ["five"],
+                "skill_active_idx[]": ["0"],
+            },
+        )
+        assert resp.status_code == 422
+
+    def test_renders_structured_skills_in_table(
+        self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
+    ):
+        """GET /profile must render a <table> with structured skill data."""
+        _write_config(tmp_config_path)
+        _write_profile(tmp_profile_path, {
+            "primary_skills": [
+                {"description": "Rust", "years_active": 3, "active": True},
+                {"description": "COBOL", "years_active": 10, "active": False},
+            ],
+            "anti_preferences": [],
+            "seniority": "",
+            "preferred_industries": [],
+            "location": {"geocode_fallback": "pass"},
+            "scoring_notes": [],
+        })
+        body = client.get("/profile").data.decode()
+        # Table must be present.
+        assert "<table" in body
+        assert "skills-table" in body
+        # Skill names must appear as input values.
+        assert 'value="Rust"' in body
+        assert 'value="COBOL"' in body
+        # Years must appear.
+        assert 'value="3"' in body
+        assert 'value="10"' in body
+        # Active skill must have checked attribute; dormant must not.
+        # We check that the Rust row has checked somewhere near its description.
+        # A simple approach: count checked vs unchecked.
+        assert "checked" in body  # at least one checked input
+
+
+# ===========================================================================
+# POST /profile — education graduation year sanitization (issue #143)
+# ===========================================================================
+
+
+class TestEducationYearSanitization:
+    """Regression tests for server-side graduation year validation.
+
+    Non-numeric year values (e.g. "abcd", "20@@") must be silently discarded
+    to the empty string rather than persisted, so only all-digit values (e.g.
+    "2010") or empty strings reach profile.json.
+    """
+
+    def _post(self, client, **kwargs):
+        data = {
+            "scoring_threshold": "7.0",
+            "search_country": "us",
+            "search_what": "engineer",
+            "search_where": "miami",
+            "location_geocode_fallback": "pass",
+        }
+        data.update(kwargs)
+        return client.post("/profile", data=data)
+
+    def test_non_numeric_year_is_sanitized_to_empty(
+        self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
+    ):
+        """A non-numeric graduation year must be stored as empty string, not persisted as-is."""
+        _write_config(tmp_config_path)
+        self._post(
+            client,
+            **{
+                "edu_type[]": ["B.S."],
+                "edu_field[]": ["Computer Science"],
+                "edu_school[]": ["MIT"],
+                "edu_year[]": ["abcd"],
+            },
+        )
+        with open(tmp_profile_path, encoding="utf-8") as f:
+            prof = json.load(f)
+        assert len(prof["education"]) == 1
+        assert prof["education"][0]["graduation_year"] == ""
+
+    def test_special_chars_year_is_sanitized_to_empty(
+        self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
+    ):
+        """A year containing special characters (e.g. '20@@') must be sanitized to empty."""
+        _write_config(tmp_config_path)
+        self._post(
+            client,
+            **{
+                "edu_type[]": ["M.S."],
+                "edu_field[]": ["Software Engineering"],
+                "edu_school[]": ["Stanford"],
+                "edu_year[]": ["20@@"],
+            },
+        )
+        with open(tmp_profile_path, encoding="utf-8") as f:
+            prof = json.load(f)
+        assert prof["education"][0]["graduation_year"] == ""
+
+    def test_valid_numeric_year_is_preserved(
+        self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
+    ):
+        """A valid all-digit year must pass through unchanged."""
+        _write_config(tmp_config_path)
+        self._post(
+            client,
+            **{
+                "edu_type[]": ["Ph.D."],
+                "edu_field[]": ["Mathematics"],
+                "edu_school[]": ["Harvard"],
+                "edu_year[]": ["2015"],
+            },
+        )
+        with open(tmp_profile_path, encoding="utf-8") as f:
+            prof = json.load(f)
+        assert prof["education"][0]["graduation_year"] == "2015"
+
+    def test_empty_year_is_preserved(
+        self, client, tmp_config_path, tmp_profile_path, tmp_providers_path, tmp_keys_path
+    ):
+        """An empty year field must remain empty — the isdigit guard must not alter it."""
+        _write_config(tmp_config_path)
+        self._post(
+            client,
+            **{
+                "edu_type[]": ["B.A."],
+                "edu_field[]": ["History"],
+                "edu_school[]": ["Yale"],
+                "edu_year[]": [""],
+            },
+        )
+        with open(tmp_profile_path, encoding="utf-8") as f:
+            prof = json.load(f)
+        assert prof["education"][0]["graduation_year"] == ""

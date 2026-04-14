@@ -151,13 +151,18 @@ class TestSettingsPost:
             saved = json.load(f)
         assert saved["llm"]["anthropic"]["api_key"] == "sk-new-key"
 
-    def test_blank_key_field_clears_existing_key(
+    def test_blank_key_field_preserved_by_no_js_guard(
         self, client, tmp_providers_path, tmp_keys_path
     ):
-        """Submitting a blank api_key must clear the stored credential (issue #284)."""
+        """Submitting a blank api_key without a __clear__ flag must preserve the stored value.
+
+        This is the no-JS guard (issue #137): native form submits (no JS) with an
+        empty password field must not wipe an existing credential.  The explicit
+        Clear button (which adds a __clear__ hidden field) is the only way to clear.
+        """
         _write_providers(tmp_providers_path, anthropic_key="sk-existing")
 
-        # Submit with blank anthropic api_key — must clear the existing value.
+        # Submit with blank anthropic api_key, no __clear__ flag — must preserve.
         client.post("/settings", data={
             "anthropic__api_key": "",
             "anthropic__model": "claude-haiku-4-5-20251001",
@@ -166,7 +171,7 @@ class TestSettingsPost:
 
         with open(tmp_providers_path, encoding="utf-8") as f:
             saved = json.load(f)
-        assert saved["llm"]["anthropic"]["api_key"] == ""
+        assert saved["llm"]["anthropic"]["api_key"] == "sk-existing"
 
     def test_model_is_updated(self, client, tmp_providers_path, tmp_keys_path):
         _write_providers(tmp_providers_path)
@@ -268,10 +273,15 @@ class TestSettingsAdzuna:
         assert saved["job_sources"]["adzuna"]["app_id"] == "new-app-id"
         assert saved["job_sources"]["adzuna"]["app_key"] == "new-app-key"
 
-    def test_post_blank_adzuna_fields_clear_existing_values(
+    def test_post_blank_adzuna_fields_preserved_by_no_js_guard(
         self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
     ):
-        """Submitting blank Adzuna fields must clear the stored credential (issue #284)."""
+        """Submitting blank Adzuna fields without __clear__ flags must preserve the stored values.
+
+        The no-JS guard (issue #137) prevents accidental credential wipes from
+        native form submits.  Blank password fields are skipped unless the
+        explicit __clear__ hidden field is also submitted.
+        """
         _write_providers(
             tmp_providers_path, adzuna_app_id="existing-id", adzuna_app_key="existing-key"
         )
@@ -283,8 +293,8 @@ class TestSettingsAdzuna:
 
         with open(tmp_providers_path, encoding="utf-8") as f:
             saved = json.load(f)
-        assert saved["job_sources"]["adzuna"]["app_id"] == ""
-        assert saved["job_sources"]["adzuna"]["app_key"] == ""
+        assert saved["job_sources"]["adzuna"]["app_id"] == "existing-id"
+        assert saved["job_sources"]["adzuna"]["app_key"] == "existing-key"
 
     def test_post_saved_adzuna_values_not_echoed_in_response(
         self, client, tmp_providers_path, tmp_keys_path, tmp_config_path

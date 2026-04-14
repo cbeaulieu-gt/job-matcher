@@ -13,6 +13,8 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time as _time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from importlib.metadata import version as pkg_version, PackageNotFoundError
 
@@ -20,13 +22,21 @@ from flask import Flask, render_template, make_response, request, jsonify, redir
 
 import db
 from credentials import CredentialError, load_providers, save_providers
-from providers import _PROVIDER_CLASS_MAP
+from io import BytesIO
+
+from pypdf import PdfReader
+from pypdf.errors import PdfReadError
+
+from providers import _PROVIDER_CLASS_MAP, build_provider_chain, generate_with_fallback
+from providers.anthropic_provider import strip_fences
 from providers.base import _sanitise_detail
-from job_sources import SOURCES
+from job_sources import get_sources
 
 app = Flask(__name__)
 
-DB_PATH: str = os.environ.get("DB_PATH", "jobs.db")
+# Inject environment and version globals so all templates can render the status bar.
+app.jinja_env.globals['APP_ENV'] = os.environ.get('APP_ENV', 'local')
+app.jinja_env.globals['APP_VERSION'] = os.environ.get('APP_VERSION', 'local')
 DEMO_MODE: bool = False
 
 
@@ -186,18 +196,36 @@ def load_profile(path: str = _PROFILE_PATH) -> dict:
 
     Returns an empty dict (not hardcoded defaults) so the profile form shows
     blank fields rather than confusing placeholder values when the file is absent.
+
+    Legacy migration: education entries that are plain strings (old format
+    ``"education": ["B.S. in Computer Science"]``) are converted to structured
+    dicts on load so the template never receives a string where it expects a dict.
     """
     if not os.path.exists(path):
         return {}
     try:
         with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
     except (json.JSONDecodeError, OSError):
         return {}
 
+    # Normalise legacy free-text education strings to structured dicts.
+    raw_edu = data.get("education", [])
+    if raw_edu and any(not isinstance(e, dict) for e in raw_edu):
+        data["education"] = [
+            {"degree_type": "", "degree_field": str(e), "school": "", "graduation_year": ""}
+            if not isinstance(e, dict) else e
+            for e in raw_edu
+        ]
+
+    return data
+
 
 CONFIG = load_config()
-db.init_db(db_path=DB_PATH)
+db.init_db()
+
+from job_sources.auto_register import ensure_plugins_registered  # noqa: E402
+ensure_plugins_registered(_PROVIDERS_PATH)
 
 
 # ---------------------------------------------------------------------------
@@ -458,10 +486,9 @@ def feed():
         search=search,
         job_type=job_type,
         sort=sort,
-        db_path=DB_PATH,
     )
-    job_types = db.get_job_types(db_path=DB_PATH)
-    last_fetch_time = db.get_last_fetch_time(db_path=DB_PATH)
+    job_types = db.get_job_types()
+    last_fetch_time = db.get_last_fetch_time()
     new_count = sum(1 for listing in listings if listing["opened_at"] is None)
     return render_template(
         "index.html",
@@ -484,7 +511,7 @@ def feed():
 @app.route("/bookmarks")
 def bookmarks():
     """Bookmarked listings only."""
-    listings = db.get_bookmarks(db_path=DB_PATH)
+    listings = db.get_bookmarks()
     return render_template(
         "index.html",
         listings=listings,
@@ -501,7 +528,7 @@ def toggle_bookmark(listing_id: int):
     in a single SQL statement so rapid double-clicks cannot produce a net
     no-op. Returns the re-rendered action button group as an HTMX partial.
     """
-    listing = db.toggle_bookmarked(listing_id, db_path=DB_PATH)
+    listing = db.toggle_bookmarked(listing_id)
     if listing is None:
         return make_response("", 404)
     return render_template("_actions.html", listing=listing)
@@ -515,7 +542,7 @@ def toggle_apply(listing_id: int):
     in a single SQL statement so rapid double-clicks cannot produce a net
     no-op. Returns the re-rendered action button group as an HTMX partial.
     """
-    listing = db.toggle_applied(listing_id, db_path=DB_PATH)
+    listing = db.toggle_applied(listing_id)
     if listing is None:
         return make_response("", 404)
     return render_template("_actions.html", listing=listing)
@@ -524,7 +551,7 @@ def toggle_apply(listing_id: int):
 @app.route("/applied")
 def applied():
     """Applied listings — all listings marked as applied, most recent first."""
-    listings = db.get_applied(db_path=DB_PATH)
+    listings = db.get_applied()
     return render_template(
         "index.html",
         listings=listings,
@@ -555,7 +582,7 @@ def snippets():
     threshold = CONFIG["scoring"]["threshold"]
     if not isinstance(threshold, (int, float)) or threshold < 0:
         threshold = 7.0
-    job_types = db.get_job_types(db_path=DB_PATH)
+    job_types = db.get_job_types()
     listings = db.get_snippet_feed(
         threshold=threshold,
         min_score=min_score,
@@ -563,7 +590,6 @@ def snippets():
         search=search,
         job_type=job_type,
         sort=sort,
-        db_path=DB_PATH,
     )
     return render_template(
         "snippets.html",
@@ -583,7 +609,7 @@ def snippets():
 @app.route("/stats")
 def stats():
     """API usage and cost statistics, plus runtime version information."""
-    data = db.get_usage_stats(db_path=DB_PATH)
+    data = db.get_usage_stats()
     return render_template(
         "stats.html",
         stats=data,
@@ -601,7 +627,7 @@ def dismiss(listing_id: int):
     on the card element, replacing it with the empty string — this removes
     the card from the DOM without a page reload.
     """
-    db.set_dismissed(listing_id, 1, db_path=DB_PATH)
+    db.set_dismissed(listing_id, 1)
     return make_response("", 200)
 
 
@@ -619,7 +645,7 @@ def mark_listing_opened(listing_id: int):
     style recalculation for <summary> descendants when <details> gains [open],
     so relying solely on CSS is not reliable across all browsers.
     """
-    db.mark_opened(listing_id, db_path=DB_PATH)
+    db.mark_opened(listing_id)
     # hx-swap-oob="outerHTML" replaces the target element entirely with the new
     # element.  An empty <span> with the same id effectively removes the badge.
     oob_fragment = f'<span id="badge-new-{listing_id}" hx-swap-oob="outerHTML"></span>'
@@ -839,13 +865,13 @@ def ingest_status():
 def _build_llm_schemas(
     llm_section: dict,
     provider_order: list[str],
-) -> list[tuple[str, dict, bool, dict]]:
+) -> list[tuple[str, dict, bool, dict, set]]:
     """Build the ordered llm_schemas list for the settings template.
 
-    Returns a list of ``(provider_key, schema_dict, has_values, current_values)``
-    tuples.  Providers in *provider_order* come first (unknown/duplicate keys
-    skipped), followed by any registry providers not listed, in registry
-    insertion order.
+    Returns a list of ``(provider_key, schema_dict, has_values, current_values,
+    populated_fields)`` tuples.  Providers in *provider_order* come first
+    (unknown/duplicate keys skipped), followed by any registry providers not
+    listed, in registry insertion order.
 
     ``has_values`` is ``True`` only when every required field in the schema has
     a non-blank stored value.  Checking all required fields (not just
@@ -858,14 +884,19 @@ def _build_llm_schemas(
     the placeholder default is actually submitted when the user saves without
     explicitly editing the field.
 
+    ``populated_fields`` is a set of field names that have a non-empty stored
+    value.  The template uses this to conditionally render the Clear button
+    next to password fields — the button only appears when there is actually
+    something stored to clear.
+
     Args:
         llm_section:    The ``"llm"`` sub-dict from ``providers.json``.
         provider_order: The ``provider_order`` list from ``providers.json``.
     """
     seen: set[str] = set()
-    schemas: list[tuple[str, dict, bool, dict]] = []
+    schemas: list[tuple[str, dict, bool, dict, set]] = []
 
-    def _make_entry(key: str) -> tuple[str, dict, bool, dict]:
+    def _make_entry(key: str) -> tuple[str, dict, bool, dict, set]:
         cls = _PROVIDER_CLASS_MAP[key]
         schema = cls.settings_schema()
         cfg = llm_section.get(key) or {}
@@ -879,7 +910,11 @@ def _build_llm_schemas(
             for f in schema["fields"]
             if f.get("type") != "password"
         }
-        return (key, schema, has_values, current_values)
+        populated_fields = {
+            f["name"] for f in schema["fields"]
+            if bool(cfg.get(f["name"], "").strip())
+        }
+        return (key, schema, has_values, current_values, populated_fields)
 
     for key in provider_order:
         if key in _PROVIDER_CLASS_MAP and key not in seen:
@@ -939,36 +974,116 @@ def settings():
         active_tab = request.form.get("tab", "llm").strip()
 
         # --- Build updates dict from namespaced form fields ---
-        updates: dict = {"llm": {}, "job_sources": {}}
+        # Only populate the section that corresponds to the active tab.  Processing
+        # the other section would send blank values for every field not present in
+        # the submitted form, causing _deep_merge to overwrite previously-saved
+        # credentials with empty strings (cross-tab wipe bug, issue #71).
+        updates: dict = {}
 
-        # LLM providers: iterate registry so new providers are handled automatically.
-        for provider_key, cls in _PROVIDER_CLASS_MAP.items():
-            schema = cls.settings_schema()
-            provider_updates: dict = {}
-            for field in schema["fields"]:
-                field_name = field["name"]
-                form_key = f"{provider_key}__{field_name}"
-                value = request.form.get(form_key, "").strip()
-                provider_updates[field_name] = value  # blank → save_providers skips it
-            if provider_updates:
-                updates["llm"][provider_key] = provider_updates
+        if active_tab == "llm":
+            updates["llm"] = {}
+            # LLM providers: iterate registry so new providers are handled automatically.
+            # Only include fields that have a non-empty value so that providers the
+            # user left blank are not merged into providers.json as empty strings
+            # (within-tab wipe bug, issue #71).  A user who explicitly clears a field
+            # will have submitted a blank for a provider that already had a value — we
+            # distinguish "provider's form was on the page and submitted blank" from
+            # "provider wasn't on the page at all" by limiting this block to
+            # active_tab == "llm" above.
+            for provider_key, cls in _PROVIDER_CLASS_MAP.items():
+                schema = cls.settings_schema()
+                provider_updates: dict = {}
+                for field in schema["fields"]:
+                    field_name = field["name"]
+                    form_key = f"{provider_key}__{field_name}"
+                    raw = request.form.get(form_key)
+                    if raw is None:
+                        # Field not present in form at all — skip to preserve
+                        # any existing stored value.
+                        continue
+                    stripped = raw.strip()
+                    # No-JS guard: skip empty password fields unless the
+                    # explicit __clear__ flag is present.  This prevents a
+                    # native (no-JS) form submit from wiping an existing key
+                    # just because the password placeholder was left blank.
+                    if field.get("type") == "password" and stripped == "":
+                        clear_key = f"__clear__{provider_key}__{field_name}"
+                        if request.form.get(clear_key) != "1":
+                            continue
+                    provider_updates[field_name] = stripped
+                # After processing normal fields, check for explicit __clear__
+                # flags on password fields.  The flag writes "" regardless of
+                # whether the password form field was also submitted.
+                for field in schema["fields"]:
+                    if field.get("type") != "password":
+                        continue
+                    clear_key = f"__clear__{provider_key}__{field['name']}"
+                    if request.form.get(clear_key) == "1":
+                        provider_updates[field["name"]] = ""
+                if provider_updates:
+                    updates["llm"][provider_key] = provider_updates
 
-        # Job sources: save enabled flag for all; save credential fields for keyed sources.
-        for source_key, cls in SOURCES.items():
-            schema = cls.settings_schema()
-            source_updates: dict = {}
+        elif active_tab == "sources":
+            updates["job_sources"] = {}
+            # Job sources: JS dirty-tracking sends only the fields the user
+            # actually changed, so we must skip sources that have no form data
+            # at all.  A source is "touched" when any of its namespaced fields
+            # (credentials or the enabled checkbox) appears in the POST body.
+            # This prevents the server from overwriting stored credentials or
+            # toggling the enabled flag for sources the user never interacted
+            # with (issue #89 — client-side dirty tracking companion fix).
+            for source_key, cls in get_sources().items():
+                schema_fields = cls.settings_schema()["fields"]
+                cred_keys = [f"{source_key}__{f['name']}" for f in schema_fields]
+                clear_keys = [f"__clear__{source_key}__{f['name']}" for f in schema_fields]
+                enabled_key = f"{source_key}__enabled"
+                # Skip this source entirely when none of its form keys are present.
+                # Include __clear__ keys in this check: when the JS Clear button
+                # is clicked, submitDirty() may send only the __clear__ flag
+                # (plus the empty credential field after the client fix), but
+                # this defense-in-depth ensures the server never skips a source
+                # that has an explicit clear flag even if the credential field
+                # is absent from the POST body.
+                source_in_form = any(
+                    request.form.get(k) is not None
+                    for k in cred_keys + [enabled_key] + clear_keys
+                )
+                if not source_in_form:
+                    continue
 
-            # Checkbox: unchecked = not submitted = False
-            enabled = request.form.get(f"{source_key}__enabled") == "on"
-            source_updates["enabled"] = enabled
+                source_updates: dict = {}
 
-            for field in schema["fields"]:
-                field_name = field["name"]
-                form_key = f"{source_key}__{field_name}"
-                value = request.form.get(form_key, "").strip()
-                source_updates[field_name] = value
+                # Checkbox: only update enabled when the field was explicitly
+                # submitted.  JS dirty-tracking sends the checkbox only when
+                # the user actually toggled it: 'on' = checked, '' = unchecked.
+                # If the field is absent entirely (user only changed a
+                # credential), leave the stored enabled state untouched.
+                if enabled_key in request.form:
+                    source_updates["enabled"] = request.form.get(enabled_key) == "on"
 
-            updates["job_sources"][source_key] = source_updates
+                for field in schema_fields:
+                    field_name = field["name"]
+                    form_key = f"{source_key}__{field_name}"
+                    raw = request.form.get(form_key)
+                    if raw is None:
+                        continue
+                    stripped = raw.strip()
+                    # No-JS guard: skip empty password fields unless the
+                    # explicit __clear__ flag is present.
+                    if field.get("type") == "password" and stripped == "":
+                        clear_key = f"__clear__{source_key}__{field_name}"
+                        if request.form.get(clear_key) != "1":
+                            continue
+                    source_updates[field_name] = stripped
+                # Explicit __clear__ flags for password fields.
+                for field in schema_fields:
+                    if field.get("type") != "password":
+                        continue
+                    clear_key = f"__clear__{source_key}__{field['name']}"
+                    if request.form.get(clear_key) == "1":
+                        source_updates[field["name"]] = ""
+
+                updates["job_sources"][source_key] = source_updates
 
         try:
             save_providers(updates, providers_path=_PROVIDERS_PATH)
@@ -1012,8 +1127,8 @@ def settings():
     provider_order: list[str] = providers_data.get("provider_order") or []
     llm_schemas = _build_llm_schemas(llm_section, provider_order)
 
-    source_schemas: list[tuple[str, dict, bool, bool, bool]] = []
-    for key, cls in SOURCES.items():
+    source_schemas: list[tuple[str, dict, bool, bool, bool, set]] = []
+    for key, cls in get_sources().items():
         schema = cls.settings_schema()
         cfg = sources_section.get(key) or {}
         required_fields = [f["name"] for f in schema["fields"] if f.get("required")]
@@ -1023,14 +1138,18 @@ def settings():
             has_values = False  # no-credential sources are never "configured"
         is_enabled = bool(cfg.get("enabled", False))
         credentials_required = bool(required_fields)
-        source_schemas.append((key, schema, has_values, is_enabled, credentials_required))
+        populated_fields = {
+            f["name"] for f in schema["fields"]
+            if bool(cfg.get(f["name"], "").strip())
+        }
+        source_schemas.append((key, schema, has_values, is_enabled, credentials_required, populated_fields))
 
     # POST-with-error: re-render the form (not a redirect) so the error is shown.
     saved = False  # POST always redirects on success; reaching here means error or GET
     if request.method == "POST" and error:
         pass  # fall through to render with error
 
-    listing_count = db.get_listing_count(db_path=DB_PATH)
+    listing_count = db.get_listing_count()
 
     # Pass technical search fields to the Search Settings tab.
     search_cfg = load_config(_CONFIG_PATH).get("search") or {}
@@ -1046,6 +1165,48 @@ def settings():
         listing_count=listing_count,
         search_cfg=search_cfg,
     )
+
+
+def _parse_education_rows(form) -> list[dict]:
+    """Extract a list of structured education objects from the education table form fields.
+
+    Reads the four parallel ``edu_type[]``, ``edu_field[]``, ``edu_school[]``,
+    and ``edu_year[]`` arrays from the submitted form and zips them into
+    structured dicts.  Rows where all four fields are empty are silently
+    discarded.
+
+    Args:
+        form: The Flask ``request.form`` ImmutableMultiDict.
+
+    Returns:
+        List of dicts, each with keys ``degree_type``, ``degree_field``,
+        ``school``, and ``graduation_year``.
+    """
+    types = form.getlist("edu_type[]")
+    fields = form.getlist("edu_field[]")
+    schools = form.getlist("edu_school[]")
+    years = form.getlist("edu_year[]")
+
+    # Zip to the shortest list to guard against mismatched row counts.
+    rows = []
+    for deg_type, deg_field, school, year in zip(types, fields, schools, years):
+        deg_type = deg_type.strip()
+        deg_field = deg_field.strip()
+        school = school.strip()
+        year = year.strip()
+        # Discard non-numeric year values to prevent nonsense input from being persisted.
+        if year and not year.isdigit():
+            year = ""
+        # Skip rows where every field is empty.
+        if not any([deg_type, deg_field, school, year]):
+            continue
+        rows.append({
+            "degree_type": deg_type,
+            "degree_field": deg_field,
+            "school": school,
+            "graduation_year": year,
+        })
+    return rows
 
 
 def _parse_repeating_rows(form, field_name: str) -> list[str]:
@@ -1064,6 +1225,605 @@ def _parse_repeating_rows(form, field_name: str) -> list[str]:
     """
     values = form.getlist(f"{field_name}[]")
     return [v.strip() for v in values if v.strip()]
+
+
+# ---------------------------------------------------------------------------
+# PDF resume import — helpers
+# ---------------------------------------------------------------------------
+
+
+def _extract_pdf_text(pdf_bytes: bytes) -> str:
+    """Extract all text from a PDF given its raw bytes.
+
+    Args:
+        pdf_bytes: Raw bytes of the uploaded PDF file.
+
+    Returns:
+        Concatenated text from all pages (empty string if no text found).
+
+    Raises:
+        ValueError: If pypdf cannot parse the bytes as a valid PDF.
+    """
+    try:
+        reader = PdfReader(BytesIO(pdf_bytes))
+        return "".join(page.extract_text() or "" for page in reader.pages)
+    except (PdfReadError, ValueError, IOError) as exc:
+        raise ValueError(f"Could not read PDF: {exc}") from exc
+
+
+_IMPORT_PROMPT_FRESH = """You are extracting structured profile data from a resume/CV.
+
+RESUME TEXT:
+{resume_text}
+
+Extract the following fields and respond with ONLY a JSON object. No explanation, no markdown, no code fences.
+
+The JSON must have exactly these keys:
+- "primary_skills": array of objects, each with "skill" (string), "years" (integer estimate), "status" ("active" or "dormant")
+- "education": array of objects, each with "degree_type" (e.g. "B.S.", "M.S."), "degree_field" (e.g. "Computer Science"), "school" (institution name), "graduation_year" (four-digit year string)
+- "seniority": string inferred from job titles (e.g. "Junior", "Mid-level", "Senior", "Staff", "Lead", "Principal")
+- "preferred_industries": array of strings inferred from work history (e.g. "fintech", "healthtech", "developer tooling")
+- "location_center": string from contact info if present (e.g. "Miami, FL"), or null if not found
+
+If a field cannot be confidently extracted, use an empty array, empty string, or null as appropriate. Do not guess or hallucinate values.
+
+JSON only:"""
+
+def _build_import_prompt(resume_text: str) -> str:
+    """Build the LLM prompt for PDF resume import.
+
+    Both fresh and merge modes use the same extraction-only prompt.  Merging
+    is handled deterministically by ``_merge_import_result()`` after the LLM
+    responds, so the LLM never needs to see the existing profile.
+
+    Args:
+        resume_text: Extracted plain text from the uploaded PDF.
+
+    Returns:
+        Formatted prompt string ready to send to the LLM.
+    """
+    return _IMPORT_PROMPT_FRESH.format(resume_text=resume_text)
+
+
+def _parse_import_response(raw: str) -> dict | None:
+    """Parse the LLM's JSON response for a PDF import request.
+
+    Strips markdown code fences, parses JSON, and fills missing keys with
+    safe defaults so callers can always rely on the expected keys existing.
+
+    Args:
+        raw: Raw text response from the LLM.
+
+    Returns:
+        Parsed dict with all expected keys, or ``None`` if parsing fails.
+    """
+    try:
+        cleaned = strip_fences(raw)
+        data = json.loads(cleaned)
+    except (json.JSONDecodeError, ValueError):
+        app.logger.warning("[import] _parse_import_response: failed to parse LLM response (first 500 chars): %r", raw[:500])
+        return None
+    data.setdefault("primary_skills", [])
+    data.setdefault("education", [])
+    data.setdefault("seniority", "")
+    data.setdefault("preferred_industries", [])
+    data.setdefault("location_center", None)
+    return data
+
+
+_DEGREE_PREFIX_RE = re.compile(
+    r"^(B\.S\.|BS|B\.A\.|BA|M\.S\.|MS|M\.A\.|MA|Ph\.D\.|PhD|MBA"
+    r"|Master of Science|Master of Arts|Master of Business Administration"
+    r"|Bachelor of Science|Bachelor of Arts|Bachelor of Engineering"
+    r"|Doctor of Philosophy|Doctor of|Associate of|Associate)(?=\s|$)",
+    re.IGNORECASE,
+)
+_YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
+
+
+def _normalise_education(entries: list) -> list[dict]:
+    """Normalise a list of education entries to structured dicts.
+
+    Handles three cases per entry:
+
+    * **Flat string** — attempts regex-based parsing into the four structured
+      fields (``degree_type``, ``degree_field``, ``school``,
+      ``graduation_year``).  Falls back to stuffing the whole string into
+      ``degree_field`` if parsing fails.
+    * **Dict with missing keys** — fills absent keys with ``""``.
+    * **Well-formed dict** — passed through unchanged.
+
+    Args:
+        entries: Raw education list from the LLM response.
+
+    Returns:
+        List of dicts each containing exactly the four structured keys.
+    """
+    _EMPTY = {"degree_type": "", "degree_field": "", "school": "", "graduation_year": ""}
+
+    def _parse_flat(s: str) -> dict:
+        result = dict(_EMPTY)
+        # Extract 4-digit year first.
+        year_m = _YEAR_RE.search(s)
+        if year_m:
+            result["graduation_year"] = year_m.group(0)
+            s = (s[: year_m.start()] + s[year_m.end() :]).strip(" ,").lstrip()
+
+        # Attempt to match a known degree prefix at the start.
+        prefix_m = _DEGREE_PREFIX_RE.match(s)
+        if prefix_m:
+            result["degree_type"] = prefix_m.group(0).strip()
+            remainder = s[prefix_m.end() :].strip()
+            # Handle "in <field>" connector (e.g. "Master of Science in Data Science")
+            if remainder.lower().startswith("in "):
+                remainder = remainder[3:].strip()
+            # Remaining text split by ", " gives field then school (or just field).
+            parts = [p.strip() for p in remainder.split(",", 1)]
+            result["degree_field"] = parts[0] if parts else ""
+            result["school"] = parts[1] if len(parts) > 1 else ""
+        else:
+            # No recognised degree prefix — split by "," and use heuristics.
+            parts = [p.strip() for p in s.split(",")]
+            if len(parts) >= 3:
+                # e.g. "Computer Science, MIT, ..." — unlikely but defensible
+                result["degree_type"] = ""
+                result["degree_field"] = parts[0]
+                result["school"] = parts[1]
+            elif len(parts) == 2:
+                result["degree_field"] = parts[0]
+                result["school"] = parts[1]
+            elif parts:
+                result["degree_field"] = parts[0]
+            else:
+                result["degree_field"] = s  # fallback: preserve whole string
+
+        return result
+
+    normalised = []
+    for entry in entries:
+        if isinstance(entry, str):
+            normalised.append(_parse_flat(entry.strip()))
+        elif isinstance(entry, dict):
+            normalised.append({
+                "degree_type": entry.get("degree_type", ""),
+                "degree_field": entry.get("degree_field", ""),
+                "school": entry.get("school", ""),
+                "graduation_year": str(entry.get("graduation_year", "")),
+            })
+        else:
+            # Unexpected type — convert to string and fall back.
+            normalised.append(_parse_flat(str(entry)))
+    return normalised
+
+
+def _merge_import_result(current: dict, imported: dict) -> dict:
+    """Merge LLM-extracted import data into the existing profile.
+
+    Merging rules:
+    - Skills: preserve all existing; append new ones (case-insensitive dedup).
+    - Education: preserve all existing; append new ones (case-insensitive dedup).
+    - Seniority: keep existing if non-empty; otherwise use imported value.
+    - Industries: union of both lists, case-insensitive dedup.
+    - Location: keep existing center if set; otherwise use imported value.
+
+    Args:
+        current:  Existing profile dict (may be empty).
+        imported: Parsed LLM response dict from ``_parse_import_response()``.
+
+    Returns:
+        Merged profile dict containing all combined data.
+    """
+    result = {}
+
+    # Skills: existing preserved (as structured objects), new appended from import.
+    # Existing skills may be structured dicts or legacy flat strings — normalise
+    # to structured objects so the merged result is always typed.
+    def _normalise_skill(s: object) -> dict:
+        """Convert a legacy flat string or a structured dict to a skill object."""
+        if isinstance(s, dict):
+            return s
+        # Legacy format: "Python, 5yr, active" or "Python, 5yr, dormant"
+        parts = [p.strip() for p in str(s).split(",")]
+        description = parts[0] if parts else str(s)
+        years = 0
+        active = True
+        if len(parts) >= 2:
+            yr_part = parts[1].lower().replace("yr", "").strip()
+            try:
+                years = int(yr_part)
+            except ValueError:
+                pass
+        if len(parts) >= 3:
+            active = parts[2].lower().strip() != "dormant"
+        return {"description": description, "years_active": years, "active": active}
+
+    existing_skills: list[dict] = [_normalise_skill(s) for s in current.get("primary_skills", [])]
+    existing_skill_names = {s["description"].lower() for s in existing_skills}
+    for skill_obj in imported.get("primary_skills", []):
+        name = skill_obj.get("skill", "")
+        if name.lower() not in existing_skill_names:
+            years = skill_obj.get("years", 0)
+            status = skill_obj.get("status", "active")
+            existing_skills.append({
+                "description": name,
+                "years_active": int(years) if years else 0,
+                "active": status != "dormant",
+            })
+            existing_skill_names.add(name.lower())
+    result["primary_skills"] = existing_skills
+
+    # Education: append new structured objects, skip duplicates (all four fields, case-insensitive).
+    # Existing entries may be structured dicts or legacy flat strings — normalise to dicts.
+    def _normalise_edu(e: object) -> dict:
+        """Convert a legacy flat string or a structured dict to an education object."""
+        return _normalise_education([e])[0]
+
+    def _edu_key(e: dict) -> tuple:
+        """Return a case-folded 4-tuple for dedup comparison."""
+        return (
+            e.get("degree_type", "").lower(),
+            e.get("degree_field", "").lower(),
+            e.get("school", "").lower(),
+            e.get("graduation_year", "").lower(),
+        )
+
+    existing_edu: list[dict] = [_normalise_edu(e) for e in current.get("education", [])]
+    existing_edu_keys = {_edu_key(e) for e in existing_edu}
+    for entry in imported.get("education", []):
+        entry_norm = _normalise_edu(entry)
+        key = _edu_key(entry_norm)
+        if key not in existing_edu_keys:
+            existing_edu.append(entry_norm)
+            existing_edu_keys.add(key)
+    result["education"] = existing_edu
+
+    # Seniority: keep existing if set, fill from import if empty
+    current_seniority = current.get("seniority", "")
+    result["seniority"] = current_seniority if current_seniority else imported.get("seniority", "")
+
+    # Industries: union, deduplicated
+    existing_industries = list(current.get("preferred_industries", []))
+    existing_lower = {i.lower() for i in existing_industries}
+    for industry in imported.get("preferred_industries", []):
+        if industry.lower() not in existing_lower:
+            existing_industries.append(industry)
+            existing_lower.add(industry.lower())
+    result["preferred_industries"] = existing_industries
+
+    # Location: keep existing if set
+    current_location = current.get("location", {})
+    current_center = current_location.get("center", "") if isinstance(current_location, dict) else ""
+    result["location_center"] = current_center if current_center else imported.get("location_center")
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# PDF resume import — async job tracking
+# ---------------------------------------------------------------------------
+
+# Text length threshold above which the import is dispatched to a background
+# thread rather than blocking the Flask request.  Adjust as needed.
+_PDF_ASYNC_THRESHOLD = 10_000
+
+# Job store: maps job_id (str UUID) → job dict.
+# Each entry: {id, status, result, error, created_at, started_at}
+# status values: "pending" | "running" | "complete" | "failed"
+_pdf_jobs: dict = {}
+_pdf_jobs_lock = threading.Lock()
+
+# Bounded thread pool for async PDF imports — prevents resource exhaustion.
+_pdf_executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="pdf-import")
+_MAX_CONCURRENT_PDF_JOBS = 3
+
+# Completed/failed jobs are pruned after this many seconds.
+_PDF_JOB_TTL_SECONDS = 300  # 5 minutes
+# Running jobs older than this are marked failed (hung LLM call protection).
+_PDF_JOB_TIMEOUT_SECONDS = 300  # 5 minutes
+
+# Rate-limit pruning so it doesn't run on every status poll.
+_last_prune_time: float = 0.0
+_PRUNE_INTERVAL_SECONDS = 30
+
+
+def _prune_pdf_jobs() -> None:
+    """Timeout stuck jobs and remove old completed/failed jobs.
+
+    Rate-limited to run at most once per ``_PRUNE_INTERVAL_SECONDS`` to avoid
+    O(n) iteration on every status poll.  Not exported — internal helper only.
+    """
+    global _last_prune_time
+    now_mono = _time.monotonic()
+    if now_mono - _last_prune_time < _PRUNE_INTERVAL_SECONDS:
+        return
+    _last_prune_time = now_mono
+
+    now = datetime.now(timezone.utc).timestamp()
+    cutoff = now - _PDF_JOB_TTL_SECONDS
+    with _pdf_jobs_lock:
+        # Timeout stuck running jobs
+        for job in _pdf_jobs.values():
+            if (
+                job["status"] == "running"
+                and job.get("started_at")
+                and now - job["started_at"] > _PDF_JOB_TIMEOUT_SECONDS
+            ):
+                job["status"] = "failed"
+                job["error"] = "Job timed out after 5 minutes."
+
+        # Remove old completed/failed jobs
+        to_delete = [
+            jid
+            for jid, job in _pdf_jobs.items()
+            if job["status"] in ("complete", "failed")
+            and job["created_at"] < cutoff
+        ]
+        for jid in to_delete:
+            del _pdf_jobs[jid]
+
+
+def _run_pdf_import_job(
+    job_id: str,
+    resume_text: str,
+    mode: str,
+    providers_dict: dict,
+    profile_path: str,
+) -> None:
+    """Worker function executed in a daemon thread for large PDF imports.
+
+    Calls the LLM provider chain synchronously (which can take 5–30 s), then
+    stores the result or error in ``_pdf_jobs`` under ``job_id``.
+
+    Args:
+        job_id:        UUID string identifying the job in ``_pdf_jobs``.
+        resume_text:   Pre-validated, sanitised resume text to send to the LLM.
+        mode:          ``"fresh"`` or ``"merge"``.
+        providers_dict: Loaded providers config dict (captured at request time).
+        profile_path:  Filesystem path to the profile JSON (for merge mode).
+    """
+
+    with _pdf_jobs_lock:
+        _pdf_jobs[job_id]["status"] = "running"
+        _pdf_jobs[job_id]["started_at"] = datetime.now(timezone.utc).timestamp()
+
+    try:
+        chain = build_provider_chain(providers_dict)
+        if not chain:
+            with _pdf_jobs_lock:
+                _pdf_jobs[job_id]["status"] = "failed"
+                _pdf_jobs[job_id]["error"] = (
+                    "No LLM provider is configured. Add one in Settings first."
+                )
+            return
+
+        current_profile = load_profile(profile_path) if mode == "merge" else None
+        prompt = _build_import_prompt(resume_text)
+        result = generate_with_fallback(prompt, chain, set())
+        if result is None:
+            with _pdf_jobs_lock:
+                _pdf_jobs[job_id]["status"] = "failed"
+                _pdf_jobs[job_id]["error"] = (
+                    "All LLM providers failed. Check your API keys in Settings."
+                )
+            return
+
+        raw_text, model_used = result
+        parsed = _parse_import_response(raw_text)
+        if parsed is None:
+            with _pdf_jobs_lock:
+                _pdf_jobs[job_id]["status"] = "failed"
+                _pdf_jobs[job_id]["error"] = (
+                    "LLM returned an unparseable response. Try again."
+                )
+            return
+
+        if mode == "merge":
+            profile_result = _merge_import_result(current_profile, parsed)
+        else:
+            structured_skills = []
+            for s in parsed.get("primary_skills", []):
+                name = s.get("skill", "")
+                years = s.get("years", 0)
+                status = s.get("status", "active")
+                structured_skills.append({
+                    "description": name,
+                    "years_active": int(years) if years else 0,
+                    "active": status != "dormant",
+                })
+            profile_result = {
+                "primary_skills": structured_skills,
+                "education": _normalise_education(parsed.get("education", [])),
+                "seniority": parsed.get("seniority", ""),
+                "preferred_industries": parsed.get("preferred_industries", []),
+                "location_center": parsed.get("location_center"),
+            }
+
+        with _pdf_jobs_lock:
+            _pdf_jobs[job_id]["status"] = "complete"
+            _pdf_jobs[job_id]["result"] = {
+                "success": True,
+                "profile": profile_result,
+                "model_used": model_used,
+            }
+
+    except (ValueError, KeyError, TypeError, RuntimeError, OSError) as exc:
+        with _pdf_jobs_lock:
+            _pdf_jobs[job_id]["status"] = "failed"
+            _pdf_jobs[job_id]["error"] = f"Import error: {exc}"
+    except Exception as exc:  # noqa: BLE001 — daemon thread; must capture all failures
+        with _pdf_jobs_lock:
+            _pdf_jobs[job_id]["status"] = "failed"
+            _pdf_jobs[job_id]["error"] = f"Unexpected error: {exc}"
+
+
+# ---------------------------------------------------------------------------
+# PDF resume import — endpoint
+# ---------------------------------------------------------------------------
+
+
+@app.route("/profile/import-pdf", methods=["POST"])
+def profile_import_pdf():
+    """Import profile data from an uploaded PDF resume via LLM extraction.
+
+    Accepts a multipart/form-data POST with:
+    - ``file``: PDF file upload (required, max 10 MB).
+    - ``mode``: ``"fresh"`` (default) or ``"merge"``.
+
+    **Small PDFs** (extracted text ≤ ``_PDF_ASYNC_THRESHOLD`` chars) are
+    processed synchronously and return the result directly.
+
+    **Large PDFs** (extracted text > ``_PDF_ASYNC_THRESHOLD`` chars) are
+    dispatched to a daemon thread; the response is HTTP 202 with a ``job_id``
+    that the client must poll via ``GET /profile/import-pdf/status/<job_id>``.
+
+    Returns JSON — does NOT write profile.json.  The response payload is
+    intended for client-side form pre-fill so the user can review before saving.
+
+    .. note::
+        **CSRF protection**: the endpoint is guarded by the app's
+        localhost/private-network origin check, which rejects cross-origin
+        requests from outside the trusted network.
+
+    Returns:
+        200 ``{"success": True, "profile": {...}, "model_used": "provider/model"}``
+        202 ``{"async": True, "job_id": "<uuid>"}`` (large PDF, poll for result)
+        400 invalid input (no file, non-PDF, unreadable PDF)
+        413 file or extracted text exceeds size limits
+        422 extracted text too short to be useful
+        502 LLM failure (all providers failed or unparseable response)
+        503 no LLM provider configured
+    """
+    import uuid as _uuid
+
+    # Validate file
+    uploaded = request.files.get("file")
+    if not uploaded or not uploaded.filename:
+        return jsonify({"success": False, "error": "No file uploaded."}), 400
+    if not uploaded.filename.lower().endswith(".pdf"):
+        return jsonify({"success": False, "error": "Only PDF files are accepted."}), 400
+
+    mode = request.form.get("mode", "fresh")
+    if mode not in ("fresh", "merge"):
+        mode = "fresh"
+
+    # Extract text
+    pdf_bytes = uploaded.read()
+    if len(pdf_bytes) > 10 * 1024 * 1024:
+        return jsonify({"success": False, "error": "PDF exceeds the 10 MB size limit."}), 413
+    try:
+        resume_text = _extract_pdf_text(pdf_bytes)
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+
+    if len(resume_text.strip()) < 50:
+        return jsonify({"success": False, "error": "Could not extract meaningful text from this PDF."}), 422
+
+    # Prompt injection mitigation: enforce length cap and strip control characters
+    if len(resume_text) > 50_000:
+        return jsonify({"success": False, "error": "Extracted PDF text exceeds the 50,000 character limit."}), 413
+    resume_text = "".join(ch for ch in resume_text if ch.isprintable() or ch in "\n\r\t")
+
+    # Dispatch large PDFs asynchronously to avoid blocking the Flask thread.
+    if len(resume_text) > _PDF_ASYNC_THRESHOLD:
+        job_id = str(_uuid.uuid4())
+        with _pdf_jobs_lock:
+            active = sum(
+                1 for j in _pdf_jobs.values()
+                if j["status"] in ("pending", "running")
+            )
+            if active >= _MAX_CONCURRENT_PDF_JOBS:
+                return jsonify({
+                    "success": False,
+                    "error": "Too many concurrent imports. Please wait and try again.",
+                }), 429
+            _pdf_jobs[job_id] = {
+                "id": job_id,
+                "status": "pending",
+                "result": None,
+                "error": None,
+                "created_at": datetime.now(timezone.utc).timestamp(),
+            }
+        providers_dict = _load_providers_safe()
+        _pdf_executor.submit(
+            _run_pdf_import_job,
+            job_id, resume_text, mode, providers_dict, _PROFILE_PATH,
+        )
+        return jsonify({"async": True, "job_id": job_id}), 202
+
+    # Small PDF — synchronous path (unchanged behaviour)
+    providers_dict = _load_providers_safe()
+    chain = build_provider_chain(providers_dict)
+    if not chain:
+        return jsonify({"success": False, "error": "No LLM provider is configured. Add one in Settings first."}), 503
+
+    # Build prompt and call LLM
+    current_profile = load_profile(_PROFILE_PATH) if mode == "merge" else None
+    prompt = _build_import_prompt(resume_text)
+    result = generate_with_fallback(prompt, chain, set())
+    if result is None:
+        return jsonify({"success": False, "error": "All LLM providers failed. Check your API keys in Settings."}), 502
+
+    raw_text, model_used = result
+
+    # Parse response
+    parsed = _parse_import_response(raw_text)
+    if parsed is None:
+        return jsonify({"success": False, "error": "LLM returned an unparseable response. Try again."}), 502
+
+    # Apply merge or format for fresh
+    if mode == "merge":
+        profile_result = _merge_import_result(current_profile, parsed)
+    else:
+        structured_skills = []
+        for s in parsed.get("primary_skills", []):
+            name = s.get("skill", "")
+            years = s.get("years", 0)
+            status = s.get("status", "active")
+            structured_skills.append({
+                "description": name,
+                "years_active": int(years) if years else 0,
+                "active": status != "dormant",
+            })
+        profile_result = {
+            "primary_skills": structured_skills,
+            "education": _normalise_education(parsed.get("education", [])),
+            "seniority": parsed.get("seniority", ""),
+            "preferred_industries": parsed.get("preferred_industries", []),
+            "location_center": parsed.get("location_center"),
+        }
+
+    return jsonify({"success": True, "profile": profile_result, "model_used": model_used}), 200
+
+
+@app.route("/profile/import-pdf/status/<job_id>", methods=["GET"])
+def profile_import_pdf_status(job_id: str):
+    """Poll the status of an async PDF import job.
+
+    Args:
+        job_id: UUID returned by ``POST /profile/import-pdf`` when a large PDF
+                was submitted (response contained ``"async": True``).
+
+    Returns:
+        200 ``{"status": "pending"}`` or ``{"status": "running"}``
+        200 ``{"status": "complete", "result": {...}}`` — same shape as sync 200
+        200 ``{"status": "failed", "error": "..."}``
+        404 if ``job_id`` is unknown or has already been pruned
+    """
+    _prune_pdf_jobs()
+
+    with _pdf_jobs_lock:
+        job = _pdf_jobs.get(job_id)
+
+    if job is None:
+        return jsonify({"error": "Job not found."}), 404
+
+    status = job["status"]
+    if status in ("pending", "running"):
+        return jsonify({"status": status}), 200
+    if status == "complete":
+        return jsonify({"status": "complete", "result": job["result"]}), 200
+    # status == "failed"
+    return jsonify({"status": "failed", "error": job["error"]}), 200
 
 
 @app.route("/profile", methods=["GET", "POST"])
@@ -1117,9 +1877,49 @@ def profile():
             if loc_notes:
                 location_block["notes"] = loc_notes
 
+            # Parse structured primary_skills fields.
+            # Each skill is submitted as parallel arrays:
+            #   skill_description[]   — the skill name
+            #   skill_years_active[]  — years of experience (integer)
+            #   skill_active_idx[]    — indices (0-based) of rows where active=true
+            # We use an index list for active because unchecked checkboxes are not
+            # submitted by browsers; the hidden-input trick captures which rows
+            # the user toggled ON.
+            descriptions = request.form.getlist("skill_description[]")
+            years_raw = request.form.getlist("skill_years_active[]")
+            active_indices_raw = request.form.getlist("skill_active_idx[]")
+            try:
+                active_indices = {int(x) for x in active_indices_raw if x.strip()}
+            except ValueError:
+                active_indices = set()
+
+            primary_skills: list[dict] = []
+            for i, desc in enumerate(descriptions):
+                desc = desc.strip()
+                if not desc:
+                    continue  # skip empty rows
+                years_str = years_raw[i] if i < len(years_raw) else "0"
+                try:
+                    years = int(years_str)
+                except (ValueError, TypeError):
+                    field_errors.append(
+                        f"Primary skill '{desc}': years must be a whole number, got '{years_str}'"
+                    )
+                    continue
+                if years < 0:
+                    field_errors.append(
+                        f"Primary skill '{desc}': years_active cannot be negative"
+                    )
+                primary_skills.append({
+                    "description": desc,
+                    "years_active": years,
+                    "active": i in active_indices,
+                })
+
             new_profile: dict = {
-                "primary_skills": _parse_repeating_rows(request.form, "primary_skills"),
+                "primary_skills": primary_skills,
                 "anti_preferences": _parse_repeating_rows(request.form, "anti_preferences"),
+                "education": _parse_education_rows(request.form),
                 "seniority": request.form.get("seniority", "").strip(),
                 "preferred_industries": _parse_repeating_rows(request.form, "preferred_industries"),
                 "location": location_block,
@@ -1263,7 +2063,7 @@ def admin_clear_db():
         return make_response(html, 400)
 
     try:
-        conn = db.get_connection(DB_PATH)
+        conn = db.get_connection()
         try:
             deleted = db.clear_all_listings(conn)
         finally:
@@ -1449,7 +2249,7 @@ def api_job_source_toggle(source_key: str):
         400 plain text for a malformed request body.
         500 plain text if the file cannot be written.
     """
-    if source_key not in SOURCES:
+    if source_key not in get_sources():
         return jsonify({"error": f"Unknown job source: {source_key!r}"}), 404
 
     body = request.get_json(silent=True)
@@ -1465,7 +2265,7 @@ def api_job_source_toggle(source_key: str):
 
     # When enabling, verify required credentials are already stored.
     if enabled:
-        cls = SOURCES[source_key]
+        cls = get_sources()[source_key]
         schema = cls.settings_schema()
         required_fields = [f for f in schema.get("fields", []) if f.get("required")]
 
@@ -1515,11 +2315,11 @@ if __name__ == "__main__":
 
     if args.demo:
         DEMO_MODE = True
-        DB_PATH = "jobs.demo.db"
+        # TODO: demo mode is not supported in the PostgreSQL deployment
         _PROFILE_PATH = os.path.join(_CONFIG_DIR, "profile.demo.json")
         _PROVIDERS_PATH = os.path.join(_CONFIG_DIR, "providers.demo.json")
-        print("Demo mode enabled — using jobs.demo.db and demo config files.")
+        print("Demo mode enabled — using demo config files.")
 
-    db.init_db(db_path=DB_PATH)
+    db.init_db()
     debug = os.environ.get("FLASK_DEBUG", "0") == "1"
     app.run(debug=debug, port=5000)

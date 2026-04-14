@@ -12,38 +12,6 @@
   <script src="https://unpkg.com/htmx.org@1.9.10/dist/htmx.min.js" integrity="sha384-D1Kt99CQMDuVetoL1lrYwg5t+9QdHe7NLX/SoJYkXDFfX37iInKRy5xLSi8nO7UC" crossorigin="anonymous"></script>
   <script src="https://unpkg.com/htmx.org@1.9.10/dist/ext/json-enc.js" integrity="sha384-nRnAvEUI7N/XvvowiMiq7oEI04gOXMCqD3Bidvedw+YNbj7zTQACPlRI3Jt3vYM4" crossorigin="anonymous"></script>
   <style>
-    /* ── Settings tab chrome ─────────────────────────────────────── */
-    .settings-tabs {
-      display: flex;
-      gap: 0;
-      border-bottom: 1px solid var(--border-mid);
-      margin-bottom: 1.5rem;
-    }
-    .settings-tab-btn {
-      padding: 0.6rem 1.4rem;
-      background: transparent;
-      border: none;
-      border-bottom: 2px solid transparent;
-      color: var(--text-secondary);
-      font-family: inherit;
-      font-size: 0.9rem;
-      cursor: pointer;
-      transition: color 0.15s, border-color 0.15s;
-    }
-    .settings-tab-btn:hover {
-      color: var(--text-primary);
-    }
-    .settings-tab-btn.active {
-      color: var(--text-accent);
-      border-bottom-color: var(--text-accent);
-    }
-    .tab-pane {
-      display: none;
-    }
-    .tab-pane.active {
-      display: block;
-    }
-
     /* ── Provider drag-to-reorder list ──────────────────────────── */
     .order-section {
       margin-bottom: 2rem;
@@ -83,9 +51,15 @@
     .drag-handle {
       color: var(--text-secondary);
       font-size: 1.1rem;
+      line-height: 1; /* prevent extra vertical space around single character */
       cursor: grab;
       flex-shrink: 0;
+      /* Generous padding enlarges the hit target without changing visual size */
+      padding: 0.4rem 0.5rem;
+      margin: -0.4rem -0.5rem;
+      touch-action: none;
     }
+    .drag-handle:active { cursor: grabbing; }
     .order-position {
       font-size: 0.75rem;
       font-weight: 700;
@@ -216,145 +190,10 @@
       color: var(--text-accent);
     }
 
-    /* ── Danger Zone / destructive confirmation panel ────────────── */
-    .danger-zone {
-      margin-top: 2.5rem;
-      border-top: 1px solid var(--border-subtle);
-      padding-top: 1.5rem;
-    }
-    .danger-zone-heading {
-      font-family: var(--font-mono);
-      font-size: 0.72rem;
-      font-weight: normal;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      color: var(--score-low-text);
-      margin: 0 0 1rem;
-    }
-    .btn-danger {
-      background: var(--bg-raised);
-      color: var(--score-low-text);
-      border: 1px solid var(--score-low-border);
-      border-radius: var(--radius-md);
-      font-family: var(--font-mono);
-      font-size: 0.76rem;
-      letter-spacing: 0.04em;
-      padding: 0.45rem 1rem;
-      cursor: pointer;
-      transition: background 0.15s, border-color 0.15s;
-    }
-    .btn-danger:hover {
-      background: var(--score-low-bg);
-      border-color: var(--score-low-text);
-    }
-    .btn-danger:focus-visible {
-      outline: 2px solid var(--score-low-text);
-      outline-offset: 2px;
-    }
-    /* Confirmation panel — hidden by default, revealed via JS toggle */
-    .clear-db-panel {
-      display: none;
-      margin-top: 1rem;
-      background: var(--score-low-bg);
-      border: 1px solid var(--score-low-border);
-      border-radius: var(--radius-md);
-      padding: 1rem 1.25rem;
-    }
-    .clear-db-panel.visible {
-      display: block;
-    }
-    .clear-db-warnings {
-      list-style: none;
-      margin: 0 0 1rem;
-      padding: 0;
-    }
-    .clear-db-warnings li {
-      font-family: var(--font-body);
-      font-size: 0.84rem;
-      color: var(--score-low-text);
-      padding: 0.15rem 0;
-    }
-    .clear-db-warnings li::before {
-      content: "⚠ ";
-      opacity: 0.7;
-    }
-    .clear-db-count {
-      font-family: var(--font-mono);
-      font-size: 0.76rem;
-      color: var(--score-low-text);
-      margin-bottom: 1rem;
-    }
-    .clear-db-form {
-      display: flex;
-      flex-direction: column;
-      gap: 0.5rem;
-      max-width: 380px;
-    }
-    .clear-db-label {
-      font-family: var(--font-mono);
-      font-size: 0.68rem;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      color: var(--score-low-text);
-    }
-    .clear-db-input {
-      font-family: var(--font-mono);
-      font-size: 0.76rem;
-      background: var(--bg-raised);
-      color: var(--text-primary);
-      border: 1px solid var(--score-low-border);
-      border-radius: var(--radius-md);
-      padding: 0.4rem 0.6rem;
-      width: 100%;
-    }
-    .clear-db-input:focus {
-      outline: none;
-      border-color: var(--score-low-text);
-      color: var(--text-primary);
-    }
-    .btn-danger-confirm {
-      background: var(--score-low-bg);
-      color: var(--score-low-text);
-      border: 1px solid var(--score-low-text);
-      border-radius: var(--radius-md);
-      font-family: var(--font-mono);
-      font-size: 0.76rem;
-      letter-spacing: 0.04em;
-      padding: 0.45rem 1rem;
-      cursor: pointer;
-      transition: background 0.15s, color 0.15s;
-      align-self: flex-start;
-    }
-    .btn-danger-confirm:disabled {
-      opacity: 0.4;
-      cursor: not-allowed;
-      pointer-events: none;
-    }
-    .btn-danger-confirm:not(:disabled):hover {
-      background: var(--score-low-text);
-      color: var(--bg-base);
-    }
-    .btn-danger-confirm:focus-visible {
-      outline: 2px solid var(--score-low-text);
-      outline-offset: 2px;
-    }
-    .clear-db-cancel {
-      font-family: var(--font-mono);
-      font-size: 0.72rem;
-      color: var(--text-muted);
-      background: none;
-      border: none;
-      cursor: pointer;
-      padding: 0.3rem 0;
-      align-self: flex-start;
-      transition: color 0.15s;
-    }
-    .clear-db-cancel:hover {
-      color: var(--text-secondary);
-    }
   </style>
 </head>
 <body>
+{% include '_status_bar.html' %}
 {% if demo_mode %}
 <div class="demo-banner" role="status">&#x2697; Demo Mode &mdash; sample data only, no real API calls</div>
 {% endif %}
@@ -436,7 +275,7 @@
     <form class="settings-form" method="post" action="/settings">
       <input type="hidden" name="tab" value="llm">
 
-      {% for provider_key, schema, has_values, current_values in llm_schemas %}
+      {% for provider_key, schema, has_values, current_values, populated_fields in llm_schemas %}
         <div class="provider-row">
           <div class="provider-header">
             <span class="provider-name">{{ schema.display_name }}</span>
@@ -452,13 +291,23 @@
               {{ field.label }}
             </label>
             {% if field.type == "password" %}
-              <input
-                id="{{ provider_key }}__{{ field.name }}"
-                class="settings-input"
-                type="password"
-                name="{{ provider_key }}__{{ field.name }}"
-                autocomplete="off"
-                placeholder="Enter new value to update (leave blank to keep existing)">
+              {# data-field-id links the Clear button to its input — JS uses it to construct
+                 the __clear__ hidden field name for the server-side clear mechanism #}
+              <div class="password-field-wrapper">
+                <input
+                  id="{{ provider_key }}__{{ field.name }}"
+                  class="settings-input"
+                  type="password"
+                  name="{{ provider_key }}__{{ field.name }}"
+                  autocomplete="off"
+                  placeholder="Enter new value to update (leave blank to keep existing)">
+                {% if field.name in populated_fields %}
+                  <button type="button"
+                          class="btn-clear-key"
+                          data-field-id="{{ provider_key }}__{{ field.name }}"
+                          title="Clear this key">&#x2715;</button>
+                {% endif %}
+              </div>
             {% else %}
               <input
                 id="{{ provider_key }}__{{ field.name }}"
@@ -512,7 +361,7 @@
     <form class="settings-form" method="post" action="/settings">
       <input type="hidden" name="tab" value="sources">
 
-      {% for source_key, schema, has_values, is_enabled, credentials_required in source_schemas %}
+      {% for source_key, schema, has_values, is_enabled, credentials_required, populated_fields in source_schemas %}
         {% set toggle_disabled = credentials_required and not has_values %}
         <div class="provider-row">
           <div class="provider-header">
@@ -563,13 +412,21 @@
               {{ field.label }}
             </label>
             {% if field.type == "password" %}
-              <input
-                id="{{ source_key }}__{{ field.name }}"
-                class="settings-input"
-                type="password"
-                name="{{ source_key }}__{{ field.name }}"
-                autocomplete="off"
-                placeholder="Enter new value to update (leave blank to keep existing)">
+              <div class="password-field-wrapper">
+                <input
+                  id="{{ source_key }}__{{ field.name }}"
+                  class="settings-input"
+                  type="password"
+                  name="{{ source_key }}__{{ field.name }}"
+                  autocomplete="off"
+                  placeholder="Enter new value to update (leave blank to keep existing)">
+                {% if field.name in populated_fields %}
+                  <button type="button"
+                          class="btn-clear-key"
+                          data-field-id="{{ source_key }}__{{ field.name }}"
+                          title="Clear this key">&#x2715;</button>
+                {% endif %}
+              </div>
             {% else %}
               <input
                 id="{{ source_key }}__{{ field.name }}"
@@ -722,31 +579,121 @@
   }
 }());
 
-// Dirty-state tracking for credential forms
+// Dirty-state tracking with client-side sparse submit for credential forms.
+// Only fields the user actually changed are sent in the POST — this prevents
+// empty untouched inputs from arriving as "" and overwriting stored credentials
+// (issue #89).  The server's `if raw is None: continue` logic handles sparse
+// form data correctly; the no-JS password guard (issue #138) additionally
+// skips blank password fields on the server side.
+//
+// After every successful save, the entire active tab pane is replaced with the
+// server-rendered version (issue #138).  The server is the single source of
+// truth — this keeps badges, toggle pills, and form state in sync after save
+// without any client-side bookkeeping.
 (function () {
-  [
-    { formSelector: '#pane-llm form',     barId: 'save-bar-llm' },
-    { formSelector: '#pane-sources form', barId: 'save-bar-sources' }
-  ].forEach(function (cfg) {
-    var form = document.querySelector(cfg.formSelector);
-    var bar  = document.getElementById(cfg.barId);
-    if (!form || !bar) return;
+  // ── Inline error helper ─────────────────────────────────────────────────
+  // Injects a transient error paragraph near the save bar.  Shared by all
+  // pane handlers.
+  function showSaveError(bar, message) {
+    var existing = bar.parentNode.querySelector('.save-bar-error');
+    if (existing) { existing.remove(); }
+    var el = document.createElement('p');
+    el.className = 'save-error save-bar-error';
+    el.textContent = message;
+    bar.parentNode.insertBefore(el, bar.nextSibling);
+    setTimeout(function () { if (el.parentNode) { el.remove(); } }, 5000);
+  }
 
-    var originalSubmit = form.querySelector('button[type="submit"].btn-save');
-    if (originalSubmit) { originalSubmit.style.display = 'none'; }
+  // ── Per-pane reinit registry ────────────────────────────────────────────
+  // Each setupFormTracking() call registers a reinit function keyed by pane
+  // ID.  replacePane() calls the registered function after swapping the DOM
+  // so that dirty tracking, listeners, and SortableJS are all re-initialized
+  // on the new content.
+  //
+  // Both paneReinit and replacePane are exposed on window so that the
+  // SortableJS IIFE (which runs in a separate <script> block) can call
+  // replacePane after a successful reorder POST and override paneReinit for
+  // the LLM pane to include SortableJS re-initialization.
+  var paneReinit = window.paneReinit = {};
 
-    // Capture original field values on page load
-    var fields = Array.from(form.querySelectorAll('input[type="text"], input[type="password"]'));
+  // ── replacePane(responseHtml, paneId) ───────────────────────────────────
+  // Core shared function called by all save handlers and the drag handler.
+  // 1. Parse the full page HTML from the server response.
+  // 2. Extract the named pane element.
+  // 3. Replace the current pane's innerHTML with the fresh content.
+  // 4. Re-process HTMX attributes on the new content.
+  // 5. Call the per-pane reinit function to re-snapshot state and re-bind
+  //    listeners.
+  //
+  // Returns true on success, false if the pane could not be found in the
+  // response (caller should show an error).
+  //
+  // Exposed on window so the SortableJS IIFE can call it.
+  var replacePane = window.replacePane = function replacePane(responseHtml, paneId) {
+    var parser   = new DOMParser();
+    var doc      = parser.parseFromString(responseHtml, 'text/html');
+    var freshPane = doc.getElementById(paneId);
+    if (!freshPane) {
+      return false;
+    }
+    var currentPane = document.getElementById(paneId);
+    if (!currentPane) { return false; }
+    currentPane.innerHTML = freshPane.innerHTML;
+    if (typeof htmx !== 'undefined') { htmx.process(currentPane); }
+    // Re-initialize tab-specific JS (dirty tracking, SortableJS, etc.)
+    if (paneReinit[paneId]) { paneReinit[paneId](); }
+    return true;
+  }
+
+  // ── setupFormTracking({ paneId, formSelector, barId }) ──────────────────
+  // Initialises dirty-tracking for one tab pane.  Registers a reinit() in
+  // paneReinit so replacePane() can call it after a DOM swap.
+  //
+  // paneId        — the id of the containing .tab-pane element
+  // formSelector  — CSS selector for the <form> within that pane
+  // barId         — id of the save-bar element
+  function setupFormTracking(cfg) {
+    var paneId       = cfg.paneId;
+    var formSelector = cfg.formSelector;
+    var barId        = cfg.barId;
+
+    var pane = document.getElementById(paneId);
+    var bar  = document.getElementById(barId);
+    if (!pane || !bar) return;
+
+    // Mutable reference — updated when the pane is replaced.
+    var form = pane.querySelector('form');
+    if (!form) return;
+
+    // Track which field names the user has actually changed.
+    var dirtyNames = new Set();
+
+    // originalValues: keyed by input name, stores value/checked at last
+    // snapshot time (page load or after a pane swap).
     var originalValues = {};
-    fields.forEach(function (input) {
-      originalValues[input.name] = input.value;
-    });
+
+    function snapshotOriginalValues() {
+      originalValues = {};
+      Array.from(
+        form.querySelectorAll('input[type="text"], input[type="password"]')
+      ).forEach(function (input) {
+        originalValues[input.name] = input.value;
+      });
+      Array.from(form.querySelectorAll('input[type="checkbox"]')).forEach(function (cb) {
+        originalValues[cb.name] = cb.checked;
+      });
+    }
+    snapshotOriginalValues();
+
+    // Keep the native submit button hidden when JS is running.
+    function hideNativeSubmit() {
+      var originalSubmit = form.querySelector('button[type="submit"].btn-save');
+      if (originalSubmit) { originalSubmit.style.display = 'none'; }
+    }
+    hideNativeSubmit();
 
     function updateBarVisibility() {
-      var isDirty = fields.some(function (input) {
-        return input.value !== originalValues[input.name];
-      });
-      if (isDirty) {
+      if (dirtyNames.size > 0) {
         bar.classList.add('save-bar--visible');
         bar.removeAttribute('aria-hidden');
       } else {
@@ -755,23 +702,211 @@
       }
     }
 
-    form.addEventListener('input', function (e) {
+    function onFormInput(e) {
       var t = e.target;
-      if (t.tagName === 'INPUT' && (t.type === 'text' || t.type === 'password')) {
-        updateBarVisibility();
+      if (t.tagName !== 'INPUT') { return; }
+      if (t.type !== 'text' && t.type !== 'password') { return; }
+      if (t.value !== originalValues[t.name]) {
+        dirtyNames.add(t.name);
+      } else {
+        dirtyNames.delete(t.name);
       }
-    });
+      updateBarVisibility();
+    }
 
-    bar.querySelector('.btn-save').addEventListener('click', function () {
-      form.requestSubmit();
-    });
+    function onFormChange(e) {
+      var t = e.target;
+      if (t.tagName !== 'INPUT' || t.type !== 'checkbox') { return; }
+      // Source toggle checkboxes carry an hx-post attribute — they are
+      // persisted immediately by HTMX and must not also be added to the
+      // form's dirty set (issue #138, double-fire guard).
+      if (t.hasAttribute('hx-post')) { return; }
+      if (t.checked !== originalValues[t.name]) {
+        dirtyNames.add(t.name);
+      } else {
+        dirtyNames.delete(t.name);
+      }
+      updateBarVisibility();
+    }
 
-    // Hide bar on successful form submission
-    form.addEventListener('submit', function () {
+    function onFormSubmit() {
       bar.classList.remove('save-bar--visible');
       bar.setAttribute('aria-hidden', 'true');
-    });
-  });
+    }
+
+    // Clear button handler — delegated on the form so it works after DOM
+    // replacement (sources tab refresh).  When clicked:
+    //   1. Empties the password input and adds a visual indicator class.
+    //   2. Inserts (or updates) a hidden __clear__ field so the server knows
+    //      to wipe the stored value rather than treat the blank as a no-op.
+    //   3. Marks the hidden field as dirty so the sparse submit includes it.
+    //   4. Hides the Clear button (it has been activated).
+    function onFormClick(e) {
+      if (!e.target.matches('.btn-clear-key')) { return; }
+      var fieldId = e.target.getAttribute('data-field-id');
+      var input = document.getElementById(fieldId);
+      if (!input) { return; }
+
+      // Empty the field and give visual feedback.
+      input.value = '';
+      input.placeholder = 'Key will be cleared on save';
+      input.classList.add('input--clearing');
+
+      // Insert (or reuse) a hidden __clear__ field so the server can
+      // distinguish an explicit clear from an accidental no-JS blank submit.
+      var clearName = '__clear__' + input.name;
+      var existing = form.elements[clearName];
+      if (!existing) {
+        var hidden = document.createElement('input');
+        hidden.type   = 'hidden';
+        hidden.name   = clearName;
+        hidden.value  = '1';
+        form.appendChild(hidden);
+      }
+
+      // Mark both the hidden __clear__ field and the credential field itself as
+      // dirty so submitDirty() sends both.  The credential field (empty string)
+      // is required to pass the server-side source_in_form guard, which checks
+      // for regular cred keys.  The __clear__ flag is what actually triggers
+      // the wipe on the server.
+      dirtyNames.add(clearName);
+      dirtyNames.add(input.name);
+
+      // Hide the activated button.
+      e.target.style.display = 'none';
+
+      updateBarVisibility();
+    }
+
+    // Attach dirty-tracking listeners to the form.  Extracted into a named
+    // function so we can re-bind after DOM replacement (sources tab refresh).
+    // Removes existing listeners before re-adding so that each re-bind is clean
+    // and no duplicate handlers accumulate on the new form element.
+    function bindFormListeners() {
+      form.removeEventListener('input',  onFormInput);
+      form.removeEventListener('change', onFormChange);
+      form.removeEventListener('submit', onFormSubmit);
+      form.removeEventListener('click',  onFormClick);
+
+      form.addEventListener('input',  onFormInput);
+      form.addEventListener('change', onFormChange);
+      form.addEventListener('submit', onFormSubmit);
+      // Clear button clicks (delegated — works after DOM swap).
+      form.addEventListener('click',  onFormClick);
+    }
+    bindFormListeners();
+
+    // Build and submit a sparse FormData containing only dirty fields + tab.
+    function submitDirty() {
+      if (dirtyNames.size === 0) {
+        var label = bar.querySelector('.save-bar-label');
+        if (!label) { return; }
+        var prev = label.textContent;
+        label.textContent = 'No changes to save';
+        setTimeout(function () { label.textContent = prev; }, 2000);
+        return;
+      }
+
+      // Capture the form reference at call time — it may be reassigned by a
+      // concurrent DOM swap between the click and this line.
+      var currentForm = form;
+
+      var saveBtn = bar.querySelector('.btn-save');
+      saveBtn.disabled = true;
+      var prevLabel = saveBtn.textContent;
+      saveBtn.textContent = 'Saving\u2026';
+
+      var body = new URLSearchParams();
+      var tabInput = currentForm.querySelector('input[name="tab"]');
+      if (tabInput) { body.append('tab', tabInput.value); }
+
+      dirtyNames.forEach(function (name) {
+        var el = currentForm.elements[name];
+        if (!el) { return; }
+        if (el.type === 'checkbox') {
+          // 'on' = checked; '' = explicitly unchecked (dirty).
+          body.append(name, el.checked ? 'on' : '');
+        } else {
+          body.append(name, el.value);
+        }
+      });
+
+      fetch(currentForm.action || '/settings', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body:    body.toString(),
+        redirect: 'follow',
+      })
+      .then(function (resp) {
+        saveBtn.disabled = false;
+        if (!resp.ok) {
+          saveBtn.textContent = prevLabel;
+          showSaveError(bar, 'Save failed \u2014 check file permissions.');
+          return;
+        }
+
+        // After a successful save, replace the entire active tab pane with
+        // the server-rendered version from the response (issue #138).  This
+        // ensures badges, toggle pills, and HTMX attributes are always
+        // derived from authoritative server state — no client-side mirroring.
+        resp.text().then(function (html) {
+          var ok = replacePane(html, paneId);
+          if (!ok) {
+            // replacePane could not find the pane in the response; most
+            // likely the server returned an unexpected format.
+            showSaveError(bar, 'Save succeeded but refresh failed \u2014 please reload.');
+          }
+          // replacePane → paneReinit already reset dirtyNames and hid the
+          // bar; just update the save button label.
+          saveBtn.textContent = 'Saved!';
+          setTimeout(function () { saveBtn.textContent = prevLabel; }, 2000);
+        });
+      })
+      .catch(function () {
+        saveBtn.disabled = false;
+        saveBtn.textContent = prevLabel;
+        showSaveError(bar, 'Save failed \u2014 network error.');
+      });
+    }
+
+    bar.querySelector('.btn-save').addEventListener('click', submitDirty);
+
+    // ── Per-pane reinit ─────────────────────────────────────────────────
+    // Called by replacePane() after the DOM has been swapped.  Re-acquires
+    // the form reference from the refreshed pane, re-snapshots original
+    // values, clears dirty state, re-binds listeners, and hides the save bar.
+    //
+    // The LLM pane additionally re-initializes SortableJS — that is handled
+    // in the drag-to-reorder block below via its own paneReinit entry, which
+    // overrides (wraps) this one.
+    paneReinit[paneId] = function () {
+      var newForm = document.getElementById(paneId).querySelector('form');
+      if (!newForm) { return; }
+      form = newForm;
+      // Re-acquire bar from the live DOM — pane.innerHTML replacement destroys
+      // the old element, so the outer-closure reference is now detached (#147).
+      bar = document.getElementById(barId);
+      if (!bar) { return; }
+      snapshotOriginalValues();
+      dirtyNames.clear();
+      hideNativeSubmit();
+      bindFormListeners();
+      // Re-attach the save button click listener — the old .btn-save was
+      // destroyed with the DOM swap, so the listener registered at setup time
+      // is gone and must be re-added to the freshly rendered button (#147).
+      var saveBtn = bar.querySelector('.btn-save');
+      if (saveBtn) { saveBtn.addEventListener('click', submitDirty); }
+      bar.classList.remove('save-bar--visible');
+      bar.setAttribute('aria-hidden', 'true');
+    };
+  }
+
+  // ── Initialise form tracking for each tab ───────────────────────────────
+  [
+    { paneId: 'pane-llm',     formSelector: '#pane-llm form',     barId: 'save-bar-llm' },
+    { paneId: 'pane-sources', formSelector: '#pane-sources form', barId: 'save-bar-sources' },
+  ].forEach(setupFormTracking);
+
 }());
 </script>
 {# ── SortableJS drag-to-reorder ──────────────────────────────── #}
@@ -800,10 +935,12 @@
      back into Sortable.create() after a DOM swap. */
   function initSortable(el) {
     return Sortable.create(el, {
-      animation:  150,
-      handle:     '.drag-handle',
-      ghostClass: 'sortable-ghost',
-      dragClass:  'sortable-drag',
+      animation:     150,
+      handle:        '.drag-handle',
+      ghostClass:    'sortable-ghost',
+      dragClass:     'sortable-drag',
+      forceFallback: true,   /* bypass HTML5 native DnD — more reliable cross-browser */
+      fallbackTolerance: 3,  /* px of movement before drag starts (avoids mis-fires on click) */
 
       onStart: function () {
         /* SortableJS ignores return values — disable via the API instead. */
@@ -830,16 +967,29 @@
         })
         .then(function (resp) {
           if (resp.ok) {
-            resp.text().then(function (html) {
-              container.innerHTML = html;
-              listEl = container.querySelector('#provider-order-list');
-              sortable.destroy();
-              /* Fresh config — never reuse sortable.options */
-              sortable = initSortable(listEl);
-              if (errorEl) errorEl.style.display = 'none';
-              inFlight = false;
-              /* New sortable starts enabled; no need to re-enable old one */
-            });
+            // Reorder succeeded — replace the entire LLM pane so that the
+            // credential form section reflects the new order (issue #138).
+            // Option A: follow-up GET to /settings?tab=llm for the full page,
+            // then use replacePane() to swap only #pane-llm.  This keeps the
+            // reorder endpoint simple (returns only the order fragment).
+            if (errorEl) errorEl.style.display = 'none';
+            fetch('/settings?tab=llm', { redirect: 'follow' })
+              .then(function (pageResp) { return pageResp.text(); })
+              .then(function (html) {
+                // window.replacePane is set by the dirty-tracking IIFE above.
+                // paneReinit['pane-llm'] is overridden below to include
+                // SortableJS re-initialization on the fresh DOM.
+                if (typeof window.replacePane === 'function') {
+                  window.replacePane(html, 'pane-llm');
+                }
+                inFlight = false;
+              })
+              .catch(function () {
+                /* Follow-up GET failed — optimistic badge update already done;
+                   just re-enable dragging so the user can retry. */
+                sortable.option('disabled', false);
+                inFlight = false;
+              });
           } else {
             if (savedOrder) sortable.sort(savedOrder);
             updatePositionBadges();
@@ -866,6 +1016,32 @@
   }
 
   var sortable = initSortable(listEl);
+
+  // Override pane-llm reinit to also destroy and recreate SortableJS after a
+  // DOM swap.  setupFormTracking() registers a base reinit for pane-llm that
+  // handles form tracking (dirty state, listeners, etc.).  We wrap it here
+  // to add the SortableJS step so that after replacePane('pane-llm') both
+  // form tracking and drag-to-reorder are fully re-initialized.
+  var baseLlmReinit = (window.paneReinit && window.paneReinit['pane-llm'])
+    ? window.paneReinit['pane-llm']
+    : function () {};
+
+  if (window.paneReinit) {
+    window.paneReinit['pane-llm'] = function () {
+      baseLlmReinit();
+      /* Re-acquire container and listEl from the freshly swapped DOM. */
+      var newContainer = document.getElementById('provider-order-container');
+      if (!newContainer) { return; }
+      var newListEl = newContainer.querySelector('#provider-order-list');
+      if (!newListEl) { return; }
+      container = newContainer;
+      listEl    = newListEl;
+      if (sortable) {
+        try { sortable.destroy(); } catch (e) { /* already destroyed — ignore */ }
+      }
+      sortable = initSortable(newListEl);
+    };
+  }
 }());
 </script>
 {# ── Danger Zone script ───────────────────────────────────────── #}

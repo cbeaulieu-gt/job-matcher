@@ -6,11 +6,11 @@ on:
 
 jobs:
   review:
-    uses: cbeaulieu-gt/github-actions/.github/workflows/claude-pr-review.yml@v1.6.3
+    uses: cbeaulieu-gt/github-actions/.github/workflows/claude-pr-review.yml@v2
     permissions:
       contents: read
       issues: write
       pull-requests: write
-      id-token: write
+      statuses: write
     secrets:
       claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

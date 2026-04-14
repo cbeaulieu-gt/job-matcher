@@ -29,13 +29,13 @@ import time
 from datetime import datetime, timezone
 import requests
 from bs4 import BeautifulSoup
+from geopy.distance import geodesic
+from geopy.geocoders import Nominatim
 
 import db
-from job_sources import make_source, AdzunaClient, make_enabled_sources  # noqa: F401 — AdzunaClient re-exported for backward compat
+from job_sources import make_enabled_sources
 from providers import build_provider_chain, LLMProvider
 from credentials import CredentialError, load_providers
-
-_DB_PATH: str = os.environ.get("DB_PATH", "jobs.db")
 
 _CONFIG_DIR = os.path.join(os.path.dirname(__file__), "config")
 _DEFAULT_CONFIG_PATH = os.path.join(_CONFIG_DIR, "config.json")
@@ -48,6 +48,10 @@ _DEFAULT_PROVIDERS_PATH = os.path.join(_CONFIG_DIR, "providers.json")
 # ---------------------------------------------------------------------------
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("ingest")
+
+# Set to True by --verbose / -v CLI flag. Used at scoring callsites to emit
+# the full breakdown (verdict, matched/missing skills, concerns) at INFO level.
+_verbose = False
 
 
 def _configure_file_logging() -> None:
@@ -62,19 +66,38 @@ def _configure_file_logging() -> None:
     """
     MAX_LOG_FILES = 30
 
-    db_abs  = os.path.abspath(os.environ.get("DB_PATH", "jobs.db"))
-    log_dir = os.path.join(os.path.dirname(db_abs), "logs")
-    os.makedirs(log_dir, exist_ok=True)
+    log_dir = os.environ.get(
+        "LOG_DIR",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+    )
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+    except (PermissionError, OSError) as exc:
+        logging.warning(
+            "File logging unavailable — cannot create log directory %s (%s). "
+            "Continuing with stdout-only logging.",
+            log_dir,
+            exc,
+        )
+        return
 
     ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_file = os.path.join(log_dir, f"ingest_{ts}.log")
 
-    handler = logging.FileHandler(log_file, encoding="utf-8")
-    handler.setFormatter(
-        logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
-    )
-    logging.getLogger().addHandler(handler)
-    logger.info("Logging to file: %s", log_file)
+    try:
+        handler = logging.FileHandler(log_file, encoding="utf-8")
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+        )
+        logging.getLogger().addHandler(handler)
+        logger.info("Logging to file: %s", log_file)
+    except (PermissionError, OSError) as exc:
+        logging.warning(
+            "File logging unavailable — cannot open %s (%s). Continuing with stdout-only logging.",
+            log_file,
+            exc,
+        )
+        return
 
     # Prune oldest files beyond the retention limit.
     existing = sorted(
@@ -327,12 +350,11 @@ class GeoFilter:
         geo_discarded:  Number of listings discarded by the radius check.
     """
 
-    def __init__(self, profile: dict, db_path: str) -> None:
+    def __init__(self, profile: dict) -> None:
         loc = profile.get("location", {})
         self._center_str: str | None = loc.get("center")
         self._radius_km: float | None = loc.get("radius_km")
         self._fallback: str = (loc.get("geocode_fallback") or "pass").lower()
-        self._db_path = db_path
 
         # In-memory layer over the DB geocache — avoids repeated DB hits for
         # the same location within a single run.
@@ -343,7 +365,6 @@ class GeoFilter:
 
         # Lazy-initialised geolocator — only created when needed.
         self._geolocator = None
-        self._geopy_missing = False
 
         # Run statistics.
         self.hits = 0
@@ -369,23 +390,9 @@ class GeoFilter:
         return bool(self._center_str) and self._radius_km is not None
 
     def _geolocator_instance(self):
-        """Return (or lazily create) the Nominatim geolocator.
-
-        Returns None when geopy is not installed.
-        """
-        if self._geopy_missing:
-            return None
+        """Return (or lazily create) the Nominatim geolocator."""
         if self._geolocator is None:
-            try:
-                from geopy.geocoders import Nominatim
-                self._geolocator = Nominatim(user_agent=_GEOCODE_USER_AGENT)
-            except ImportError:
-                logger.warning(
-                    "geopy is not installed — location geocoding skipped. "
-                    "Run: uv pip install geopy==2.4.1"
-                )
-                self._geopy_missing = True
-                return None
+            self._geolocator = Nominatim(user_agent=_GEOCODE_USER_AGENT)
         return self._geolocator
 
     def _resolve(self, location_text: str) -> tuple[float, float] | None:
@@ -407,7 +414,7 @@ class GeoFilter:
             return self._mem[location_text]
 
         # 2. DB cache hit.
-        with db.get_connection(self._db_path) as conn:
+        with db.get_connection() as conn:
             db_hits = db.geocache_get_many(conn, [location_text])
         if location_text in db_hits:
             self.hits += 1
@@ -417,9 +424,6 @@ class GeoFilter:
 
         # 3. Nominatim API call.
         geolocator = self._geolocator_instance()
-        if geolocator is None:
-            self._mem[location_text] = None
-            return None
 
         # Enforce 1 req/sec.
         elapsed = time.monotonic() - self._last_geocode_ts
@@ -431,7 +435,7 @@ class GeoFilter:
         self.misses += 1
 
         if coords is not None:
-            with db.get_connection(self._db_path) as conn:
+            with db.get_connection() as conn:
                 db.geocache_put(conn, location_text, coords[0], coords[1])
             self._mem[location_text] = coords
         else:
@@ -475,11 +479,6 @@ class GeoFilter:
             if self._fallback == "discard":
                 self.geo_discarded += 1
                 return f'geo_filter: location "{location}" could not be geocoded (fallback=discard)'
-            return None
-
-        try:
-            from geopy.distance import geodesic
-        except ImportError:
             return None
 
         distance_km = geodesic(self._center_coords, listing_coords).km
@@ -534,11 +533,6 @@ def geo_filter(
     center_coords = geocache.get(center_str)
     if center_coords is None:
         return None  # Can't filter without center coords — skip silently.
-
-    try:
-        from geopy.distance import geodesic
-    except ImportError:
-        return None
 
     distance_km = geodesic(center_coords, listing_coords).km
     if distance_km > radius_km:
@@ -763,6 +757,72 @@ def _is_auth_error(exc: RuntimeError) -> bool:
     return any(marker in msg for marker in _AUTH_MARKERS)
 
 
+def format_skills_for_prompt(profile: dict) -> dict:
+    """Convert structured skill objects to LLM-optimised strings for the scoring prompt.
+
+    If ``primary_skills`` is already a list of strings (old flat format), it is
+    passed through unchanged for backward compatibility.
+
+    Args:
+        profile: Candidate profile dict.  A shallow copy is returned — the
+                 original is never mutated.
+
+    Returns:
+        A new dict identical to *profile* except that ``primary_skills`` is
+        replaced with a list of human-readable strings when the input contains
+        structured skill objects.
+    """
+    profile = dict(profile)  # shallow copy — do not mutate caller's dict
+    skills = profile.get("primary_skills", [])
+    if skills and all(isinstance(s, dict) for s in skills):
+        formatted = []
+        for s in skills:
+            status = "active" if s.get("active", True) else "dormant"
+            years = s.get("years_active", 0)
+            year_label = "year" if years == 1 else "years"
+            formatted.append(f"{s['description']} ({years} {year_label}, {status})")
+        profile["primary_skills"] = formatted
+    return profile
+
+
+def format_education_for_prompt(profile: dict) -> dict:
+    """Convert structured education objects to LLM-readable strings for the scoring prompt.
+
+    If ``education`` is already a list of strings (old flat format), it is
+    passed through unchanged for backward compatibility.
+
+    Args:
+        profile: Candidate profile dict.  A shallow copy is returned — the
+                 original is never mutated.
+
+    Returns:
+        A new dict identical to *profile* except that ``education`` is
+        replaced with a list of human-readable strings when the input contains
+        structured education objects.
+    """
+    profile = dict(profile)  # shallow copy — do not mutate caller's dict
+    education = profile.get("education", [])
+    if education and all(isinstance(e, dict) for e in education):
+        formatted = []
+        for e in education:
+            deg_type = e.get("degree_type", "")
+            deg_field = e.get("degree_field", "")
+            school = e.get("school", "")
+            year = e.get("graduation_year", "")
+            base = f"{deg_type} in {deg_field}" if deg_field else deg_type
+            if school and year:
+                suffix = f" — {school} ({year})"
+            elif school:
+                suffix = f" — {school}"
+            elif year:
+                suffix = f" ({year})"
+            else:
+                suffix = ""
+            formatted.append(f"{base}{suffix}")
+        profile["education"] = formatted
+    return profile
+
+
 def score_listing_with_fallback(
     listing: dict,
     profile: dict,
@@ -810,6 +870,11 @@ def score_listing_with_fallback(
     scoring_profile = {k: v for k, v in profile.items() if k != "location"}
     if location_notes:
         scoring_profile["location_notes"] = location_notes
+
+    # Convert structured skill objects to LLM-readable strings before serialising.
+    scoring_profile = format_skills_for_prompt(scoring_profile)
+    # Convert structured education objects to LLM-readable strings before serialising.
+    scoring_profile = format_education_for_prompt(scoring_profile)
 
     prompt = _PROMPT_TEMPLATE.format(
         profile_json=json.dumps(scoring_profile, indent=2),
@@ -924,11 +989,11 @@ def run(
     if hours is not None:
         config["search"]["max_days_old"] = math.ceil(hours / 24)
 
-    db.init_db(db_path=_DB_PATH)
+    db.init_db()
 
     # Initialise the geospatial filter.  Geocodes location.center up-front if
     # location.center and location.radius_km are both set in the profile.
-    geo = GeoFilter(profile=profile, db_path=_DB_PATH)
+    geo = GeoFilter(profile=profile)
     if geo.is_active:
         _loc = profile.get("location", {})
         logger.info(
@@ -951,6 +1016,9 @@ def run(
         return
 
     _inject_env_var_credentials(providers)
+
+    from job_sources.auto_register import ensure_plugins_registered
+    ensure_plugins_registered(providers_path)
 
     sources = make_enabled_sources(providers, config)
     if not sources:
@@ -1057,7 +1125,7 @@ def run(
                 # --- Dedup ---
                 # Open one connection and reuse it for both dedup checks to avoid
                 # two open/close round-trips per listing.
-                with db.get_connection(_DB_PATH) as _dedup_conn:
+                with db.get_connection() as _dedup_conn:
                     _is_dupe = db.listing_exists(
                         _dedup_conn, listing["source"], listing["source_id"]
                     )
@@ -1122,12 +1190,21 @@ def run(
                         src_name,
                         title,
                     )
-                    logger.debug(
-                        "  verdict: %s | matched: %s | missing: %s",
-                        score_result.get("verdict", ""),
-                        ", ".join(score_result.get("matched_skills") or []) or "none",
-                        ", ".join(score_result.get("missing_skills") or []) or "none",
-                    )
+                    if _verbose:
+                        logger.info(
+                            "  verdict: %s\n  matched: %s\n  missing: %s\n  concerns: %s",
+                            score_result.get("verdict", ""),
+                            ", ".join(score_result.get("matched_skills") or []) or "none",
+                            ", ".join(score_result.get("missing_skills") or []) or "none",
+                            ", ".join(score_result.get("concerns") or []) or "none",
+                        )
+                    else:
+                        logger.debug(
+                            "  verdict: %s | matched: %s | missing: %s",
+                            score_result.get("verdict", ""),
+                            ", ".join(score_result.get("matched_skills") or []) or "none",
+                            ", ".join(score_result.get("missing_skills") or []) or "none",
+                        )
                     tok_in = score_result.get("tokens_input") or 0
                     tok_out = score_result.get("tokens_output") or 0
                     total_tokens_input += tok_in
@@ -1173,7 +1250,7 @@ def run(
                     listing["posted_at"] = listing.get("created_at") or None
 
                 try:
-                    db.insert_listing(listing, db_path=_DB_PATH)
+                    db.insert_listing(listing)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("DB insert failed  [%s] %s: %s", src_name, title, exc)
 
@@ -1253,7 +1330,7 @@ def rescore(
     chain = build_provider_chain(providers)
     dead_providers: set[str] = set()
 
-    listings = db.get_all_scored(db_path=_DB_PATH)
+    listings = db.get_all_scored()
     if not listings:
         logger.info("No scored listings to rescore.")
         return
@@ -1286,13 +1363,21 @@ def rescore(
         )
 
         if result is not None:
-            db.update_score(listing["source"], listing["source_id"], result, db_path=_DB_PATH)
+            db.update_score(listing["source"], listing["source_id"], result)
             rescored += 1
             tok_in = result.get("tokens_input") or 0
             tok_out = result.get("tokens_output") or 0
             tokens_input += tok_in
             tokens_output += tok_out
             logger.info("RESCORED %d/10  %s", result.get("score", 0), title)
+            if _verbose:
+                logger.info(
+                    "  verdict: %s\n  matched: %s\n  missing: %s\n  concerns: %s",
+                    result.get("verdict", ""),
+                    ", ".join(result.get("matched_skills") or []) or "none",
+                    ", ".join(result.get("missing_skills") or []) or "none",
+                    ", ".join(result.get("concerns") or []) or "none",
+                )
 
             used_provider = result.get("model_used", "").split("/")[0] or "unknown"
             if used_provider not in provider_costs:
@@ -1360,6 +1445,12 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        help="Log the full scoring breakdown (verdict, matched/missing skills, concerns) "
+             "for every listing at INFO level.",
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="Enable DEBUG level logging (verbose output for troubleshooting).",
@@ -1367,6 +1458,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     _configure_file_logging()
+
+    if args.verbose:
+        _verbose = True
 
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)

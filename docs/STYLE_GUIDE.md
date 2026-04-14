@@ -191,6 +191,31 @@ A full-width sticky bar rendered immediately after `<body>` and before `.page-wr
 |---|---|---|
 | `.demo-banner` | `<div>` | `position: sticky; top: 0; z-index: 100`; bg `--bg-raised`; text `--text-accent`; border-bottom `--btn-amber-border`; `--font-mono` 0.75rem uppercase, letter-spaced; centered |
 
+### Environment Status Bar
+
+A full-width bar rendered immediately after `<body>` (before the demo banner when both are present) via `{% include '_status_bar.html' %}`. **Only visible when `APP_ENV != 'local'`** — absent during local development entirely (the Jinja `{% if %}` block renders nothing).
+
+The bar displays the active environment name and the short git SHA (`APP_VERSION`), giving a persistent at-a-glance reminder of which stack is being viewed.
+
+**Variants:**
+
+| Class | Environment | Tokens | Notes |
+|---|---|---|---|
+| `.env-status-bar--dev` | `APP_ENV=dev` | `--score-mid-bg` / `--score-mid-text` / `--score-mid-border` | Amber — signals a non-production deployment |
+| `.env-status-bar--prod` | `APP_ENV=prod` | `--bg-surface` / `--text-muted` / `--border-subtle` | Neutral — production is the default, no alarm color needed |
+
+**Child elements:**
+
+| Class | Notes |
+|---|---|
+| `.env-status-bar__env` | The environment label (`dev` or `prod`), uppercase via CSS |
+| `.env-status-bar__sep` | Middle-dot separator (`·`); `--text-muted` regardless of variant |
+| `.env-status-bar__sha` | The `APP_VERSION` value (short SHA injected by the deploy workflow); uppercase via CSS |
+
+**Base styles (shared by both variants):** `display: flex; align-items: center; justify-content: center; gap: 0.5rem; padding: 0.25rem 1rem; font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.04em; text-transform: uppercase`.
+
+**When `APP_ENV` is injected:** `app.py` sets `app.jinja_env.globals['APP_ENV']` from the `APP_ENV` environment variable, defaulting to `'local'`. The compose files set `APP_ENV=dev` / `APP_ENV=prod` respectively. Local runs without Docker receive no env var and therefore see no bar.
+
 ### Navigation
 
 | Class | Element | Notes |
@@ -229,6 +254,17 @@ Cards use `<details>`/`<summary>` for native expand/collapse. Tier is set via `d
 | `.card-body` | `<article>` | Expanded content; padding 0 22px 16px |
 | `.card-divider` | `<div>` | 1px `--border-subtle` horizontal rule inside card body |
 
+### Collapsible Sections (class-toggled)
+
+For sections that need JS control over expand/collapse (e.g. when the expanded body contains interactive elements that conflict with `<details>`), use a `.provider-row` wrapper with class toggling instead of `<details>`/`<summary>`.
+
+| Class | Element | Notes |
+|---|---|---|
+| `.import-section` | `.provider-row` | Wrapper; add `.expanded` class to show body |
+| `.import-toggle` | `.provider-header` | Clickable header; `cursor: pointer`; toggles `.expanded` on parent |
+| `.import-chevron` | `<span>` | Right-floated arrow; rotates 90° on `.expanded`; `var(--text-secondary)` |
+| `.import-body` | `<div>` | Content; `display: none` at rest, `display: block` when parent has `.expanded` |
+
 ### Badges & Pills
 
 All badges share the pill shape: `border-radius: 20px`, `--font-mono`, padding `2–3px 7–10px`. Always use the full bg/text/border triplet from the color matrix.
@@ -263,6 +299,10 @@ All buttons extend `.btn` (base). Add a modifier class for semantic variants.
 | `.btn-save` | Inherits `.btn` | Settings form save; `align-self: flex-start` |
 | `.btn-ingest` | `--text-accent` | Trigger ingest run |
 | `.btn-validate` | Inherits `.btn` | API key validation trigger |
+| `.btn-import` | `--text-accent` | Profile page PDF import trigger; amber accent identical to `.btn-ingest`; `disabled` state via opacity 0.4 |
+| `.btn-danger` | `--score-low-text` / `--score-low-border` | Destructive action trigger; `--bg-raised` bg at rest, `--score-low-bg` on hover |
+| `.btn-danger-confirm` | `--score-low-text` text + border, `--score-low-bg` bg | Final confirmation submit; starts `disabled`; inverts (red bg, dark text) on hover |
+| `.btn-clear-key` | `--text-muted` / `--border-subtle` → `--score-low-text` / `--score-low-border` on hover | Inline button next to configured password fields; signals "clear this key"; `--font-mono` 0.72rem; `padding: 4px 8px`; `flex-shrink: 0`; `border-radius: var(--radius-md)` |
 
 ### Forms & Settings
 
@@ -275,14 +315,77 @@ All buttons extend `.btn` (base). Add a modifier class for semantic variants.
 | `.settings-label` | `<label>` | `--font-mono` 0.68rem uppercase 0.08em, `--text-muted` |
 | `.settings-label--mt` | modifier on `.settings-label` | Adds `margin-top: 1rem`; use when a label follows a `.row-list` without a natural gap |
 | `.settings-input` | `<input>`, `<textarea>` | `--font-mono` 0.76rem; `--bg-raised` bg; width 100% |
+| `.password-field-wrapper` | `<div>` | Flex row wrapping a password input + Clear button; `gap: 8px`, `align-items: center` |
+| `.input--clearing` | modifier on `.settings-input` | Added by JS when the Clear button is clicked; `border-color: var(--score-low-border)` — signals the field will be cleared on save |
 | `.filter-input` | `<input type="text">` | Filter bar text input; width 220px |
 | `.filter-select` | `<select>` | Filter bar dropdown; custom SVG arrow |
-| `.filter-toggle` | `<label>` | Checkbox label wrapper in filter bar |
+| `.filter-toggle` | `<label>` | Checkbox label wrapper in filter bar; see custom checkbox rules below |
+
+**`.filter-toggle input[type="checkbox"]` — custom checkbox** (appearance: none; fully themed):
+
+| State | Border | Background | Indicator |
+|---|---|---|---|
+| Rest | `--border-strong` | `--bg-raised` | — |
+| Checked | `--text-accent` | `--bg-raised` | `::after` pseudo-element: amber (`--text-accent`) rotated L-shape checkmark |
+| Focus-visible | `--text-accent` 2px outline (offset 2px) | — | — |
+
+Transitions on `border-color` and `background` at 120ms ease. Size is 14×14px; `border-radius: 2px`. Never use `accent-color` alone — it leaves the native browser chrome visible against the dark theme.
 | `.provider-home-link` | `<a>` | External link icon (↗) placed next to provider names on the Settings → Job Sources tab; `font-size: 0.8rem`, `var(--text-muted)` at rest, `var(--text-accent)` on hover, `transition: color 0.15s` |
 | `.source-description` | `<p>` | Short blurb below `.provider-header` on each source card; `--font-body` 0.82rem, `--text-muted`, `line-height: 1.5`; rendered only when `schema.description` is set |
 | `.save-bar` | `<div>` | Sticky unsaved-changes bar; see §5 Save Bar below |
 | `.save-bar--visible` | modifier on `.save-bar` | Added by JS when a text/password field is dirty; animates in via `max-height` + `opacity`; removed when all fields are restored to original values |
 | `.save-bar-label` | `<span>` | "Unsaved changes" text; `--font-mono` 0.8rem, `--score-mid-text` (amber — warning semantics) |
+| `.file-input-wrap` | `<div>` | Flex row wrapper around the hidden file input + styled label + filename display |
+| `.file-input-hidden` | `<input type="file">` | Visually hidden native file input; accessible via `aria-label`; positioned absolutely off-screen |
+| `.file-input-label` | `<label for="...">` | Styled trigger that acts as the visible "Choose File" button; inherits `.btn` visual language |
+| `.file-input-name` | `<span>` | Filename display beside the label; shows "No file chosen" by default, updated via JS on `change` |
+
+#### Settings page — tab bar
+
+A bottom-border underline tab bar rendered inside the Settings page body (not the site header).
+
+| Class | Element | Notes |
+|---|---|---|
+| `.settings-tabs` | `<div role="tablist">` | Flex row, `border-bottom: 1px solid var(--border-mid)`, `margin-bottom: 1.5rem` |
+| `.settings-tab-btn` | `<button>` | `--font-mono` 0.76rem uppercase; `--text-secondary` at rest; `--text-accent` + amber underline when `.active`; `border-bottom: 2px solid transparent` at rest |
+| `.tab-pane` | `<div role="tabpanel">` | Hidden by default (`display: none`); shown when `.active` is added by the tab-switch JS |
+
+#### Settings page — Danger Zone
+
+Destructive action panel with a confirmation gate. All elements use `--score-low-*` (red) tokens.
+
+| Class | Element | Notes |
+|---|---|---|
+| `.danger-zone` | `<div>` | `margin-top: 2.5rem`, `border-top: 1px solid var(--border-subtle)`, `padding-top: 1.5rem` |
+| `.danger-zone-heading` | `<h2>` | `--font-mono` 0.72rem uppercase, `--score-low-text`; `font-weight: normal` |
+| `.btn-danger` | `<button>` | See Buttons table above |
+| `.clear-db-panel` | `<div>` | Hidden (`display: none`) at rest; add `.visible` class via JS to reveal; red-tier bg/border |
+| `.clear-db-warnings` | `<ul>` | Unstyled list of consequences; `⚠` prefix via `::before` |
+| `.clear-db-count` | `<p>` | Current record count line; `--font-mono` 0.76rem, `--score-low-text` |
+| `.clear-db-form` | `<form>` | Flex column, `gap: 0.5rem`, `max-width: 380px` |
+| `.clear-db-label` | `<label>` | `--font-mono` 0.68rem uppercase, `--score-low-text` |
+| `.clear-db-input` | `<input type="text">` | Typed confirmation field; `--bg-raised` bg, `--score-low-border` border |
+| `.btn-danger-confirm` | `<button type="submit">` | See Buttons table above; starts `disabled` until confirmation text matches |
+| `.clear-db-cancel` | `<button type="button">` | Text-only cancel; `--text-muted` at rest, `--text-secondary` on hover; no background or border |
+
+#### Profile page — radio buttons (import mode)
+
+Custom-styled radio buttons inside `.import-mode-selector`. The native `<input type="radio">` element is styled directly via `appearance: none` — no extra markup needed.
+
+| Selector | Notes |
+|---|---|
+| `.import-mode-selector label` | Flex row, `align-items: center`, `gap: 8px`; `--font-mono` 0.76rem, `--text-secondary`; turns `--text-accent` when sibling radio is checked (`:has(input:checked)`) |
+| `.import-mode-selector input[type="radio"]` | 14×14px circle; `--bg-raised` bg, `--border-strong` border; `appearance: none` removes native chrome |
+| checked state | `border-color: var(--text-accent)`; inner dot via `box-shadow: inset 0 0 0 3px var(--text-accent)` |
+
+#### Number inputs — spinner suppression
+
+All `input[type="number"]` elements globally have browser-default spinner arrows removed via:
+- `appearance: textfield` / `-webkit-appearance: textfield` — Chrome/Safari
+- `::-webkit-inner-spin-button`, `::-webkit-outer-spin-button { -webkit-appearance: none }` — WebKit override
+- `-moz-appearance: textfield` — Firefox
+
+This applies to skill years, `location_radius_km`, search distance/salary/max-days/threshold (profile.html), and results-per-page/max-pages (settings.html).
 
 #### Profile form — repeating row inputs
 
@@ -301,6 +404,60 @@ Used on the Profile page for fields where the user manages an ordered list of va
 | `.form-subsection-title--no-top` | modifier on `.form-subsection-title` | Sets `margin-top: 0`; use immediately after a `.form-section-divider` to avoid double spacing |
 
 **JS pattern** — row buttons use event delegation (single `document.addEventListener('click', ...)` handler in `profile.html`). Never add `onclick` attributes directly; instead set `data-list-id` and `data-name` on `.btn-row-add` buttons. `.btn-row-remove` needs no data attributes — the handler walks up to `.row-item` / `.row-list` via `closest()`.
+
+#### Profile form — skills table
+
+Used specifically for the Primary Skills field, which has three columns (Skill, Years, Active) instead of a single text input per row. Styles are defined in a `<style>` block inside `profile.html` (scoped to this page). Use only CSS custom properties from `:root`.
+
+| Class | Element | Notes |
+|---|---|---|
+| `.skills-table` | `<table>` | Full-width, `border-collapse: collapse`; contains `<thead>` + `<tbody id="skills-tbody">` |
+| `.skills-th` | `<th>` | `--font-mono` 0.62rem uppercase 0.08em, `--text-muted`; left-aligned; modifiers below |
+| `.skills-th--years` | modifier on `.skills-th` | Fixed 80px width, centered |
+| `.skills-th--active` | modifier on `.skills-th` | Fixed 90px width, centered |
+| `.skills-th--remove` | modifier on `.skills-th` | Fixed 32px width (no header text) |
+| `.skills-td` | `<td>` | `padding: 3px 6px 3px 0`, `vertical-align: middle` |
+| `.skill-row` | `<tr>` | One skill per row; added/removed by JS |
+| `.skills-input` | `<input>` | `--font-ui` 0.78rem; transparent background at rest, `--bg-raised` on hover/focus; transparent border at rest, `--border-subtle` on hover, `--border-strong` on focus; `--radius-md` |
+| `.skills-input--years` | modifier on `.skills-input` | Fixed 72px width, centered |
+| `.skill-toggle` | `<label>` | Inline-flex wrapper for the active/dormant toggle; `cursor: pointer` |
+| `.skill-toggle-checkbox` | `<input type="checkbox">` | Visually hidden (absolute, opacity 0); drives CSS-only toggle state via sibling selectors |
+| `.skill-toggle-track` | `<span>` | 32×18px pill; `--border-mid` bg at rest, `--score-high-text` bg when checked |
+| `.skill-toggle-knob` | `<span>` | 12×12px circle, slides right on checked; `--text-muted` at rest, `--color-white` when checked |
+| `.skill-toggle-label` | `<span>` | `--font-mono` 0.64rem; shows "dormant" at rest, "active" when checked via `::before` pseudo-element; color follows tier (`--text-muted` → `--score-high-text`) |
+| `.btn-skill-remove` | modifier on `.btn-row-remove` | Same style as `.btn-row-remove`; clicked handler uses `removeSkillRow()` (not `removeRow()`) so it walks `.skill-row` / `<tbody>` |
+| `#btn-add-skill` | `<button type="button">` | Same visual style as `.btn-row-add`; handled by `#btn-add-skill` id selector in the delegated click handler |
+
+**Active/dormant hidden-input pattern** — the skills table submits active state via a hidden `<input name="skill_active_idx[]">` alongside each row's checkbox. Because unchecked checkboxes are not submitted by browsers, the hidden input carries the row's 0-based index when checked, or an empty string when unchecked. The server reads `skill_active_idx[]` as a set of active indices. `_reindexSkillRows()` must be called after any row is added or removed to keep indices contiguous.
+
+**Exposed globals** — `_makeSkillRow(idx, desc, years, active)` and `_reindexSkillRows()` are exposed on `window` by the row-JS IIFE so the PDF-import IIFE (loaded first in the page) can repopulate the table from import results via `_fillSkillsTable()`.
+
+#### Profile form — education table
+
+Used for the Education field. Four columns (Type, Field of Study, School, Year) plus a remove button. Styles are defined in the same `<style>` block as the skills table in `profile.html`. Use only CSS custom properties from `:root`.
+
+| Class | Element | Notes |
+|---|---|---|
+| `.edu-table` | `<table>` | Full-width, `border-collapse: collapse`; contains `<thead>` + `<tbody id="edu-tbody">` |
+| `.edu-th` | `<th>` | `--font-mono` 0.62rem uppercase 0.08em, `--text-muted`; left-aligned; modifiers below |
+| `.edu-th--year` | modifier on `.edu-th` | Fixed 72px width, centered |
+| `.edu-th--remove` | modifier on `.edu-th` | Fixed 32px width (no header text) |
+| `.edu-td` | `<td>` | `padding: 3px 6px 3px 0`, `vertical-align: middle` |
+| `.edu-td--year` | modifier on `.edu-td` | Centered |
+| `.edu-td--remove` | modifier on `.edu-td` | Right-aligned |
+| `.edu-row` | `<tr>` | One degree per row; added/removed by JS |
+| `.edu-input` | `<input>` or `<select>` | Same transparent-at-rest / `--bg-raised`-on-hover / `--border-strong`-on-focus style as `.skills-input` |
+| `.edu-input--year` | modifier on `.edu-input` | Fixed 72px width, centered |
+| `.btn-edu-remove` | modifier on `.btn-row-remove` | Same style as `.btn-row-remove`; delegated click handler calls `removeEducationRow()` |
+| `#btn-add-edu` | `<button type="button">` | Handled by `#btn-add-edu` id selector in the delegated click handler; calls `addEducationRow()` |
+
+**Form field names** — `edu_type[]`, `edu_field[]`, `edu_school[]`, `edu_year[]`. The server's `_parse_education_rows()` zips these parallel arrays into structured dicts.
+
+**Type column** — rendered as a `<select>` with options: `—` (empty), Associate, B.A., B.S., M.A., M.S., MBA, Ph.D., J.D., M.D., Other.
+
+**`select.edu-input` — custom chevron** — the native OS dropdown arrow is replaced with a themed SVG chevron via `appearance: none` + a `background-image` data URI. The SVG uses a hardcoded hex value (`#545c6b`) because CSS custom properties cannot be referenced inside `url()` data URIs. This is an accepted exception to the "no hardcoded hex" rule documented in Section 2; the value approximates `--border-strong` (`#525c72`) at the opacity it renders on the dark background.
+
+**Exposed globals** — `_makeEduRow(degType, degField, school, year)` is exposed on `window` by the row-JS IIFE so the PDF-import IIFE can repopulate the table from import results via `_fillEduTable()`.
 
 ### Save Bar
 
@@ -467,6 +624,25 @@ The filter bar is extracted into `templates/_filter_bar.html` so both the Listin
 7. Clear link (`.filter-clear`) — shown only when any filter is active; href is `action`
 
 The Clear link appears when any of `search`, `min_score`, `remote_only`, `job_type`, or `sort` is truthy. Its `href` is set to `action` so it navigates to the bare page URL, resetting all params.
+
+### Drag Handle (provider order)
+
+Used on the Settings → LLM Providers tab to allow drag-and-drop reordering of the provider fallback chain. Each `.order-item` row contains one `.drag-handle` element.
+
+```html
+<span class="drag-handle" aria-hidden="true">≡</span>
+```
+
+The icon is ≡ (U+2261, IDENTICAL TO), used as a visual drag affordance (three stacked lines). `aria-hidden="true"` hides it from screen readers — the draggable row itself carries the accessible label.
+
+| Selector | Notes |
+|---|---|
+| `.drag-handle` | `--text-secondary` color; `font-size: 1.1rem`; `line-height: 1` (prevents extra vertical space around the single character); `cursor: grab`; `flex-shrink: 0` |
+| `.drag-handle:active` | `cursor: grabbing` during an active drag gesture |
+
+**Hit-target expansion** — the handle uses padding + negative margin (`padding: 0.4rem 0.5rem; margin: -0.4rem -0.5rem`) to enlarge the clickable/touch area without changing the visual footprint of the icon.
+
+**Mobile compatibility** — `touch-action: none` on `.drag-handle` prevents the browser from intercepting the pointer events needed by the drag library (SortableJS), allowing touch-based reordering to work correctly on mobile devices.
 
 ### Ingest Trigger (feed page)
 

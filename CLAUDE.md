@@ -14,23 +14,34 @@ uv pip install -r requirements.txt
 python ingest.py
 python ingest.py --hours 25        # Only process listings from the last 25 hours
 python ingest.py --rescore         # Re-score all stored listings against updated config/profile.json
+python ingest.py --verbose         # Log full scoring breakdown (verdict, matched/missing skills, concerns) per listing
+python ingest.py -v                # Short form of --verbose
 
 # Run web UI (http://localhost:5000)
 python app.py
 
-# Run tests
+# Run tests (requires PostgreSQL — set DATABASE_URL before running)
+# Option A: use the docker-compose dev database
+# PowerShell
+#   $env:DATABASE_URL = "postgresql://jobmatcher:<password>@localhost:5432/jobmatcher"; pytest
+# Bash/zsh
+#   export DATABASE_URL="postgresql://jobmatcher:<password>@localhost:5432/jobmatcher" && pytest
+# (<password> is in .env.dev or docker-compose.dev.yml)
+# Option B: DATABASE_URL already exported in your shell
 pytest
 pytest tests/test_prefilter.py     # Single file
 pytest -k "test_title_include"     # By name pattern
+# NOTE: test isolation uses TRUNCATE on a shared PostgreSQL instance, not isolated
+# SQLite files. Always run tests against a throwaway/dev database — never production.
 ```
 
 ## Architecture
 
-The app is two decoupled processes sharing a SQLite database (`jobs.db`):
+The app is two decoupled processes sharing a PostgreSQL database (connection via `DATABASE_URL`):
 
 - **`ingest.py`** — CLI pipeline: multiple job source APIs → pre-filter → scrape full JD → score with configured LLM provider → insert into DB. Runs on a schedule or manually.
 - **`app.py`** — Flask web server. Read-only views of scored listings plus HTMX write actions (bookmark, dismiss, apply). Talks to LLM providers only for key validation (`/api/validate-keys`); all scoring happens in `ingest.py`.
-- **`db.py`** — All SQLite access. JSON array columns (`matched_skills`, `missing_skills`, `concerns`) are serialized/deserialized here.
+- **`db.py`** — All PostgreSQL access via `psycopg2`. JSON array columns (`matched_skills`, `missing_skills`, `concerns`) are serialized/deserialized here.
 
 ### Ingestion pipeline (per listing)
 
@@ -39,6 +50,10 @@ source pages → [1] hours filter → [2] prefilter() → [3] geo filter → [4]
 ```
 
 Any step can short-circuit the listing with a logged reason (`FILTERED`, `DUPE`, `SCRAPE FALLBACK`, `SCORE FAILED`). A summary is printed at the end of each run.
+
+### Adding New Job Sources
+
+New job sources are plugins — see `docs/PLUGIN_DEVELOPMENT.md` for the step-by-step guide. The template lives at `plugins/sources/_template/`. Folders starting with `_` are skipped by the loader.
 
 ### LLM provider integration
 
@@ -50,10 +65,10 @@ Results include a `model_used` field stored as `"provider/model"` per listing. S
 
 - **`config/config.json`** — Search params (`country`, `what`, `where`, `distance`, `max_days_old`, `salary_min`, `results_per_page`, `max_pages`), scoring threshold, and optional `prefilter` block (title include/exclude patterns, contract type/time). Adzuna credentials have moved to `config/providers.json`.
 - **`config/keys.json`** — Legacy LLM credential file. Superseded by `config/providers.json`. `credentials.load_providers()` will auto-migrate it to `providers.json` on first run if `providers.json` is absent.
-- **`config/profile.json`** — Candidate skills and preferences injected verbatim into the scoring prompt. Fields: `primary_skills`, `anti_preferences`, `seniority`, `preferred_industries`, `scoring_notes`. Location is configured via a single nested `location` block: `location.center` (geocodable string, e.g. `"Miami, FL"`), `location.radius_km` (number — hard filter radius before LLM scoring), `location.geocode_fallback` (`"pass"` or `"discard"` — controls what happens when a listing location cannot be geocoded; default `"pass"`), `location.notes` (free-text injected into the LLM prompt; auto-generated from `center` + `radius_km` when absent). **Migration note:** the flat fields `location_preference`, `location_center`, `location_radius_km`, and `location_geocode_fallback` are no longer read; update any existing `profile.json` to use the nested `location` block.
+- **`config/profile.json`** — Candidate skills and preferences injected verbatim into the scoring prompt. Fields: `primary_skills` (array of objects with `description` (string), `years_active` (integer), `active` (boolean) — active skills are weighted more heavily; `format_skills_for_prompt()` in `ingest.py` converts these to LLM-readable strings before sending), `anti_preferences`, `seniority`, `education` (array of structured objects with `degree_type` (e.g. `"B.S."`, `"M.S."`), `degree_field` (area of study), `school` (institution name), `graduation_year` (four-digit year string) — `format_education_for_prompt()` in `ingest.py` converts each object to a human-readable string before injection into the LLM scoring prompt so the model does not flag degree requirements as concerns when the candidate already satisfies them), `preferred_industries`, `scoring_notes`. Location is configured via a single nested `location` block: `location.center` (geocodable string, e.g. `"Miami, FL"`), `location.radius_km` (number — hard filter radius before LLM scoring), `location.geocode_fallback` (`"pass"` or `"discard"` — controls what happens when a listing location cannot be geocoded; default `"pass"`), `location.notes` (free-text injected into the LLM prompt; auto-generated from `center` + `radius_km` when absent). **Migration note:** the flat fields `location_preference`, `location_center`, `location_radius_km`, and `location_geocode_fallback` are no longer read; update any existing `profile.json` to use the nested `location` block.
 - **`config/providers.json`** — Unified credential store for all sources, including Adzuna (`job_sources.adzuna.app_id` / `app_key`), Jooble, and USAJobs, as well as LLM providers (replaces `config/keys.json`). Managed via the `/settings` UI. Gitignored — copy from `config/providers.example.json` to get started.
 - All files are gitignored. Copy from `*.example.json` to get started.
-- `DB_PATH` defaults to `./jobs.db`. Adzuna credentials can be overridden via env vars `ADZUNA_APP_ID` / `ADZUNA_APP_KEY`; at runtime these are injected into the providers dict so they flow to `AdzunaClient` via the same `credentials=` path as providers.json.
+- Database connection is configured via the `DATABASE_URL` environment variable (PostgreSQL). Adzuna credentials can be overridden via env vars `ADZUNA_APP_ID` / `ADZUNA_APP_KEY`; at runtime these are injected into the providers dict so they flow to `AdzunaClient` via the same `credentials=` path as providers.json.
 
 ### Database schema notes
 
@@ -63,9 +78,13 @@ Results include a `model_used` field stored as `"provider/model"` per listing. S
 
 ## Deployment
 
-**Windows native (active deployment path):**
-- `scripts/setup.ps1` — Registers waitress as an NSSM Windows service and creates a Task Scheduler job for daily ingest.
-- `scripts/status.ps1` / `scripts/teardown.ps1` — Ops helpers.
+**Docker (active deployment path):**
+- Dev stack (port 5000): `docker compose -p job-matcher-pr-dev -f docker-compose.dev.yml up -d`
+- Prod stack (port 5001): `docker compose -p job-matcher-pr-prod -f docker-compose.prod.yml up -d`
+- Credentials: copy `.env.dev.example` → `.env.dev` and `.env.prod.example` → `.env.prod`
+- Config/logs: dev uses `./config-dev` and `./logs-dev`; prod uses `./config` and `./logs`
+- `scripts/docker-setup.sh` — one-time VM provisioning
+- `scripts/docker-status.sh` / `scripts/docker-teardown.sh` — ops helpers
 
 ## UI Development
 
@@ -82,7 +101,7 @@ All UI work must follow `docs/STYLE_GUIDE.md`. Read it before touching any HTML 
 |---|---|
 | Pre-filter before LLM | Each filtered listing saves a Haiku API call (~$0.001); meaningful at 500 listings/run |
 | Scrape full JD | Adzuna snippets (200–300 chars) are too short for accurate skill matching |
-| SQLite, no ORM | Schema is small and stable; avoids dependencies and migration tooling |
+| PostgreSQL, no ORM | Schema is small and stable; `psycopg2` is the only driver dependency |
 | HTMX, no JS framework | Zero build tooling for a read-mostly UI with two write actions |
 | Decouple ingest from serve | Ingest takes minutes (scraping + LLM); it cannot run inside a web request |
 | `config/profile.json` flat file | Edited manually as a whole unit; easier to version-control than a DB record |

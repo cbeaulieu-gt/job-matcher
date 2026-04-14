@@ -4,9 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Job Matcher · Stats</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+{% include '_status_bar.html' %}
 {% if demo_mode %}
 <div class="demo-banner" role="status">&#x2697; Demo Mode &mdash; sample data only, no real API calls</div>
 {% endif %}
@@ -54,7 +56,13 @@
       <div class="stat-label">total tokens used</div>
     </div>
     <div class="stat-box">
-      <div class="stat-value">${{ "%.4f" | format(stats.estimated_cost_usd) }}</div>
+      <div class="stat-value">
+        {% if stats.estimated_cost_usd is not none %}
+          ${{ "%.4f" | format(stats.estimated_cost_usd) }}
+        {% else %}
+          &mdash;
+        {% endif %}
+      </div>
       <div class="stat-label">estimated cost</div>
     </div>
   </div>
@@ -78,7 +86,13 @@
             <td class="num">{{ row.scored }}</td>
             <td class="num">{{ "{:,}".format(row.tokens_input) }}</td>
             <td class="num">{{ "{:,}".format(row.tokens_output) }}</td>
-            <td class="num cost">${{ "%.4f" | format(row.cost_usd) }}</td>
+            <td class="num cost">
+              {% if row.cost_usd is not none %}
+                ${{ "%.4f" | format(row.cost_usd) }}
+              {% else %}
+                &mdash;
+              {% endif %}
+            </td>
           </tr>
         {% endfor %}
       </tbody>

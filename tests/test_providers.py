@@ -415,6 +415,154 @@ class TestGeminiProvider:
 
 
 # ---------------------------------------------------------------------------
+# LLMProvider.generate()
+# ---------------------------------------------------------------------------
+
+class TestGenerateAbstract:
+    def test_generate_is_abstract_method(self):
+        """LLMProvider.generate is declared as an abstract method."""
+        from providers.base import LLMProvider
+        assert hasattr(LLMProvider, "generate")
+        assert getattr(LLMProvider.generate, "__isabstractmethod__", False)
+
+
+class TestAnthropicGenerate:
+    def test_generate_returns_raw_text(self):
+        """generate() returns the raw text from the Anthropic API."""
+        mock_client = MagicMock()
+        mock_message = SimpleNamespace(
+            content=[SimpleNamespace(text="Hello, world!")],
+        )
+        mock_client.messages.create.return_value = mock_message
+
+        with patch("providers.anthropic_provider.anthropic") as mock_anthropic:
+            mock_anthropic.Anthropic.return_value = mock_client
+            mock_anthropic.APIError = Exception
+            from providers.anthropic_provider import AnthropicProvider
+            provider = AnthropicProvider.__new__(AnthropicProvider)
+            provider._client = mock_client
+            provider._model = "claude-haiku-4-5-20251001"
+
+        result = provider.generate("test prompt")
+        assert result == "Hello, world!"
+
+    def test_generate_raises_after_two_failures(self):
+        """generate() raises RuntimeError after 2 failed attempts."""
+        import anthropic as anthropic_sdk
+
+        mock_client = MagicMock()
+        mock_client.messages.create.side_effect = anthropic_sdk.APIError(
+            "API error", request=MagicMock(), body=None
+        )
+
+        with patch("providers.anthropic_provider.anthropic") as mock_anthropic:
+            mock_anthropic.APIError = anthropic_sdk.APIError
+            from providers.anthropic_provider import AnthropicProvider
+            provider = AnthropicProvider.__new__(AnthropicProvider)
+            provider._client = mock_client
+            provider._model = "claude-haiku-4-5-20251001"
+
+        with patch("providers.anthropic_provider.time.sleep"):
+            with pytest.raises(RuntimeError):
+                provider.generate("test prompt")
+
+    def test_complete_still_works_after_generate_added(self):
+        """complete() still returns a parsed scoring dict (regression)."""
+        score_dict = {
+            "score": 8, "matched_skills": ["Python"], "missing_skills": [],
+            "concerns": [], "verdict": "Good match",
+        }
+        mock_client = MagicMock()
+        mock_message = SimpleNamespace(
+            content=[SimpleNamespace(text=json.dumps(score_dict))],
+            usage=SimpleNamespace(input_tokens=10, output_tokens=5),
+        )
+        mock_client.messages.create.return_value = mock_message
+
+        with patch("providers.anthropic_provider.anthropic") as mock_anthropic:
+            mock_anthropic.Anthropic.return_value = mock_client
+            mock_anthropic.APIError = Exception
+            from providers.anthropic_provider import AnthropicProvider
+            provider = AnthropicProvider.__new__(AnthropicProvider)
+            provider._client = mock_client
+            provider._model = "claude-haiku-4-5-20251001"
+
+        result = provider.complete("test prompt")
+        assert result["score"] == 8
+        assert result["matched_skills"] == ["Python"]
+        assert "tokens_input" in result
+
+
+class TestOpenAIGenerate:
+    def test_generate_returns_raw_text(self):
+        """generate() returns the raw text from the OpenAI API."""
+        mock_client = MagicMock()
+        mock_response = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="Hello from OpenAI"))],
+        )
+        mock_client.chat.completions.create.return_value = mock_response
+
+        with patch("providers.openai_provider.openai") as mock_openai:
+            mock_openai.OpenAI.return_value = mock_client
+            mock_openai.APIError = Exception
+            from providers.openai_provider import OpenAIProvider
+            provider = OpenAIProvider.__new__(OpenAIProvider)
+            provider._client = mock_client
+            provider._model = "gpt-4o-mini"
+
+        assert provider.generate("test prompt") == "Hello from OpenAI"
+
+    def test_generate_raises_after_two_failures(self):
+        """generate() raises RuntimeError after 2 failed attempts."""
+        import openai as openai_sdk
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = openai_sdk.APIError(
+            "API error", request=MagicMock(), body=None
+        )
+
+        with patch("providers.openai_provider.openai") as mock_openai:
+            mock_openai.APIError = openai_sdk.APIError
+            from providers.openai_provider import OpenAIProvider
+            provider = OpenAIProvider.__new__(OpenAIProvider)
+            provider._client = mock_client
+            provider._model = "gpt-4o-mini"
+
+        with patch("providers.openai_provider.time.sleep"):
+            with pytest.raises(RuntimeError):
+                provider.generate("test prompt")
+
+
+class TestGeminiGenerate:
+    def test_generate_returns_raw_text(self):
+        """generate() returns the raw text from the Gemini API."""
+        mock_client = MagicMock()
+        mock_response = SimpleNamespace(text="Hello from Gemini")
+        mock_client.models.generate_content.return_value = mock_response
+
+        from providers.gemini_provider import GeminiProvider
+        provider = GeminiProvider.__new__(GeminiProvider)
+        provider._client = mock_client
+        provider._model_name = "gemini-2.0-flash"
+
+        assert provider.generate("test prompt") == "Hello from Gemini"
+
+    def test_generate_raises_after_two_failures(self):
+        """generate() raises RuntimeError after 2 failed attempts."""
+        mock_client = MagicMock()
+        mock_client.models.generate_content.side_effect = Exception("API error")
+
+        from providers.gemini_provider import GeminiProvider
+        provider = GeminiProvider.__new__(GeminiProvider)
+        provider._client = mock_client
+        provider._model_name = "gemini-2.0-flash"
+
+        with patch("providers.gemini_provider.time.sleep"):
+            with pytest.raises(RuntimeError):
+                provider.generate("test prompt")
+
+
+# ---------------------------------------------------------------------------
 # make_provider() factory
 # ---------------------------------------------------------------------------
 

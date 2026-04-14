@@ -3,6 +3,7 @@ config/config.json
 config/keys.json
 config/profile.json
 config/providers.json
+config/providers.json.lock
 
 # Database
 jobs.db
@@ -18,10 +19,19 @@ __pycache__/
 *.pyo
 *.egg-info/
 
-# Virtual environments
+# Virtual environments / env files
 .env
+/.env
+.env.dev
+.env.prod
 .venv/
 venv/
+
+# Docker
+docker-compose.override.yml
+
+# Database backups
+backups/
 
 # Build artifacts
 dist/

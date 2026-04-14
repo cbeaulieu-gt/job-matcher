@@ -1176,6 +1176,12 @@ def settings():
             # distinguish "provider's form was on the page and submitted blank" from
             # "provider wasn't on the page at all" by limiting this block to
             # active_tab == "llm" above.
+            #
+            # Load the current stored state once so we can fill in missing
+            # non-password field defaults when the JS dirty-tracker omits
+            # unchanged fields from the POST body (fixes issue #231).
+            _current_providers = _load_providers_safe()
+            _current_llm = _current_providers.get("llm") or {}
             for provider_key, cls in _PROVIDER_CLASS_MAP.items():
                 schema = cls.settings_schema()
                 provider_updates: dict = {}
@@ -1206,7 +1212,27 @@ def settings():
                     clear_key = f"__clear__{provider_key}__{field['name']}"
                     if request.form.get(clear_key) == "1":
                         provider_updates[field["name"]] = ""
+                # When the provider is being updated (at least one field was
+                # submitted), ensure every non-password field that was NOT in
+                # the POST body (because JS dirty-tracking only sends changed
+                # fields) is written with its current stored value or its
+                # schema default.  Without this, a user who only edits the
+                # API key and never touches the model dropdown will end up with
+                # no model in providers.json, causing has_values to return False
+                # and the provider to show as "not configured" after every save.
                 if provider_updates:
+                    stored_cfg = _current_llm.get(provider_key) or {}
+                    for field in schema["fields"]:
+                        if field.get("type") == "password":
+                            continue
+                        field_name = field["name"]
+                        if field_name in provider_updates:
+                            continue
+                        stored_val = stored_cfg.get(field_name, "") or ""
+                        if not stored_val:
+                            default_val = field.get("default") or ""
+                            if default_val:
+                                provider_updates[field_name] = default_val
                     updates["llm"][provider_key] = provider_updates
 
         elif active_tab == "sources":

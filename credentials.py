@@ -371,11 +371,18 @@ def save_providers(
                 break
             except FileExistsError:
                 if _time.monotonic() >= _deadline:
-                    # Proceed without the lock rather than failing the save.
+                    # Lock file has been present for 5 s — treat as stale
+                    # (e.g. left by a previous crash) and remove it so this
+                    # call and future callers do not keep spinning.
                     logger.warning(
-                        "save_providers: could not acquire lock %s within 5 s — proceeding without lock",
+                        "save_providers: could not acquire lock %s within 5 s "
+                        "— removing stale lock and proceeding without lock",
                         lock_path,
                     )
+                    try:
+                        os.remove(lock_path)
+                    except OSError:
+                        pass
                     break
                 _time.sleep(0.05)
 

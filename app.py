@@ -2651,4 +2651,8 @@ if __name__ == "__main__":
 
     db.init_db()
     debug = os.environ.get("FLASK_DEBUG", "0") == "1"
-    app.run(debug=debug, port=5000)
+    # threaded=True is required for SSE (/ingest/stream) — without it Flask's
+    # dev server is single-threaded and an open SSE connection blocks all other
+    # requests, causing 429 errors.  Docker deployments use waitress (multi-
+    # threaded) via the Dockerfile CMD and never execute this code path.
+    app.run(debug=debug, port=5000, threaded=True)

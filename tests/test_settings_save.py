@@ -1592,3 +1592,102 @@ class TestSettingsPostNoJsPasswordGuard:
         )
         # Password field was absent entirely (not blank) — must be preserved.
         assert saved["llm"]["anthropic"]["api_key"] == "sk-existing"
+
+
+# ===========================================================================
+# POST /settings — sparse JS submit writes model default (issue #231)
+# ===========================================================================
+
+
+class TestSettingsPostSparseJsModelDefault:
+    """When JS dirty-tracking sends only the api_key (model was not changed),
+    the server must inject the schema default for model so that has_values
+    becomes True and the provider shows as configured after the save.
+
+    Root cause (issue #231): the model text input is pre-populated with the
+    schema default but is not marked dirty, so the sparse fetch POST omits it.
+    The server used to skip any field absent from the POST body, leaving model
+    absent from providers.json.  With model missing, has_values is False
+    (both api_key AND model are required), causing the provider to display
+    "not configured" even though the key was successfully written.
+    """
+
+    def test_sparse_api_key_post_writes_model_default_when_model_absent(
+        self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
+    ):
+        """Sparse POST with only api_key must persist the schema default for model.
+
+        Regression test for issue #231: provider persisted as not-configured
+        when the user saved only the API key without touching the model field.
+        """
+        # Start from a state with no model stored — mirrors a fresh local install.
+        data = {
+            "provider_order": ["anthropic"],
+            "llm": {
+                "anthropic": {"api_key": ""},  # no model key at all
+            },
+            "job_sources": {},
+        }
+        with open(tmp_providers_path, "w", encoding="utf-8") as fh:
+            json.dump(data, fh)
+
+        # Sparse POST: only api_key is dirty (user typed a new key).
+        # model is absent because JS dirty-tracking did not include it.
+        client.post("/settings", data={
+            "anthropic__api_key": "sk-new-key",
+            "tab": "llm",
+        })
+
+        with open(tmp_providers_path, encoding="utf-8") as fh:
+            saved = json.load(fh)
+
+        # api_key must be saved.
+        assert saved["llm"]["anthropic"]["api_key"] == "sk-new-key", (
+            "api_key must be written from the sparse POST"
+        )
+        # model must be written with the schema default so has_values is True.
+        assert saved["llm"]["anthropic"].get("model"), (
+            "model must be written with the schema default when absent from the "
+            "sparse POST — fixes issue #231 where provider showed 'not configured' "
+            "after saving only the API key"
+        )
+        assert saved["llm"]["anthropic"]["model"] == "claude-haiku-4-5-20251001", (
+            "model must equal the AnthropicProvider schema default"
+        )
+
+    def test_sparse_api_key_post_does_not_overwrite_existing_model(
+        self, client, tmp_providers_path, tmp_keys_path, tmp_config_path
+    ):
+        """When model is already stored, a sparse api_key POST must not change it.
+
+        The default-injection only fires when the stored value is empty.
+        If the user previously saved a non-default model, it must be preserved.
+        """
+        data = {
+            "provider_order": ["anthropic"],
+            "llm": {
+                "anthropic": {
+                    "api_key": "sk-old",
+                    "model": "claude-sonnet-4-6",  # non-default, user-chosen model
+                },
+            },
+            "job_sources": {},
+        }
+        with open(tmp_providers_path, "w", encoding="utf-8") as fh:
+            json.dump(data, fh)
+
+        # Sparse POST: user only changed the api_key, not the model.
+        client.post("/settings", data={
+            "anthropic__api_key": "sk-new-key",
+            "tab": "llm",
+        })
+
+        with open(tmp_providers_path, encoding="utf-8") as fh:
+            saved = json.load(fh)
+
+        assert saved["llm"]["anthropic"]["api_key"] == "sk-new-key"
+        # User's non-default model choice must be preserved — default must not
+        # overwrite an already-stored value.
+        assert saved["llm"]["anthropic"]["model"] == "claude-sonnet-4-6", (
+            "Existing non-default model must be preserved when not in the sparse POST"
+        )

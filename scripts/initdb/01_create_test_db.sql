@@ -10,8 +10,9 @@
 --     psql -U jobmatcher -d postgres \
 --     -c "CREATE DATABASE jobmatcher_test;"
 --
--- The IF NOT EXISTS clause makes repeated runs safe (e.g. when the volume
--- is recreated after a teardown).
+-- Postgres lacks CREATE DATABASE IF NOT EXISTS, so we use a
+-- SELECT ... WHERE NOT EXISTS + \gexec idiom to be idempotent
+-- (safe to run on an existing volume without raising an error).
 
 SELECT 'CREATE DATABASE jobmatcher_test'
 WHERE NOT EXISTS (

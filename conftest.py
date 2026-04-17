@@ -57,6 +57,10 @@ else:
     # Refuse to run against a non-test database unless the escape hatch is
     # explicitly set, to prevent fixture teardown from wiping real data.
     # See tests/_db_name_guard.py for the pure function and its unit tests.
+    # Import is deferred here because it is only needed when DATABASE_URL is
+    # set (i.e. a real Postgres instance will be used).  The if-branch above
+    # patches the DB entirely and never touches the guard module, so importing
+    # it unconditionally at module level would be wasteful and confusing.
     import tests._db_name_guard as _guard  # noqa: E402
 
     _db_url = os.environ["DATABASE_URL"]

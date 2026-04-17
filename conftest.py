@@ -9,10 +9,21 @@ Tests that genuinely require the database (test_db.py, test_ingest_run.py,
 etc.) must set DATABASE_URL in the environment to a real Postgres instance —
 they connect normally because the patches applied here only prevent the
 module-level init and the listing-count query used by the settings page.
+
+Database safety guard
+---------------------
+When DATABASE_URL IS set (i.e. tests will touch a real Postgres instance),
+a session-start guard checks that the database name contains "test".  If it
+does not, pytest exits immediately with a clear error message rather than
+letting fixture teardown delete rows from a dev or production database.
+
+Set ``ALLOW_NON_TEST_DB=1`` to bypass the guard (e.g. for CI runs against an
+ephemeral non-test-named DB).  A stderr warning is printed in that case.
 """
 from __future__ import annotations
 
 import os
+import sys
 from unittest.mock import patch
 
 # ---------------------------------------------------------------------------
@@ -40,3 +51,25 @@ if not os.environ.get("DATABASE_URL"):
 
     # Patchers are intentionally never stopped — they live for the whole
     # pytest session.
+
+else:
+    # DATABASE_URL is set — a real Postgres instance will be used.
+    # Refuse to run against a non-test database unless the escape hatch is
+    # explicitly set, to prevent fixture teardown from wiping real data.
+    # See tests/_db_name_guard.py for the pure function and its unit tests.
+    # Import is deferred here because it is only needed when DATABASE_URL is
+    # set (i.e. a real Postgres instance will be used).  The if-branch above
+    # patches the DB entirely and never touches the guard module, so importing
+    # it unconditionally at module level would be wasteful and confusing.
+    import tests._db_name_guard as _guard  # noqa: E402
+
+    _db_url = os.environ["DATABASE_URL"]
+    _allow = bool(os.environ.get("ALLOW_NON_TEST_DB"))
+
+    try:
+        _guard.check_database_url_is_test(_db_url, allow_override=_allow)
+    except Exception as _exc:  # pytest.UsageError or ValueError
+        print(str(_exc), file=sys.stderr)
+        # pytest.exit() is the cleanest way to abort collection immediately.
+        import pytest as _pytest
+        _pytest.exit(str(_exc), returncode=4)

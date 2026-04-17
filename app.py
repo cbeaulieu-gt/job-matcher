@@ -1539,6 +1539,15 @@ def _build_import_prompt(
     return _IMPORT_PROMPT_FRESH.format(resume_text=resume_text)
 
 
+# Maximum length (characters) for a single prefilter pattern string.  Bounding
+# LLM output prevents pathologically long patterns from bloating config.json.
+_MAX_PATTERN_LEN = 64
+
+# Maximum number of patterns allowed in a single title_include or title_exclude
+# list within prefilter_suggestions.
+_MAX_PATTERNS_PER_LIST = 32
+
+
 def _parse_import_response(raw: str) -> dict | None:
     """Parse the LLM's JSON response for a PDF import request.
 
@@ -1550,12 +1559,17 @@ def _parse_import_response(raw: str) -> dict | None:
     If they overlap the entire response is rejected (returns ``None``) so the
     caller surfaces an error rather than silently writing conflicting filters.
 
+    Each pattern string must be ≤ ``_MAX_PATTERN_LEN`` characters and each list
+    must contain ≤ ``_MAX_PATTERNS_PER_LIST`` items.  Over-limit responses are
+    rejected outright — not silently truncated — to prevent the LLM from
+    bloating the config.
+
     Args:
         raw: Raw text response from the LLM.
 
     Returns:
         Parsed dict with all expected keys, or ``None`` if parsing fails or
-        ``prefilter_suggestions`` fails the disjoint-set check.
+        ``prefilter_suggestions`` fails any validation check.
     """
     try:
         cleaned = strip_fences(raw)
@@ -1579,6 +1593,32 @@ def _parse_import_response(raw: str) -> dict | None:
         if isinstance(pf, dict):
             inc = [str(s).lower() for s in pf.get("title_include", [])]
             exc = [str(s).lower() for s in pf.get("title_exclude", [])]
+
+            # Enforce per-list length cap.  Reject rather than truncate so the
+            # LLM cannot silently bloat the config.
+            if len(inc) > _MAX_PATTERNS_PER_LIST or len(exc) > _MAX_PATTERNS_PER_LIST:
+                app.logger.warning(
+                    "[import] _parse_import_response: prefilter_suggestions "
+                    "list too long (include=%d, exclude=%d, max=%d) — "
+                    "rejecting response.",
+                    len(inc),
+                    len(exc),
+                    _MAX_PATTERNS_PER_LIST,
+                )
+                return None
+
+            # Enforce per-pattern length cap.
+            over_len = [s for s in inc + exc if len(s) > _MAX_PATTERN_LEN]
+            if over_len:
+                app.logger.warning(
+                    "[import] _parse_import_response: prefilter_suggestions "
+                    "contains patterns exceeding max length (%d chars): %r — "
+                    "rejecting response.",
+                    _MAX_PATTERN_LEN,
+                    over_len[:5],
+                )
+                return None
+
             overlap = set(inc) & set(exc)
             if overlap:
                 app.logger.warning(
@@ -1819,14 +1859,21 @@ def _merge_prefilter_suggestions(
     result = dict(existing_prefilter)
 
     def _merge_list(key: str) -> list[str]:
-        """Return deduped union of existing and suggested values for *key*."""
-        existing: list[str] = list(existing_prefilter.get(key) or [])
-        existing_lower = {v.lower() for v in existing}
+        """Return deduped union of existing and suggested values for *key*.
+
+        Both existing and suggested patterns are normalised to lowercase so
+        the merged output is consistently cased.  Filter matching is already
+        case-insensitive, so this is semantically neutral while avoiding
+        mixed-case lists like ``["Engineer", "developer"]`` in config.json.
+        """
+        existing: list[str] = [v.lower() for v in (existing_prefilter.get(key) or [])]
+        existing_set = set(existing)
         merged = list(existing)
         for term in suggestions.get(key, []):
-            if term.lower() not in existing_lower:
-                merged.append(term)
-                existing_lower.add(term.lower())
+            term_lower = term.lower()
+            if term_lower not in existing_set:
+                merged.append(term_lower)
+                existing_set.add(term_lower)
         return merged
 
     result["title_include"] = _merge_list("title_include")
@@ -2375,6 +2422,10 @@ def profile():
     cfg = load_config(_CONFIG_PATH)
     prof = load_profile(_PROFILE_PATH)
 
+    # Establish the session CSRF token so the import drawer can include it on
+    # the POST /api/apply-prefilter-suggestions request.
+    session.setdefault("csrf_token", secrets.token_urlsafe(32))
+
     return render_template(
         "profile.html",
         view="profile",
@@ -2382,6 +2433,7 @@ def profile():
         cfg=cfg,
         saved=saved,
         error=error,
+        csrf_token=session["csrf_token"],
     ), status_code
 
 
@@ -2646,15 +2698,11 @@ def _validate_with_timeout(validator, api_key: str, model: str) -> tuple[str, st
 def apply_prefilter_suggestions():
     """Merge LLM-suggested title filters into config.json prefilter block.
 
-    Accepts a JSON body with the shape returned by the import endpoint when
-    ``suggest_filters=1``:
+    Accepts a form-encoded POST with fields:
 
-    .. code-block:: json
-
-        {
-            "title_include": ["engineer", "developer"],
-            "title_exclude": ["manager", "director"]
-        }
+    * ``csrf_token`` — session-scoped CSRF token (required; 403 on mismatch)
+    * ``title_include`` — JSON-encoded array of include patterns
+    * ``title_exclude`` — JSON-encoded array of exclude patterns
 
     The suggestions are merged (union-then-dedup, case-insensitive) into the
     existing ``config.json`` ``prefilter`` block via
@@ -2668,23 +2716,41 @@ def apply_prefilter_suggestions():
     Returns:
         200 ``{"success": True}`` on success.
         400 on missing/invalid input or overlapping include/exclude terms.
+        403 on CSRF token mismatch.
         500 on config read/write failure.
     """
-    body = request.get_json(silent=True) or {}
-    inc_raw = body.get("title_include")
-    exc_raw = body.get("title_exclude")
+    # CSRF check — token must match the session value established on GET /profile.
+    csrf_token = request.form.get("csrf_token", "")
+    if not csrf_token or csrf_token != session.get("csrf_token"):
+        return jsonify({
+            "success": False,
+            "error": "Invalid or missing CSRF token — request rejected.",
+        }), 403
+
+    inc_json = request.form.get("title_include", "")
+    exc_json = request.form.get("title_exclude", "")
+
+    try:
+        inc_raw = json.loads(inc_json) if inc_json else None
+        exc_raw = json.loads(exc_json) if exc_json else None
+    except (json.JSONDecodeError, ValueError):
+        inc_raw = None
+        exc_raw = None
 
     if not isinstance(inc_raw, list) or not isinstance(exc_raw, list):
         return jsonify({
             "success": False,
             "error": (
-                "Request body must be JSON with "
-                "title_include and title_exclude arrays."
+                "title_include and title_exclude must be JSON-encoded arrays."
             ),
         }), 400
 
     inc = [str(s).lower() for s in inc_raw]
     exc = [str(s).lower() for s in exc_raw]
+
+    # Intentional double-check: _parse_import_response validates the LLM response,
+    # but the form submission could be tampered between the preview render and the
+    # Apply click.  Re-validate at the HTTP boundary.
     overlap = set(inc) & set(exc)
     if overlap:
         return jsonify({

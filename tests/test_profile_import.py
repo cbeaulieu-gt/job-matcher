@@ -1045,13 +1045,14 @@ class TestMergePrefilterSuggestions:
         assert "developer" in result["title_include"]
 
     def test_dedup_is_case_insensitive(self):
-        """Duplicate detection is case-insensitive."""
+        """Duplicate detection is case-insensitive; output is always lowercase."""
         result = app_module._merge_prefilter_suggestions(
             {"title_include": ["Engineer"], "title_exclude": []},
             {"title_include": ["engineer"], "title_exclude": []},
         )
-        # Original casing preserved; suggested duplicate not added.
+        # Existing "Engineer" is normalised to lowercase; suggested duplicate not added.
         assert len(result["title_include"]) == 1
+        assert result["title_include"][0] == "engineer"
 
     def test_merge_adds_new_exclude_terms(self):
         """New exclude terms from suggestions are appended."""
@@ -1297,73 +1298,259 @@ class TestApplyPrefilterSuggestionsEndpoint:
         with open(path, "w") as fh:
             json.dump(cfg, fh)
 
-    def test_returns_400_when_body_missing_arrays(self, client):
-        """Missing title_include / title_exclude arrays return 400."""
+    def _post_suggestions(
+        self,
+        client,
+        include: list,
+        exclude: list,
+        csrf_token: str = "valid-token",
+    ):
+        """POST to /api/apply-prefilter-suggestions using form-data encoding.
+
+        Mirrors the JS fetch in profile.html: title_include / title_exclude are
+        JSON-encoded strings inside a multipart form, alongside the CSRF token.
+        """
+        return client.post(
+            "/api/apply-prefilter-suggestions",
+            data={
+                "csrf_token": csrf_token,
+                "title_include": json.dumps(include),
+                "title_exclude": json.dumps(exclude),
+            },
+        )
+
+    @pytest.fixture()
+    def client_with_csrf(self, client):
+        """Return (test_client, csrf_token) with the token pre-seeded in the session."""
+        with client.session_transaction() as sess:
+            sess["csrf_token"] = "valid-token"
+        return client, "valid-token"
+
+    # ------------------------------------------------------------------
+    # CSRF tests (new — review item 1)
+    # ------------------------------------------------------------------
+
+    def test_returns_403_without_csrf_token(self, client, tmp_config_path):
+        """Request with no CSRF token is rejected with 403."""
+        self._write_config(tmp_config_path, {})
         resp = client.post(
             "/api/apply-prefilter-suggestions",
-            json={"title_include": ["engineer"]},  # missing title_exclude
+            data={
+                "title_include": json.dumps(["engineer"]),
+                "title_exclude": json.dumps([]),
+                # no csrf_token field
+            },
+        )
+        assert resp.status_code == 403
+        assert resp.get_json()["success"] is False
+
+    def test_returns_403_with_wrong_csrf_token(self, client, tmp_config_path):
+        """Request with an incorrect CSRF token is rejected with 403."""
+        self._write_config(tmp_config_path, {})
+        with client.session_transaction() as sess:
+            sess["csrf_token"] = "correct-token"
+        resp = client.post(
+            "/api/apply-prefilter-suggestions",
+            data={
+                "csrf_token": "wrong-token",
+                "title_include": json.dumps(["engineer"]),
+                "title_exclude": json.dumps([]),
+            },
+        )
+        assert resp.status_code == 403
+        assert resp.get_json()["success"] is False
+
+    def test_accepts_request_with_valid_csrf_token(self, client_with_csrf, tmp_path, monkeypatch):
+        """Request with a matching CSRF token succeeds (200)."""
+        client, token = client_with_csrf
+        path = str(tmp_path / "config.json")
+        monkeypatch.setattr(app_module, "_CONFIG_PATH", path)
+        self._write_config(path, {})
+        resp = self._post_suggestions(client, ["engineer"], [], csrf_token=token)
+        assert resp.status_code == 200
+        assert resp.get_json()["success"] is True
+
+    # ------------------------------------------------------------------
+    # Input validation: missing / malformed arrays
+    # ------------------------------------------------------------------
+
+    def test_returns_400_when_body_missing_arrays(self, client_with_csrf):
+        """Missing title_exclude array returns 400."""
+        client, token = client_with_csrf
+        resp = client.post(
+            "/api/apply-prefilter-suggestions",
+            data={
+                "csrf_token": token,
+                "title_include": json.dumps(["engineer"]),
+                # missing title_exclude
+            },
         )
         assert resp.status_code == 400
         assert resp.get_json()["success"] is False
 
-    def test_returns_400_for_non_json_body(self, client):
-        """Non-JSON body returns 400."""
+    def test_returns_400_for_non_json_arrays(self, client_with_csrf):
+        """Non-JSON-encoded array fields return 400."""
+        client, token = client_with_csrf
         resp = client.post(
             "/api/apply-prefilter-suggestions",
-            data="not json",
-            content_type="text/plain",
+            data={
+                "csrf_token": token,
+                "title_include": "not json",
+                "title_exclude": "[]",
+            },
         )
         assert resp.status_code == 400
 
     def test_returns_400_when_include_and_exclude_overlap(
-        self, client, tmp_config_path
+        self, client_with_csrf, tmp_path, monkeypatch
     ):
         """Overlapping include/exclude terms return 400 (disjoint-set guard)."""
-        self._write_config(tmp_config_path, {})
-        resp = client.post(
-            "/api/apply-prefilter-suggestions",
-            json={
-                "title_include": ["engineer", "manager"],
-                "title_exclude": ["manager", "director"],
-            },
+        client, token = client_with_csrf
+        path = str(tmp_path / "config.json")
+        monkeypatch.setattr(app_module, "_CONFIG_PATH", path)
+        self._write_config(path, {})
+        resp = self._post_suggestions(
+            client,
+            ["engineer", "manager"],
+            ["manager", "director"],
+            csrf_token=token,
         )
         assert resp.status_code == 400
         body = resp.get_json()
         assert body["success"] is False
         assert "manager" in body["error"]
 
-    def test_fresh_apply_writes_new_prefilter(self, client, tmp_config_path):
-        """Suggestions are written to an empty config's prefilter block."""
-        self._write_config(tmp_config_path, {})
-        resp = client.post(
-            "/api/apply-prefilter-suggestions",
-            json={
-                "title_include": ["engineer"],
-                "title_exclude": ["director"],
+    # ------------------------------------------------------------------
+    # Input validation: length / count limits (new — review item 2)
+    # ------------------------------------------------------------------
+
+    def test_parse_rejects_pattern_over_max_length(self):
+        """_parse_import_response rejects a response where any pattern exceeds _MAX_PATTERN_LEN."""
+        over_long = "x" * (app_module._MAX_PATTERN_LEN + 1)
+        raw = json.dumps({
+            "primary_skills": [],
+            "education": [],
+            "seniority": "",
+            "preferred_industries": [],
+            "location_center": None,
+            "prefilter_suggestions": {
+                "title_include": [over_long],
+                "title_exclude": [],
             },
+        })
+        assert app_module._parse_import_response(raw) is None
+
+    def test_parse_accepts_pattern_at_exact_max_length(self):
+        """_parse_import_response accepts a pattern that is exactly _MAX_PATTERN_LEN chars."""
+        exact = "x" * app_module._MAX_PATTERN_LEN
+        raw = json.dumps({
+            "primary_skills": [],
+            "education": [],
+            "seniority": "",
+            "preferred_industries": [],
+            "location_center": None,
+            "prefilter_suggestions": {
+                "title_include": [exact],
+                "title_exclude": [],
+            },
+        })
+        result = app_module._parse_import_response(raw)
+        assert result is not None
+        assert exact in result["prefilter_suggestions"]["title_include"]
+
+    def test_parse_rejects_list_over_max_count(self):
+        """_parse_import_response rejects a response where a list exceeds _MAX_PATTERNS_PER_LIST."""
+        too_many = [f"term{i}" for i in range(app_module._MAX_PATTERNS_PER_LIST + 1)]
+        raw = json.dumps({
+            "primary_skills": [],
+            "education": [],
+            "seniority": "",
+            "preferred_industries": [],
+            "location_center": None,
+            "prefilter_suggestions": {
+                "title_include": too_many,
+                "title_exclude": [],
+            },
+        })
+        assert app_module._parse_import_response(raw) is None
+
+    def test_parse_accepts_list_at_exact_max_count(self):
+        """_parse_import_response accepts a list with exactly _MAX_PATTERNS_PER_LIST items."""
+        exact_count = [f"term{i}" for i in range(app_module._MAX_PATTERNS_PER_LIST)]
+        raw = json.dumps({
+            "primary_skills": [],
+            "education": [],
+            "seniority": "",
+            "preferred_industries": [],
+            "location_center": None,
+            "prefilter_suggestions": {
+                "title_include": exact_count,
+                "title_exclude": [],
+            },
+        })
+        result = app_module._parse_import_response(raw)
+        assert result is not None
+        assert len(result["prefilter_suggestions"]["title_include"]) == app_module._MAX_PATTERNS_PER_LIST
+
+    # ------------------------------------------------------------------
+    # Lowercase normalisation on merge (new — review item 4)
+    # ------------------------------------------------------------------
+
+    def test_merge_normalises_existing_and_new_to_lowercase(
+        self, client_with_csrf, tmp_path, monkeypatch
+    ):
+        """Existing mixed-case patterns and new suggestions are all lowercased on merge."""
+        client, token = client_with_csrf
+        path = str(tmp_path / "config.json")
+        monkeypatch.setattr(app_module, "_CONFIG_PATH", path)
+        self._write_config(
+            path,
+            {"prefilter": {"title_include": ["Engineer"], "title_exclude": []}},
+        )
+        resp = self._post_suggestions(
+            client, ["engineer", "developer"], [], csrf_token=token
         )
         assert resp.status_code == 200
+        with open(path) as fh:
+            cfg = json.load(fh)
+        inc = cfg["prefilter"]["title_include"]
+        # All entries must be lowercase.
+        assert all(s == s.lower() for s in inc), f"Mixed-case entries found: {inc}"
+        # "engineer" must appear exactly once (deduped).
+        assert inc.count("engineer") == 1
+        # "developer" must be present.
+        assert "developer" in inc
+
+    # ------------------------------------------------------------------
+    # Happy-path / merge / preservation tests (migrated from JSON to form)
+    # ------------------------------------------------------------------
+
+    def test_fresh_apply_writes_new_prefilter(self, client_with_csrf, tmp_path, monkeypatch):
+        """Suggestions are written to an empty config's prefilter block."""
+        client, token = client_with_csrf
+        path = str(tmp_path / "config.json")
+        monkeypatch.setattr(app_module, "_CONFIG_PATH", path)
+        self._write_config(path, {})
+        resp = self._post_suggestions(client, ["engineer"], ["director"], csrf_token=token)
+        assert resp.status_code == 200
         assert resp.get_json()["success"] is True
-        with open(tmp_config_path) as fh:
+        with open(path) as fh:
             cfg = json.load(fh)
         assert "engineer" in cfg["prefilter"]["title_include"]
         assert "director" in cfg["prefilter"]["title_exclude"]
 
-    def test_merge_apply_unions_with_existing(self, client, tmp_config_path):
+    def test_merge_apply_unions_with_existing(self, client_with_csrf, tmp_path, monkeypatch):
         """Suggestions are merged with existing prefilter without removing old terms."""
+        client, token = client_with_csrf
+        path = str(tmp_path / "config.json")
+        monkeypatch.setattr(app_module, "_CONFIG_PATH", path)
         self._write_config(
-            tmp_config_path,
+            path,
             {"prefilter": {"title_include": ["staff"], "title_exclude": ["intern"]}},
         )
-        resp = client.post(
-            "/api/apply-prefilter-suggestions",
-            json={
-                "title_include": ["engineer"],
-                "title_exclude": ["manager"],
-            },
-        )
+        resp = self._post_suggestions(client, ["engineer"], ["manager"], csrf_token=token)
         assert resp.status_code == 200
-        with open(tmp_config_path) as fh:
+        with open(path) as fh:
             cfg = json.load(fh)
         pf = cfg["prefilter"]
         assert "staff" in pf["title_include"]
@@ -1371,10 +1558,13 @@ class TestApplyPrefilterSuggestionsEndpoint:
         assert "intern" in pf["title_exclude"]
         assert "manager" in pf["title_exclude"]
 
-    def test_apply_preserves_other_prefilter_keys(self, client, tmp_config_path):
+    def test_apply_preserves_other_prefilter_keys(self, client_with_csrf, tmp_path, monkeypatch):
         """require_contract_time / type are not touched by apply."""
+        client, token = client_with_csrf
+        path = str(tmp_path / "config.json")
+        monkeypatch.setattr(app_module, "_CONFIG_PATH", path)
         self._write_config(
-            tmp_config_path,
+            path,
             {
                 "prefilter": {
                     "title_include": [],
@@ -1384,38 +1574,37 @@ class TestApplyPrefilterSuggestionsEndpoint:
                 }
             },
         )
-        resp = client.post(
-            "/api/apply-prefilter-suggestions",
-            json={"title_include": ["engineer"], "title_exclude": []},
-        )
+        resp = self._post_suggestions(client, ["engineer"], [], csrf_token=token)
         assert resp.status_code == 200
-        with open(tmp_config_path) as fh:
+        with open(path) as fh:
             cfg = json.load(fh)
         pf = cfg["prefilter"]
         assert pf["require_contract_time"] == "full_time"
         assert pf["require_contract_type"] == "permanent"
 
-    def test_returns_500_when_config_unreadable(self, client, tmp_config_path):
+    def test_returns_500_when_config_unreadable(self, client_with_csrf, tmp_path, monkeypatch):
         """Missing config.json returns 500."""
-        # tmp_config_path file was never created — it doesn't exist.
-        resp = client.post(
-            "/api/apply-prefilter-suggestions",
-            json={"title_include": ["engineer"], "title_exclude": []},
-        )
+        client, token = client_with_csrf
+        path = str(tmp_path / "config_missing.json")
+        monkeypatch.setattr(app_module, "_CONFIG_PATH", path)
+        # path never created — doesn't exist
+        resp = self._post_suggestions(client, ["engineer"], [], csrf_token=token)
         assert resp.status_code == 500
         assert resp.get_json()["success"] is False
 
-    def test_dedup_on_apply(self, client, tmp_config_path):
+    def test_dedup_on_apply(self, client_with_csrf, tmp_path, monkeypatch):
         """Applying suggestions that duplicate existing terms does not create dupes."""
+        client, token = client_with_csrf
+        path = str(tmp_path / "config.json")
+        monkeypatch.setattr(app_module, "_CONFIG_PATH", path)
         self._write_config(
-            tmp_config_path,
+            path,
             {"prefilter": {"title_include": ["engineer"], "title_exclude": []}},
         )
-        resp = client.post(
-            "/api/apply-prefilter-suggestions",
-            json={"title_include": ["engineer", "developer"], "title_exclude": []},
+        resp = self._post_suggestions(
+            client, ["engineer", "developer"], [], csrf_token=token
         )
         assert resp.status_code == 200
-        with open(tmp_config_path) as fh:
+        with open(path) as fh:
             cfg = json.load(fh)
         assert cfg["prefilter"]["title_include"].count("engineer") == 1

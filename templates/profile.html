@@ -852,6 +852,11 @@
 {# ── PDF import JS ────────────────────────────────────────────── #}
 <script>
 (function () {
+  {# CSRF token — established server-side in the profile() view and used by
+     the apply-prefilter-suggestions POST to satisfy the CSRF guard.  Matches
+     the pattern used by the admin/clear-db form. #}
+  var _csrfToken = {{ csrf_token | tojson }};
+
   var fileInput        = document.getElementById('import-pdf-file');
   var importBtn        = document.getElementById('import-pdf-btn');
   var statusDiv        = document.getElementById('import-status');
@@ -1012,10 +1017,14 @@
       pfApplyBtn.textContent = 'Applying\u2026';
       pfApplyStatus.innerHTML = '';
 
+      var fd = new FormData();
+      fd.append('csrf_token', _csrfToken);
+      fd.append('title_include', JSON.stringify(_pendingSuggestions.title_include));
+      fd.append('title_exclude', JSON.stringify(_pendingSuggestions.title_exclude));
+
       fetch('/api/apply-prefilter-suggestions', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(_pendingSuggestions),
+        body: fd,
       })
         .then(function (resp) { return resp.json().then(function (d) { return { ok: resp.ok, data: d }; }); })
         .then(function (result) {
@@ -1024,7 +1033,7 @@
           var msgP = document.createElement('p');
           if (result.ok && result.data.success) {
             msgP.className = 'save-notice';
-            msgP.textContent = 'Prefilter updated. Save the profile form to persist all changes.';
+            msgP.textContent = 'Patterns merged into config.json. They take effect on the next ingest run.';
             _pendingSuggestions = null;
           } else {
             msgP.className = 'save-error';

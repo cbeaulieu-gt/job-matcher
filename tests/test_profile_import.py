@@ -43,6 +43,49 @@ POST /profile/import-pdf:
 * Does NOT write to profile.json (returns JSON for client-side pre-fill only)
 * Defaults to fresh mode when mode param is absent
 * Uses merge mode when mode=merge is posted
+
+_build_import_prompt() with suggest_filters (issue #251):
+* Toggle off — prompt byte-for-byte identical to base (no prefilter section)
+* Toggle off — prompt does not contain prefilter_suggestions key
+* Toggle on — prompt contains prefilter_suggestions section
+* Toggle on — prompt still ends with JSON-only sentinel
+* Toggle on — prompt explicitly names title_include and title_exclude
+* Toggle on — resume text still injected
+* Toggle on — prompt is longer than base prompt
+* Toggle on — does NOT mention require_contract_time or require_contract_type
+
+_parse_import_response() prefilter validation (issue #251):
+* Disjoint include/exclude arrays accepted and normalised to lowercase
+* Overlapping terms cause the whole response to be rejected (returns None)
+* Overlap detection is case-insensitive
+* Non-dict prefilter_suggestions value is silently dropped
+* Empty arrays are valid
+* Absent key is fine (response accepted without error)
+
+_merge_prefilter_suggestions() (issue #251):
+* Empty existing prefilter uses suggestions directly
+* New include terms appended; duplicates skipped (case-insensitive)
+* New exclude terms appended
+* Other prefilter keys (require_contract_*) preserved unchanged
+* User-added terms never removed
+* Empty suggestions leave existing unchanged
+
+POST /profile/import-pdf — suggest_filters toggle (issue #251):
+* Toggle absent → prefilter_suggestions absent from response
+* Toggle on → prefilter_suggestions present in response
+* Toggle on → _build_import_prompt called with suggest_filters=True
+* Toggle absent → _build_import_prompt called with suggest_filters=False
+* Toggle on but LLM returns no suggestions → key absent from response
+
+POST /api/apply-prefilter-suggestions (issue #251):
+* Returns 400 for missing arrays
+* Returns 400 for non-JSON body
+* Returns 400 when include/exclude overlap (disjoint-set guard)
+* Fresh config: writes new prefilter block
+* Existing prefilter: unions without removing user terms
+* Other prefilter keys preserved
+* Missing config.json returns 500
+* Duplicate terms on apply are deduplicated
 """
 
 from __future__ import annotations
@@ -593,8 +636,8 @@ class TestImportEndpoint:
 
         original_build = app_module._build_import_prompt
 
-        def spy_build(resume_text: str) -> str:
-            prompt = original_build(resume_text)
+        def spy_build(resume_text: str, suggest_filters: bool = False) -> str:
+            prompt = original_build(resume_text, suggest_filters=suggest_filters)
             captured_prompts.append(prompt)
             return prompt
 
@@ -797,3 +840,771 @@ class TestNormaliseEducation:
         assert result[0]["graduation_year"] == "2016"
         assert result[0]["degree_type"] == "BS"
         assert result[0]["school"] == "MIT"
+
+
+# ===========================================================================
+# TestBuildImportPromptFilters — issue #251
+# ===========================================================================
+
+
+class TestBuildImportPromptFilters:
+    """Tests for _build_import_prompt() with suggest_filters toggle (issue #251)."""
+
+    def test_toggle_off_prompt_identical_to_base(self):
+        """When suggest_filters=False the prompt is byte-for-byte the base prompt."""
+        default_prompt = app_module._build_import_prompt("resume text")
+        explicit_off = app_module._build_import_prompt(
+            "resume text", suggest_filters=False
+        )
+        assert default_prompt == explicit_off
+
+    def test_toggle_off_does_not_contain_prefilter_section(self):
+        """Prompt without toggle contains no mention of prefilter_suggestions."""
+        prompt = app_module._build_import_prompt("some resume", suggest_filters=False)
+        assert "prefilter_suggestions" not in prompt
+
+    def test_toggle_on_contains_prefilter_section(self):
+        """Prompt with suggest_filters=True mentions prefilter_suggestions."""
+        prompt = app_module._build_import_prompt("some resume", suggest_filters=True)
+        assert "prefilter_suggestions" in prompt
+
+    def test_toggle_on_still_ends_with_json_only_sentinel(self):
+        """Prompt with toggle still ends with the 'JSON only:' sentinel."""
+        prompt = app_module._build_import_prompt("some resume", suggest_filters=True)
+        assert prompt.rstrip().endswith("JSON only:")
+
+    def test_toggle_on_contains_title_include_and_exclude(self):
+        """Extended prompt explicitly names title_include and title_exclude."""
+        prompt = app_module._build_import_prompt("some resume", suggest_filters=True)
+        assert "title_include" in prompt
+        assert "title_exclude" in prompt
+
+    def test_toggle_on_still_contains_resume_text(self):
+        """Resume text is injected into the extended prompt."""
+        prompt = app_module._build_import_prompt(
+            "my special resume", suggest_filters=True
+        )
+        assert "my special resume" in prompt
+
+    def test_toggle_on_prompt_differs_from_base(self):
+        """The extended prompt is longer than the base prompt."""
+        base = app_module._build_import_prompt("resume text", suggest_filters=False)
+        extended = app_module._build_import_prompt(
+            "resume text", suggest_filters=True
+        )
+        assert len(extended) > len(base)
+
+    def test_toggle_on_explicitly_excludes_contract_fields(self):
+        """Extended prompt tells the LLM not to generate require_contract_* fields.
+
+        The spec says these are user preferences, not resume-derived.  The
+        prompt extension must mention them in a negative/exclusion context
+        (e.g. "Do NOT include ...") rather than as fields to extract.
+        """
+        prompt = app_module._build_import_prompt("some resume", suggest_filters=True)
+        # The prompt must contain a "Do NOT" or equivalent exclusion instruction
+        # covering the contract fields — not a positive extraction request.
+        prompt_lower = prompt.lower()
+        # Verify the exclusion instruction is present.
+        assert "do not" in prompt_lower or "not include" in prompt_lower
+        # Verify neither field appears as a top-level JSON key to extract
+        # (i.e., not listed with a leading dash-space like "- \"require_...\"").
+        assert '- "require_contract_time"' not in prompt
+        assert '- "require_contract_type"' not in prompt
+
+
+# ===========================================================================
+# TestParseImportResponsePrefilter — issue #251
+# ===========================================================================
+
+
+class TestParseImportResponsePrefilter:
+    """Tests for _parse_import_response() prefilter_suggestions validation."""
+
+    def _base_response(self, **extra) -> str:
+        """Return a JSON string with base fields plus any extras."""
+        data = {
+            "primary_skills": [],
+            "education": [],
+            "seniority": "Senior",
+            "preferred_industries": [],
+            "location_center": None,
+        }
+        data.update(extra)
+        return json.dumps(data)
+
+    def test_valid_disjoint_suggestions_accepted(self):
+        """Disjoint title_include / title_exclude are kept in the result."""
+        raw = self._base_response(
+            prefilter_suggestions={
+                "title_include": ["engineer", "developer"],
+                "title_exclude": ["manager", "director"],
+            }
+        )
+        result = app_module._parse_import_response(raw)
+        assert result is not None
+        pf = result["prefilter_suggestions"]
+        assert pf["title_include"] == ["engineer", "developer"]
+        assert pf["title_exclude"] == ["manager", "director"]
+
+    def test_overlapping_suggestions_rejected(self):
+        """Overlapping include/exclude terms cause the whole response to be None."""
+        raw = self._base_response(
+            prefilter_suggestions={
+                "title_include": ["engineer", "manager"],
+                "title_exclude": ["manager", "director"],
+            }
+        )
+        result = app_module._parse_import_response(raw)
+        assert result is None
+
+    def test_overlap_is_case_insensitive(self):
+        """Case difference does not prevent overlap detection."""
+        raw = self._base_response(
+            prefilter_suggestions={
+                "title_include": ["Engineer"],
+                "title_exclude": ["engineer"],
+            }
+        )
+        result = app_module._parse_import_response(raw)
+        assert result is None
+
+    def test_suggestions_normalised_to_lowercase(self):
+        """Returned title_include / title_exclude are always lowercase."""
+        raw = self._base_response(
+            prefilter_suggestions={
+                "title_include": ["ENGINEER", "Developer"],
+                "title_exclude": ["Manager"],
+            }
+        )
+        result = app_module._parse_import_response(raw)
+        assert result is not None
+        pf = result["prefilter_suggestions"]
+        assert pf["title_include"] == ["engineer", "developer"]
+        assert pf["title_exclude"] == ["manager"]
+
+    def test_empty_suggestions_accepted(self):
+        """Empty include and exclude arrays are valid (no overlap possible)."""
+        raw = self._base_response(
+            prefilter_suggestions={"title_include": [], "title_exclude": []}
+        )
+        result = app_module._parse_import_response(raw)
+        assert result is not None
+        pf = result["prefilter_suggestions"]
+        assert pf["title_include"] == []
+        assert pf["title_exclude"] == []
+
+    def test_non_dict_suggestions_key_is_dropped(self):
+        """A non-dict prefilter_suggestions value is silently dropped."""
+        raw = self._base_response(prefilter_suggestions=["bad", "value"])
+        result = app_module._parse_import_response(raw)
+        assert result is not None
+        assert "prefilter_suggestions" not in result
+
+    def test_absent_suggestions_key_is_fine(self):
+        """Response without prefilter_suggestions is accepted without error."""
+        raw = self._base_response()
+        result = app_module._parse_import_response(raw)
+        assert result is not None
+        assert "prefilter_suggestions" not in result
+
+
+# ===========================================================================
+# TestMergePrefilterSuggestions — issue #251
+# ===========================================================================
+
+
+class TestMergePrefilterSuggestions:
+    """Tests for _merge_prefilter_suggestions() (issue #251)."""
+
+    def test_fresh_empty_prefilter_uses_suggestions_directly(self):
+        """When existing prefilter is empty the suggestions become the result."""
+        result = app_module._merge_prefilter_suggestions(
+            {},
+            {"title_include": ["engineer"], "title_exclude": ["director"]},
+        )
+        assert result["title_include"] == ["engineer"]
+        assert result["title_exclude"] == ["director"]
+
+    def test_merge_adds_new_include_terms(self):
+        """New include terms from suggestions are appended to existing ones."""
+        result = app_module._merge_prefilter_suggestions(
+            {"title_include": ["engineer"], "title_exclude": []},
+            {"title_include": ["developer"], "title_exclude": []},
+        )
+        assert "engineer" in result["title_include"]
+        assert "developer" in result["title_include"]
+
+    def test_merge_does_not_duplicate_existing_include_terms(self):
+        """Include terms already present are not added a second time."""
+        result = app_module._merge_prefilter_suggestions(
+            {"title_include": ["engineer"], "title_exclude": []},
+            {"title_include": ["engineer", "developer"], "title_exclude": []},
+        )
+        assert result["title_include"].count("engineer") == 1
+        assert "developer" in result["title_include"]
+
+    def test_dedup_is_case_insensitive(self):
+        """Duplicate detection is case-insensitive; output is always lowercase."""
+        result = app_module._merge_prefilter_suggestions(
+            {"title_include": ["Engineer"], "title_exclude": []},
+            {"title_include": ["engineer"], "title_exclude": []},
+        )
+        # Existing "Engineer" is normalised to lowercase; suggested duplicate not added.
+        assert len(result["title_include"]) == 1
+        assert result["title_include"][0] == "engineer"
+
+    def test_merge_adds_new_exclude_terms(self):
+        """New exclude terms from suggestions are appended."""
+        result = app_module._merge_prefilter_suggestions(
+            {"title_include": [], "title_exclude": ["director"]},
+            {"title_include": [], "title_exclude": ["manager"]},
+        )
+        assert "director" in result["title_exclude"]
+        assert "manager" in result["title_exclude"]
+
+    def test_other_prefilter_keys_preserved(self):
+        """Keys other than title_include/exclude are passed through unchanged."""
+        result = app_module._merge_prefilter_suggestions(
+            {
+                "title_include": [],
+                "title_exclude": [],
+                "require_contract_time": "full_time",
+                "require_contract_type": "permanent",
+            },
+            {"title_include": ["engineer"], "title_exclude": []},
+        )
+        assert result["require_contract_time"] == "full_time"
+        assert result["require_contract_type"] == "permanent"
+
+    def test_fresh_mode_replaces_include_with_suggestions(self):
+        """In fresh mode (empty existing prefilter) suggestions become the lists."""
+        result = app_module._merge_prefilter_suggestions(
+            {},
+            {"title_include": ["engineer", "developer"], "title_exclude": ["intern"]},
+        )
+        assert result["title_include"] == ["engineer", "developer"]
+        assert result["title_exclude"] == ["intern"]
+
+    def test_user_added_terms_never_removed(self):
+        """User-added patterns are preserved even if absent from suggestions."""
+        result = app_module._merge_prefilter_suggestions(
+            {"title_include": ["staff", "principal"], "title_exclude": ["intern"]},
+            {"title_include": ["engineer"], "title_exclude": ["manager"]},
+        )
+        # All four user-added terms must still be present.
+        assert "staff" in result["title_include"]
+        assert "principal" in result["title_include"]
+        assert "intern" in result["title_exclude"]
+        # Suggested terms also present.
+        assert "engineer" in result["title_include"]
+        assert "manager" in result["title_exclude"]
+
+    def test_empty_suggestions_leaves_existing_unchanged(self):
+        """Empty suggestion arrays leave the existing prefilter intact."""
+        result = app_module._merge_prefilter_suggestions(
+            {"title_include": ["engineer"], "title_exclude": ["intern"]},
+            {"title_include": [], "title_exclude": []},
+        )
+        assert result["title_include"] == ["engineer"]
+        assert result["title_exclude"] == ["intern"]
+
+
+# ===========================================================================
+# TestImportEndpointSuggestFilters — issue #251
+# ===========================================================================
+
+
+class TestImportEndpointSuggestFilters:
+    """Tests for suggest_filters toggle on POST /profile/import-pdf (issue #251)."""
+
+    def _llm_response_with_suggestions(self, include=None, exclude=None) -> dict:
+        """Build a parsed LLM response dict that includes prefilter_suggestions."""
+        return {
+            "primary_skills": [],
+            "education": [],
+            "seniority": "Senior",
+            "preferred_industries": [],
+            "location_center": None,
+            "prefilter_suggestions": {
+                "title_include": include if include is not None else ["engineer"],
+                "title_exclude": exclude if exclude is not None else ["manager"],
+            },
+        }
+
+    def test_suggest_filters_off_by_default(
+        self, client, tmp_providers_path, tmp_keys_path
+    ):
+        """When suggest_filters is not sent the response has no prefilter_suggestions."""
+        long_text = "x" * 200
+        mock_provider = MagicMock()
+        parsed = self._llm_response_with_suggestions()
+        with patch("app._extract_pdf_text", return_value=long_text), \
+             patch("app.build_provider_chain", return_value=[mock_provider]), \
+             patch("app.generate_with_fallback", return_value=(json.dumps(parsed), "anthropic/haiku")), \
+             patch("app._parse_import_response", return_value=parsed):
+            resp = client.post(
+                "/profile/import-pdf",
+                data={"file": (io.BytesIO(b"fake"), "resume.pdf")},
+                content_type="multipart/form-data",
+            )
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert "prefilter_suggestions" not in body
+
+    def test_suggest_filters_on_returns_suggestions(
+        self, client, tmp_providers_path, tmp_keys_path
+    ):
+        """When suggest_filters=1 is posted, the response includes prefilter_suggestions."""
+        long_text = "x" * 200
+        mock_provider = MagicMock()
+        parsed = self._llm_response_with_suggestions(
+            include=["engineer", "developer"],
+            exclude=["manager", "director"],
+        )
+        with patch("app._extract_pdf_text", return_value=long_text), \
+             patch("app.build_provider_chain", return_value=[mock_provider]), \
+             patch("app.generate_with_fallback", return_value=(json.dumps(parsed), "anthropic/haiku")), \
+             patch("app._parse_import_response", return_value=parsed):
+            resp = client.post(
+                "/profile/import-pdf",
+                data={
+                    "file": (io.BytesIO(b"fake"), "resume.pdf"),
+                    "suggest_filters": "1",
+                },
+                content_type="multipart/form-data",
+            )
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["success"] is True
+        assert "prefilter_suggestions" in body
+        pf = body["prefilter_suggestions"]
+        assert "engineer" in pf["title_include"]
+        assert "manager" in pf["title_exclude"]
+
+    def test_suggest_filters_on_sends_extended_prompt(
+        self, client, tmp_providers_path, tmp_keys_path
+    ):
+        """When suggest_filters=1, _build_import_prompt is called with suggest_filters=True."""
+        long_text = "x" * 200
+        mock_provider = MagicMock()
+        parsed = self._llm_response_with_suggestions()
+        captured: list[dict] = []
+
+        original_build = app_module._build_import_prompt
+
+        def spy_build(resume_text: str, suggest_filters: bool = False) -> str:
+            captured.append({"suggest_filters": suggest_filters})
+            return original_build(resume_text, suggest_filters=suggest_filters)
+
+        with patch("app._extract_pdf_text", return_value=long_text), \
+             patch("app.build_provider_chain", return_value=[mock_provider]), \
+             patch("app.generate_with_fallback", return_value=(json.dumps(parsed), "anthropic/haiku")), \
+             patch("app._parse_import_response", return_value=parsed), \
+             patch("app._build_import_prompt", side_effect=spy_build):
+            client.post(
+                "/profile/import-pdf",
+                data={
+                    "file": (io.BytesIO(b"fake"), "resume.pdf"),
+                    "suggest_filters": "1",
+                },
+                content_type="multipart/form-data",
+            )
+        assert len(captured) == 1
+        assert captured[0]["suggest_filters"] is True
+
+    def test_suggest_filters_off_sends_base_prompt(
+        self, client, tmp_providers_path, tmp_keys_path
+    ):
+        """When suggest_filters is absent, _build_import_prompt is called with False."""
+        long_text = "x" * 200
+        mock_provider = MagicMock()
+        parsed = {
+            "primary_skills": [],
+            "education": [],
+            "seniority": "",
+            "preferred_industries": [],
+            "location_center": None,
+        }
+        captured: list[dict] = []
+
+        original_build = app_module._build_import_prompt
+
+        def spy_build(resume_text: str, suggest_filters: bool = False) -> str:
+            captured.append({"suggest_filters": suggest_filters})
+            return original_build(resume_text, suggest_filters=suggest_filters)
+
+        with patch("app._extract_pdf_text", return_value=long_text), \
+             patch("app.build_provider_chain", return_value=[mock_provider]), \
+             patch("app.generate_with_fallback", return_value=(json.dumps(parsed), "anthropic/haiku")), \
+             patch("app._parse_import_response", return_value=parsed), \
+             patch("app._build_import_prompt", side_effect=spy_build):
+            client.post(
+                "/profile/import-pdf",
+                data={"file": (io.BytesIO(b"fake"), "resume.pdf")},
+                content_type="multipart/form-data",
+            )
+        assert len(captured) == 1
+        assert captured[0]["suggest_filters"] is False
+
+    def test_suggest_filters_absent_when_llm_returns_no_suggestions(
+        self, client, tmp_providers_path, tmp_keys_path
+    ):
+        """Even with suggest_filters=1, if LLM gives no suggestions the key is absent."""
+        long_text = "x" * 200
+        mock_provider = MagicMock()
+        parsed = {
+            "primary_skills": [],
+            "education": [],
+            "seniority": "Senior",
+            "preferred_industries": [],
+            "location_center": None,
+            # no prefilter_suggestions key
+        }
+        with patch("app._extract_pdf_text", return_value=long_text), \
+             patch("app.build_provider_chain", return_value=[mock_provider]), \
+             patch("app.generate_with_fallback", return_value=(json.dumps(parsed), "anthropic/haiku")), \
+             patch("app._parse_import_response", return_value=parsed):
+            resp = client.post(
+                "/profile/import-pdf",
+                data={
+                    "file": (io.BytesIO(b"fake"), "resume.pdf"),
+                    "suggest_filters": "1",
+                },
+                content_type="multipart/form-data",
+            )
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert "prefilter_suggestions" not in body
+
+
+# ===========================================================================
+# TestApplyPrefilterSuggestionsEndpoint — issue #251
+# ===========================================================================
+
+
+class TestApplyPrefilterSuggestionsEndpoint:
+    """Tests for POST /api/apply-prefilter-suggestions (issue #251)."""
+
+    @pytest.fixture()
+    def tmp_config_path(self, tmp_path, monkeypatch):
+        """Point _CONFIG_PATH at a temp file for isolation."""
+        path = str(tmp_path / "config.json")
+        monkeypatch.setattr(app_module, "_CONFIG_PATH", path)
+        return path
+
+    def _write_config(self, path: str, cfg: dict) -> None:
+        """Write cfg as JSON to path."""
+        with open(path, "w") as fh:
+            json.dump(cfg, fh)
+
+    def _post_suggestions(
+        self,
+        client,
+        include: list,
+        exclude: list,
+        csrf_token: str = "valid-token",
+    ):
+        """POST to /api/apply-prefilter-suggestions using form-data encoding.
+
+        Mirrors the JS fetch in profile.html: title_include / title_exclude are
+        JSON-encoded strings inside a multipart form, alongside the CSRF token.
+        """
+        return client.post(
+            "/api/apply-prefilter-suggestions",
+            data={
+                "csrf_token": csrf_token,
+                "title_include": json.dumps(include),
+                "title_exclude": json.dumps(exclude),
+            },
+        )
+
+    @pytest.fixture()
+    def client_with_csrf(self, client):
+        """Return (test_client, csrf_token) with the token pre-seeded in the session."""
+        with client.session_transaction() as sess:
+            sess["csrf_token"] = "valid-token"
+        return client, "valid-token"
+
+    # ------------------------------------------------------------------
+    # CSRF tests (new — review item 1)
+    # ------------------------------------------------------------------
+
+    def test_returns_403_without_csrf_token(self, client, tmp_config_path):
+        """Request with no CSRF token is rejected with 403."""
+        self._write_config(tmp_config_path, {})
+        resp = client.post(
+            "/api/apply-prefilter-suggestions",
+            data={
+                "title_include": json.dumps(["engineer"]),
+                "title_exclude": json.dumps([]),
+                # no csrf_token field
+            },
+        )
+        assert resp.status_code == 403
+        assert resp.get_json()["success"] is False
+
+    def test_returns_403_with_wrong_csrf_token(self, client, tmp_config_path):
+        """Request with an incorrect CSRF token is rejected with 403."""
+        self._write_config(tmp_config_path, {})
+        with client.session_transaction() as sess:
+            sess["csrf_token"] = "correct-token"
+        resp = client.post(
+            "/api/apply-prefilter-suggestions",
+            data={
+                "csrf_token": "wrong-token",
+                "title_include": json.dumps(["engineer"]),
+                "title_exclude": json.dumps([]),
+            },
+        )
+        assert resp.status_code == 403
+        assert resp.get_json()["success"] is False
+
+    def test_accepts_request_with_valid_csrf_token(self, client_with_csrf, tmp_path, monkeypatch):
+        """Request with a matching CSRF token succeeds (200)."""
+        client, token = client_with_csrf
+        path = str(tmp_path / "config.json")
+        monkeypatch.setattr(app_module, "_CONFIG_PATH", path)
+        self._write_config(path, {})
+        resp = self._post_suggestions(client, ["engineer"], [], csrf_token=token)
+        assert resp.status_code == 200
+        assert resp.get_json()["success"] is True
+
+    # ------------------------------------------------------------------
+    # Input validation: missing / malformed arrays
+    # ------------------------------------------------------------------
+
+    def test_returns_400_when_body_missing_arrays(self, client_with_csrf):
+        """Missing title_exclude array returns 400."""
+        client, token = client_with_csrf
+        resp = client.post(
+            "/api/apply-prefilter-suggestions",
+            data={
+                "csrf_token": token,
+                "title_include": json.dumps(["engineer"]),
+                # missing title_exclude
+            },
+        )
+        assert resp.status_code == 400
+        assert resp.get_json()["success"] is False
+
+    def test_returns_400_for_non_json_arrays(self, client_with_csrf):
+        """Non-JSON-encoded array fields return 400."""
+        client, token = client_with_csrf
+        resp = client.post(
+            "/api/apply-prefilter-suggestions",
+            data={
+                "csrf_token": token,
+                "title_include": "not json",
+                "title_exclude": "[]",
+            },
+        )
+        assert resp.status_code == 400
+
+    def test_returns_400_when_include_and_exclude_overlap(
+        self, client_with_csrf, tmp_path, monkeypatch
+    ):
+        """Overlapping include/exclude terms return 400 (disjoint-set guard)."""
+        client, token = client_with_csrf
+        path = str(tmp_path / "config.json")
+        monkeypatch.setattr(app_module, "_CONFIG_PATH", path)
+        self._write_config(path, {})
+        resp = self._post_suggestions(
+            client,
+            ["engineer", "manager"],
+            ["manager", "director"],
+            csrf_token=token,
+        )
+        assert resp.status_code == 400
+        body = resp.get_json()
+        assert body["success"] is False
+        assert "manager" in body["error"]
+
+    # ------------------------------------------------------------------
+    # Input validation: length / count limits (new — review item 2)
+    # ------------------------------------------------------------------
+
+    def test_parse_rejects_pattern_over_max_length(self):
+        """_parse_import_response rejects a response where any pattern exceeds _MAX_PATTERN_LEN."""
+        over_long = "x" * (app_module._MAX_PATTERN_LEN + 1)
+        raw = json.dumps({
+            "primary_skills": [],
+            "education": [],
+            "seniority": "",
+            "preferred_industries": [],
+            "location_center": None,
+            "prefilter_suggestions": {
+                "title_include": [over_long],
+                "title_exclude": [],
+            },
+        })
+        assert app_module._parse_import_response(raw) is None
+
+    def test_parse_accepts_pattern_at_exact_max_length(self):
+        """_parse_import_response accepts a pattern that is exactly _MAX_PATTERN_LEN chars."""
+        exact = "x" * app_module._MAX_PATTERN_LEN
+        raw = json.dumps({
+            "primary_skills": [],
+            "education": [],
+            "seniority": "",
+            "preferred_industries": [],
+            "location_center": None,
+            "prefilter_suggestions": {
+                "title_include": [exact],
+                "title_exclude": [],
+            },
+        })
+        result = app_module._parse_import_response(raw)
+        assert result is not None
+        assert exact in result["prefilter_suggestions"]["title_include"]
+
+    def test_parse_rejects_list_over_max_count(self):
+        """_parse_import_response rejects a response where a list exceeds _MAX_PATTERNS_PER_LIST."""
+        too_many = [f"term{i}" for i in range(app_module._MAX_PATTERNS_PER_LIST + 1)]
+        raw = json.dumps({
+            "primary_skills": [],
+            "education": [],
+            "seniority": "",
+            "preferred_industries": [],
+            "location_center": None,
+            "prefilter_suggestions": {
+                "title_include": too_many,
+                "title_exclude": [],
+            },
+        })
+        assert app_module._parse_import_response(raw) is None
+
+    def test_parse_accepts_list_at_exact_max_count(self):
+        """_parse_import_response accepts a list with exactly _MAX_PATTERNS_PER_LIST items."""
+        exact_count = [f"term{i}" for i in range(app_module._MAX_PATTERNS_PER_LIST)]
+        raw = json.dumps({
+            "primary_skills": [],
+            "education": [],
+            "seniority": "",
+            "preferred_industries": [],
+            "location_center": None,
+            "prefilter_suggestions": {
+                "title_include": exact_count,
+                "title_exclude": [],
+            },
+        })
+        result = app_module._parse_import_response(raw)
+        assert result is not None
+        assert len(result["prefilter_suggestions"]["title_include"]) == app_module._MAX_PATTERNS_PER_LIST
+
+    # ------------------------------------------------------------------
+    # Lowercase normalisation on merge (new — review item 4)
+    # ------------------------------------------------------------------
+
+    def test_merge_normalises_existing_and_new_to_lowercase(
+        self, client_with_csrf, tmp_path, monkeypatch
+    ):
+        """Existing mixed-case patterns and new suggestions are all lowercased on merge."""
+        client, token = client_with_csrf
+        path = str(tmp_path / "config.json")
+        monkeypatch.setattr(app_module, "_CONFIG_PATH", path)
+        self._write_config(
+            path,
+            {"prefilter": {"title_include": ["Engineer"], "title_exclude": []}},
+        )
+        resp = self._post_suggestions(
+            client, ["engineer", "developer"], [], csrf_token=token
+        )
+        assert resp.status_code == 200
+        with open(path) as fh:
+            cfg = json.load(fh)
+        inc = cfg["prefilter"]["title_include"]
+        # All entries must be lowercase.
+        assert all(s == s.lower() for s in inc), f"Mixed-case entries found: {inc}"
+        # "engineer" must appear exactly once (deduped).
+        assert inc.count("engineer") == 1
+        # "developer" must be present.
+        assert "developer" in inc
+
+    # ------------------------------------------------------------------
+    # Happy-path / merge / preservation tests (migrated from JSON to form)
+    # ------------------------------------------------------------------
+
+    def test_fresh_apply_writes_new_prefilter(self, client_with_csrf, tmp_path, monkeypatch):
+        """Suggestions are written to an empty config's prefilter block."""
+        client, token = client_with_csrf
+        path = str(tmp_path / "config.json")
+        monkeypatch.setattr(app_module, "_CONFIG_PATH", path)
+        self._write_config(path, {})
+        resp = self._post_suggestions(client, ["engineer"], ["director"], csrf_token=token)
+        assert resp.status_code == 200
+        assert resp.get_json()["success"] is True
+        with open(path) as fh:
+            cfg = json.load(fh)
+        assert "engineer" in cfg["prefilter"]["title_include"]
+        assert "director" in cfg["prefilter"]["title_exclude"]
+
+    def test_merge_apply_unions_with_existing(self, client_with_csrf, tmp_path, monkeypatch):
+        """Suggestions are merged with existing prefilter without removing old terms."""
+        client, token = client_with_csrf
+        path = str(tmp_path / "config.json")
+        monkeypatch.setattr(app_module, "_CONFIG_PATH", path)
+        self._write_config(
+            path,
+            {"prefilter": {"title_include": ["staff"], "title_exclude": ["intern"]}},
+        )
+        resp = self._post_suggestions(client, ["engineer"], ["manager"], csrf_token=token)
+        assert resp.status_code == 200
+        with open(path) as fh:
+            cfg = json.load(fh)
+        pf = cfg["prefilter"]
+        assert "staff" in pf["title_include"]
+        assert "engineer" in pf["title_include"]
+        assert "intern" in pf["title_exclude"]
+        assert "manager" in pf["title_exclude"]
+
+    def test_apply_preserves_other_prefilter_keys(self, client_with_csrf, tmp_path, monkeypatch):
+        """require_contract_time / type are not touched by apply."""
+        client, token = client_with_csrf
+        path = str(tmp_path / "config.json")
+        monkeypatch.setattr(app_module, "_CONFIG_PATH", path)
+        self._write_config(
+            path,
+            {
+                "prefilter": {
+                    "title_include": [],
+                    "title_exclude": [],
+                    "require_contract_time": "full_time",
+                    "require_contract_type": "permanent",
+                }
+            },
+        )
+        resp = self._post_suggestions(client, ["engineer"], [], csrf_token=token)
+        assert resp.status_code == 200
+        with open(path) as fh:
+            cfg = json.load(fh)
+        pf = cfg["prefilter"]
+        assert pf["require_contract_time"] == "full_time"
+        assert pf["require_contract_type"] == "permanent"
+
+    def test_returns_500_when_config_unreadable(self, client_with_csrf, tmp_path, monkeypatch):
+        """Missing config.json returns 500."""
+        client, token = client_with_csrf
+        path = str(tmp_path / "config_missing.json")
+        monkeypatch.setattr(app_module, "_CONFIG_PATH", path)
+        # path never created — doesn't exist
+        resp = self._post_suggestions(client, ["engineer"], [], csrf_token=token)
+        assert resp.status_code == 500
+        assert resp.get_json()["success"] is False
+
+    def test_dedup_on_apply(self, client_with_csrf, tmp_path, monkeypatch):
+        """Applying suggestions that duplicate existing terms does not create dupes."""
+        client, token = client_with_csrf
+        path = str(tmp_path / "config.json")
+        monkeypatch.setattr(app_module, "_CONFIG_PATH", path)
+        self._write_config(
+            path,
+            {"prefilter": {"title_include": ["engineer"], "title_exclude": []}},
+        )
+        resp = self._post_suggestions(
+            client, ["engineer", "developer"], [], csrf_token=token
+        )
+        assert resp.status_code == 200
+        with open(path) as fh:
+            cfg = json.load(fh)
+        assert cfg["prefilter"]["title_include"].count("engineer") == 1

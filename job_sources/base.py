@@ -39,7 +39,18 @@ class JobSource(ABC):
 
     Concrete sub-classes encapsulate source-specific API calls, pagination,
     and field normalisation so that ``ingest.py`` remains source-agnostic.
+
+    Class Attributes:
+        REQUIRED_SEARCH_FIELDS: Tuple of ``config["search"]`` key names that
+            must be present, non-empty, and non-zero for this source to run.
+            Defaults to ``()`` — sources that do not read ``config["search"]``
+            leave this empty so they are never flagged by the search-config
+            validator.  Populate on subclasses that depend on search params
+            (e.g. Adzuna needs ``country``, ``what``, ``results_per_page``,
+            and ``max_pages``).
     """
+
+    REQUIRED_SEARCH_FIELDS: tuple[str, ...] = ()
 
     @abstractmethod
     def fetch_page(self, page: int) -> list[dict]:

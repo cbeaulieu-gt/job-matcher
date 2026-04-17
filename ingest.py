@@ -27,6 +27,7 @@ import os
 import re
 import sys
 import time
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 import requests
@@ -35,7 +36,7 @@ from geopy.distance import geodesic
 from geopy.geocoders import Nominatim
 
 import db
-from job_sources import make_enabled_sources
+from job_sources import make_enabled_sources, get_required_search_fields
 from providers import build_provider_chain, LLMProvider
 from credentials import CredentialError, load_providers
 
@@ -139,8 +140,100 @@ def _configure_file_logging() -> None:
 # ---------------------------------------------------------------------------
 
 _REQUIRED_TOP_LEVEL: tuple[str, ...] = ()  # No top-level required keys remain; source credentials are in providers.json
+# _REQUIRED_SEARCH is the canonical list of config["search"] keys that Adzuna
+# requires.  It is intentionally kept in sync with
+# AdzunaClient.REQUIRED_SEARCH_FIELDS — both must list the same keys.
+# validate_search_config() is the preferred path for new callers; load_config()
+# uses it via _validate_required_search_keys() as a compatibility shim so
+# that the CLI exit behaviour is unchanged.
 _REQUIRED_SEARCH = ("country", "what", "results_per_page", "max_pages")
 _REQUIRED_SCORING = ("threshold",)
+
+
+# ---------------------------------------------------------------------------
+# Search-config validation
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ValidationIssue:
+    """A single search-config validation failure for one source.
+
+    Attributes:
+        source_key: The plugin key (e.g. ``"adzuna"``) whose required
+            search fields are missing or empty.
+        missing_fields: List of ``config["search"]`` key names that are
+            absent, empty strings, or zero.
+    """
+
+    source_key: str
+    missing_fields: list[str] = field(default_factory=list)
+
+
+def _is_search_field_empty(value: object) -> bool:
+    """Return True when *value* should be treated as "not configured".
+
+    A field is considered empty when it is ``None``, an empty or
+    whitespace-only string, or a numeric zero.  Non-zero numbers and
+    non-empty strings are considered configured.
+
+    Args:
+        value: The raw value read from ``config["search"]``.
+
+    Returns:
+        ``True`` if the field is absent or empty; ``False`` otherwise.
+    """
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, (int, float)):
+        return value == 0
+    return False
+
+
+def validate_search_config(
+    config: dict,
+    providers_data: dict,
+) -> list[ValidationIssue]:
+    """Validate that enabled sources have the search-config fields they need.
+
+    For every enabled source that declares ``REQUIRED_SEARCH_FIELDS``,
+    checks each required key in ``config["search"]`` for presence,
+    non-empty string value, and non-zero numeric value.
+
+    This is the **single, shared validator** used by:
+      * ``load_config()`` (CLI path — raises ``SystemExit`` on failure)
+      * ``/settings`` GET render (advisory warning banner)
+      * ``/api/ingest/preflight`` (ingest drawer pre-flight check)
+
+    Args:
+        config:         Full config dict (from ``config/config.json``).
+        providers_data: Full providers dict (from ``credentials.load_providers``).
+                        Used to determine which sources are currently enabled.
+
+    Returns:
+        List of :class:`ValidationIssue` objects — one per source with
+        missing or empty required fields.  An empty list means all enabled
+        sources are fully configured.
+    """
+    search: dict = config.get("search") or {}
+    required_by_source = get_required_search_fields(providers_data)
+
+    issues: list[ValidationIssue] = []
+    for source_key, required_fields in required_by_source:
+        missing: list[str] = []
+        for field_name in required_fields:
+            raw = search.get(field_name)
+            if raw is None or _is_search_field_empty(raw):
+                missing.append(field_name)
+        if missing:
+            issues.append(ValidationIssue(
+                source_key=source_key,
+                missing_fields=missing,
+            ))
+
+    return issues
 
 
 def load_config(path: str = _DEFAULT_CONFIG_PATH) -> dict:
@@ -149,8 +242,23 @@ def load_config(path: str = _DEFAULT_CONFIG_PATH) -> dict:
     Raises SystemExit with a descriptive message if the file cannot be read
     or any required key is missing.
 
+    Search-field validation uses ``_REQUIRED_SEARCH`` unconditionally (the
+    legacy behaviour) so that a CLI run always fails fast on a missing search
+    block even when no enabled-source context is available.  The preferred,
+    source-aware check is :func:`validate_search_config`.
+
     LLM provider API keys are no longer validated here — they are loaded from
     ``config/providers.json`` via :func:`credentials.load_providers`.
+
+    Args:
+        path: Filesystem path to ``config.json``.
+
+    Returns:
+        Parsed config dict.
+
+    Raises:
+        SystemExit: If the file is missing, not valid JSON, or any required
+            key is absent, an empty string, or zero.
     """
     try:
         with open(path, encoding="utf-8") as fh:
@@ -168,7 +276,12 @@ def load_config(path: str = _DEFAULT_CONFIG_PATH) -> dict:
 
     search = config.get("search", {})
     for key in _REQUIRED_SEARCH:
-        if key not in search:
+        # Deep validation: reject absent, empty string, and zero — not just
+        # missing keys.  Previously only key presence was checked, which
+        # allowed values like "" or 0 to pass here and crash Adzuna at
+        # runtime.
+        raw = search.get(key)
+        if raw is None or _is_search_field_empty(raw):
             missing.append(f"search.{key}")
 
     scoring = config.get("scoring", {})

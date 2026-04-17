@@ -501,6 +501,109 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Pre-flight validation
+  // ---------------------------------------------------------------------------
+
+  /**
+   * ID of the current pre-flight error notice, if one is shown.
+   * Cleared when the notice is removed or a new ingest starts.
+   */
+  var preflightNoticeId = "ingest-preflight-error";
+
+  /**
+   * Remove any existing pre-flight error notice from the drawer.
+   */
+  function clearPreflightNotice() {
+    var existing = document.getElementById(preflightNoticeId);
+    if (existing) { existing.parentNode.removeChild(existing); }
+  }
+
+  /**
+   * Show a pre-flight validation error inside the drawer, above the event list.
+   *
+   * @param {Array<{source: string, missing_fields: string[]}>} issues
+   */
+  function showPreflightError(issues) {
+    clearPreflightNotice();
+
+    var lines = issues.map(function (issue) {
+      return escapeHtml(issue.source) +
+        " requires: " +
+        issue.missing_fields.map(escapeHtml).join(", ");
+    });
+
+    var notice = document.createElement("div");
+    notice.id = preflightNoticeId;
+    notice.className = "ingest-preflight-error";
+    notice.setAttribute("role", "alert");
+    notice.innerHTML =
+      "<strong>&#9888; Cannot start ingest</strong> &mdash; " +
+      "Search Settings are incomplete.<br>" +
+      "<span class=\"ingest-preflight-detail\">" + lines.join("; ") + ".</span><br>" +
+      "<a href=\"/settings?tab=search\" class=\"ingest-preflight-link\">" +
+      "Go to Search Settings &#8594;</a>";
+
+    // Insert before the event list so it appears at the top of the drawer body.
+    if (eventList && eventList.parentNode) {
+      eventList.parentNode.insertBefore(notice, eventList);
+    }
+  }
+
+  /**
+   * Run the preflight check and either allow the HTMX form submit or block it.
+   *
+   * Called from htmx:confirm — returning false cancels the request, true allows it.
+   * We fetch /api/ingest/preflight synchronously-ish using a Promise; to keep
+   * the HTMX confirm hook synchronous we disable the submit button, run an async
+   * check, and re-submit programmatically if the check passes.
+   *
+   * @param {Event} evt - The htmx:confirm CustomEvent.
+   * @returns {void}
+   */
+  function runPreflight(evt) {
+    // Always cancel the original event; we will re-trigger after the async check.
+    evt.preventDefault();
+
+    var form = evt.detail && evt.detail.elt;
+    var submitBtn = form && form.querySelector("button[type='submit']");
+
+    if (submitBtn) { submitBtn.disabled = true; }
+    clearPreflightNotice();
+
+    fetch("/api/ingest/preflight", { method: "GET" })
+      .then(function (resp) {
+        if (resp.ok) {
+          // All clear — clear any old notice and proceed with the ingest.
+          clearPreflightNotice();
+          if (submitBtn) { submitBtn.disabled = false; }
+          evt.detail.issueRequest();
+          return;
+        }
+        return resp.json().then(function (body) {
+          if (submitBtn) { submitBtn.disabled = false; }
+          showPreflightError((body && body.issues) || []);
+        });
+      })
+      .catch(function () {
+        // Network failure — allow the submit so a server-side error surfaces
+        // rather than silently blocking the user.
+        if (submitBtn) { submitBtn.disabled = false; }
+        evt.detail.issueRequest();
+      });
+  }
+
+  // Attach preflight check to the ingest trigger form via htmx:confirm.
+  // htmx:confirm fires before any request when hx-confirm is set, or
+  // unconditionally when we listen at the document level and filter by path.
+  document.body.addEventListener("htmx:confirm", function (evt) {
+    var detail = evt.detail || {};
+    var path = (detail.path) || "";
+    if (path.indexOf("/ingest/trigger") !== -1) {
+      runPreflight(evt);
+    }
+  });
+
+  // ---------------------------------------------------------------------------
   // HTMX integration — auto-connect when ingest is triggered via the UI
   // ---------------------------------------------------------------------------
 
@@ -513,6 +616,7 @@
       // then connect after a brief pause to let the subprocess start.
       closeSSE();
       resetDrawer();
+      clearPreflightNotice();
       setTimeout(connectSSE, 500);
     }
   });

@@ -81,6 +81,65 @@
     .sortable-ghost { opacity: 0.3; }
     .sortable-drag  { opacity: 0.9; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
 
+    /* ── Search-config warning banner ───────────────────────────── */
+    .config-warn-banner {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.75rem;
+      padding: 0.75rem 1rem;
+      margin-bottom: 1.25rem;
+      background: var(--score-mid-bg);
+      border: 1px solid var(--score-mid-border);
+      border-radius: 6px;
+      color: var(--score-mid-text);
+      font-size: 0.875rem;
+      line-height: 1.5;
+    }
+    .config-warn-icon {
+      font-size: 1.1rem;
+      flex-shrink: 0;
+      margin-top: 0.1rem;
+    }
+    .config-warn-body {
+      flex: 1;
+    }
+    .config-warn-link {
+      display: inline-block;
+      margin-top: 0.3rem;
+      color: var(--score-mid-text);
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    .config-warn-link:hover {
+      color: var(--text-accent-bright);
+    }
+
+    /* ── Tab button warning badge ───────────────────────────────── */
+    .settings-tab-btn--warn {
+      color: var(--score-mid-text);
+    }
+    .tab-warn-badge {
+      font-size: 0.75rem;
+      margin-left: 0.3rem;
+      vertical-align: middle;
+    }
+
+    /* ── Input warning state ────────────────────────────────────── */
+    .settings-input--warn {
+      border-color: var(--score-mid-border);
+      background: var(--score-mid-bg);
+      color: var(--score-mid-text);
+    }
+    .settings-input--warn:focus {
+      outline-color: var(--score-mid-border);
+    }
+
+    /* ── Required-field label ───────────────────────────────────── */
+    .field-required {
+      color: var(--score-mid-text);
+      font-weight: 600;
+    }
+
     /* ── Per-source enabled toggle ───────────────────────────────────────── */
     .source-toggle {
       margin-left: auto;
@@ -233,6 +292,24 @@
     <p class="save-error">{{ error }}</p>
   {% endif %}
 
+  {# ── Search-config warning banner ─────────────────────────────── #}
+  {# Shown when an enabled source needs config["search"] fields that  #}
+  {# are absent, empty, or zero. Advisory only — settings can still   #}
+  {# be saved, but ingest will not start until the gaps are filled.   #}
+  {% if search_issues %}
+    <div class="config-warn-banner" role="alert" aria-live="polite">
+      <span class="config-warn-icon" aria-hidden="true">&#9888;</span>
+      <div class="config-warn-body">
+        {% for issue in search_issues %}
+          <strong>{{ issue.source_key | capitalize }}</strong>
+          is enabled but the following Search Settings are missing or empty:
+          <strong>{{ issue.missing_fields | join(", ") }}</strong>.
+        {% endfor %}
+        <a href="/settings?tab=search" class="config-warn-link">Go to Search Settings &#8594;</a>
+      </div>
+    </div>
+  {% endif %}
+
   {# ── Tab buttons ──────────────────────────────────────────────── #}
   <div class="settings-tabs" role="tablist">
     <button
@@ -250,12 +327,12 @@
       data-tab="sources"
       type="button">Job Sources</button>
     <button
-      class="settings-tab-btn{% if active_tab == 'search' %} active{% endif %}"
+      class="settings-tab-btn{% if active_tab == 'search' %} active{% endif %}{% if search_issues %} settings-tab-btn--warn{% endif %}"
       role="tab"
       aria-selected="{% if active_tab == 'search' %}true{% else %}false{% endif %}"
       aria-controls="pane-search"
       data-tab="search"
-      type="button">Search Settings</button>
+      type="button">Search Settings{% if search_issues %} <span class="tab-warn-badge" aria-label="configuration warning">&#9888;</span>{% endif %}</button>
   </div>
 
   {# ── LLM Providers tab ────────────────────────────────────────── #}
@@ -459,6 +536,43 @@
     <form class="settings-form" method="post" action="/settings">
       <input type="hidden" name="tab" value="search">
 
+      {# ── Search query fields (required by Adzuna) ──────────── #}
+      <div class="provider-row">
+        <div class="provider-header">
+          <span class="provider-name">Search Query</span>
+        </div>
+
+        <label class="settings-label" for="search_country">Country</label>
+        <p class="field-hint">
+          Adzuna country code, e.g. <code>us</code>, <code>gb</code>, <code>au</code>.
+          <strong class="field-required">Required for Adzuna.</strong>
+        </p>
+        <input id="search_country" class="settings-input{% if search_issues and 'country' in (search_issues[0].missing_fields if search_issues else []) %} settings-input--warn{% endif %}"
+               type="text" name="search_country"
+               placeholder="us"
+               value="{{ search_cfg.get('country', '') }}">
+
+        <label class="settings-label" for="search_what">Job Title / Keywords</label>
+        <p class="field-hint">
+          Search terms, e.g. <code>software engineer</code>.
+          <strong class="field-required">Required for Adzuna.</strong>
+        </p>
+        <input id="search_what" class="settings-input{% if search_issues and 'what' in (search_issues[0].missing_fields if search_issues else []) %} settings-input--warn{% endif %}"
+               type="text" name="search_what"
+               placeholder="software engineer"
+               value="{{ search_cfg.get('what', '') }}">
+
+        <label class="settings-label" for="search_where">Location</label>
+        <p class="field-hint">
+          City, region, or postcode to narrow results, e.g. <code>New York</code>.
+          Optional — leave blank for nationwide results.
+        </p>
+        <input id="search_where" class="settings-input" type="text" name="search_where"
+               placeholder="New York"
+               value="{{ search_cfg.get('where', '') }}">
+      </div>
+
+      {# ── Pagination fields ──────────────────────────────────── #}
       <div class="provider-row">
         <div class="provider-header">
           <span class="provider-name">Ingest Pagination</span>
@@ -467,17 +581,19 @@
         <label class="settings-label" for="search_results_per_page">Results Per Page</label>
         <p class="field-hint">
           Number of results fetched per page from Adzuna. Maximum is 50.
+          <strong class="field-required">Required for Adzuna.</strong>
         </p>
-        <input id="search_results_per_page" class="settings-input" type="number"
-               name="search_results_per_page" min="1" max="50" step="1"
+        <input id="search_results_per_page" class="settings-input{% if search_issues and 'results_per_page' in (search_issues[0].missing_fields if search_issues else []) %} settings-input--warn{% endif %}"
+               type="number" name="search_results_per_page" min="1" max="50" step="1"
                value="{{ search_cfg.get('results_per_page', '') }}">
 
         <label class="settings-label" for="search_max_pages">Max Pages</label>
         <p class="field-hint">
           Maximum number of pages fetched per ingest run. Caps total listings processed.
+          <strong class="field-required">Required for Adzuna.</strong>
         </p>
-        <input id="search_max_pages" class="settings-input" type="number"
-               name="search_max_pages" min="1" step="1"
+        <input id="search_max_pages" class="settings-input{% if search_issues and 'max_pages' in (search_issues[0].missing_fields if search_issues else []) %} settings-input--warn{% endif %}"
+               type="number" name="search_max_pages" min="1" step="1"
                value="{{ search_cfg.get('max_pages', '') }}">
       </div>
 

@@ -6,6 +6,11 @@ services:
     env_file: .env.dev
     volumes:
       - pgdata_dev:/var/lib/postgresql/data
+      # Creates jobmatcher_test alongside jobmatcher_dev on first boot.
+      # Only runs when the volume is empty (fresh container). Existing setups
+      # need a one-time manual: docker exec job-matcher-pr-dev-db-1 psql -U
+      # jobmatcher -d postgres -c "CREATE DATABASE jobmatcher_test;"
+      - ./scripts/initdb:/docker-entrypoint-initdb.d:ro
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}

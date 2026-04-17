@@ -20,19 +20,25 @@ python ingest.py -v                # Short form of --verbose
 # Run web UI (http://localhost:5000)
 python app.py
 
-# Run tests (requires PostgreSQL — set DATABASE_URL before running)
-# Option A: use the docker-compose dev database
+# Run tests (requires PostgreSQL pointed at a TEST database — set DATABASE_URL)
+# Option A: use jobmatcher_test (created automatically on fresh docker volume;
+#           for existing setups run once: docker exec job-matcher-pr-dev-db-1
+#           psql -U jobmatcher -d postgres -c "CREATE DATABASE jobmatcher_test;")
 # PowerShell
-#   $env:DATABASE_URL = "postgresql://jobmatcher:<password>@localhost:5432/jobmatcher"; pytest
+#   $env:DATABASE_URL = "postgresql://jobmatcher:<password>@localhost:5432/jobmatcher_test"; pytest
 # Bash/zsh
-#   export DATABASE_URL="postgresql://jobmatcher:<password>@localhost:5432/jobmatcher" && pytest
+#   export DATABASE_URL="postgresql://jobmatcher:<password>@localhost:5432/jobmatcher_test" && pytest
 # (<password> is in .env.dev or docker-compose.dev.yml)
-# Option B: DATABASE_URL already exported in your shell
+# Option B: DATABASE_URL already exported in your shell pointing at a test DB
 pytest
 pytest tests/test_prefilter.py     # Single file
 pytest -k "test_title_include"     # By name pattern
-# NOTE: test isolation uses TRUNCATE on a shared PostgreSQL instance, not isolated
-# SQLite files. Always run tests against a throwaway/dev database — never production.
+# TEST ISOLATION: each test uses scoped DELETE with a test-specific source_id
+# prefix (e.g. "test_114_", "cdb-") — only rows inserted by that test are
+# removed. No blanket TRUNCATE is used anywhere in the suite.
+# SAFETY GUARD: conftest.py refuses to run against a DB whose name does not
+# contain "test" (e.g. jobmatcher_dev). Set ALLOW_NON_TEST_DB=1 to override
+# (emits a warning). This prevents accidental data loss on dev/prod databases.
 ```
 
 ## Architecture

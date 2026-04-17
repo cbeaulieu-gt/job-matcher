@@ -7,8 +7,6 @@ passes env values into this function.
 """
 from __future__ import annotations
 
-import sys
-
 import pytest
 
 from tests._db_name_guard import check_database_url_is_test

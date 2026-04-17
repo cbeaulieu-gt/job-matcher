@@ -40,6 +40,7 @@ __all__ = [
     "get_sources",
     "make_source",
     "make_enabled_sources",
+    "get_required_search_fields",
 ]
 
 # ---------------------------------------------------------------------------
@@ -185,10 +186,57 @@ def make_enabled_sources(providers_data: dict, config: dict) -> list[JobSource]:
 
         try:
             result.append(cls(config=config, credentials=src_cfg))
-        except ValueError as exc:
+        except (ValueError, KeyError) as exc:
             _log.warning(
                 "Source '%s' failed to initialise — skipping: %s",
                 key, exc,
             )
+
+    return result
+
+
+def get_required_search_fields(
+    providers_data: dict,
+) -> list[tuple[str, tuple[str, ...]]]:
+    """Return required search field tuples for each enabled source.
+
+    Iterates the source registry and returns ``(source_key, required_fields)``
+    pairs for every source that is currently enabled *and* declares at least
+    one required search field via ``REQUIRED_SEARCH_FIELDS``.  Sources with
+    an empty tuple (the default) are excluded.
+
+    This helper is the single authoritative query for "which enabled sources
+    need ``config['search']`` fields?" — used by
+    ``ingest.validate_search_config`` and the Flask settings render path so
+    the check is never duplicated.
+
+    Args:
+        providers_data: Dict as returned by
+            ``credentials.load_providers()``.  The
+            ``providers_data["job_sources"]`` section is used to determine
+            which sources are enabled.
+
+    Returns:
+        List of ``(source_key, required_fields)`` tuples in registry order,
+        restricted to enabled sources that have a non-empty
+        ``REQUIRED_SEARCH_FIELDS`` declaration.
+    """
+    sources = get_sources()
+    sources_cfg: dict = providers_data.get("job_sources") or {}
+    result: list[tuple[str, tuple[str, ...]]] = []
+
+    for key, cls in sources.items():
+        required: tuple[str, ...] = getattr(cls, "REQUIRED_SEARCH_FIELDS", ())
+        if not required:
+            continue
+
+        src_cfg = sources_cfg.get(key) or {}
+        # A source with REQUIRED_SEARCH_FIELDS is keyed by definition (only
+        # keyed sources read config["search"]), so default enabled=False.
+        is_enabled = bool(src_cfg.get("enabled", False))
+        if not is_enabled:
+            continue
+
+        result.append((key, required))
 
     return result

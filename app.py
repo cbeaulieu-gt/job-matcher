@@ -33,6 +33,7 @@ from providers import _PROVIDER_CLASS_MAP, build_provider_chain, generate_with_f
 from providers.anthropic_provider import strip_fences
 from providers.base import _sanitise_detail
 from job_sources import get_sources
+from ingest import validate_search_config, ValidationIssue
 
 app = Flask(__name__)
 # A stable secret key is required for session-based CSRF tokens.  In production
@@ -361,6 +362,37 @@ def _config_warnings() -> list[str]:
             "Add your App ID and App Key on the <a href=\"/settings\">Settings page</a>."
         )
     return warnings
+
+
+def _get_search_validation_issues() -> list[ValidationIssue]:
+    """Return search-config validation issues for enabled sources.
+
+    Loads providers and config safely (returns empty list on any error) and
+    delegates to :func:`ingest.validate_search_config`.  Used by the
+    ``/settings`` GET render and the ``/api/ingest/preflight`` endpoint so
+    the same logic is never duplicated.
+
+    Returns:
+        List of :class:`ingest.ValidationIssue` objects.  Empty when all
+        enabled sources have complete search configuration.
+    """
+    try:
+        providers = load_providers(providers_path=_PROVIDERS_PATH)
+    except CredentialError:
+        providers = {}
+
+    try:
+        config = load_config(_CONFIG_PATH)
+    except SystemExit as exc:
+        # config.json missing or malformed — treat as "no issues" so the
+        # /settings page can still render and the user can fix the file.
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "Could not load config for search validation: %s", exc
+        )
+        return []
+
+    return validate_search_config(config, providers)
 
 
 # ---------------------------------------------------------------------------
@@ -972,6 +1004,39 @@ def ingest_trigger():
     return resp
 
 
+@app.route("/api/ingest/preflight", methods=["GET"])
+def ingest_preflight():
+    """Pre-flight validation endpoint for the ingest drawer.
+
+    Returns a JSON object describing whether the current configuration is
+    valid enough to start an ingest run.  The ingest drawer calls this
+    before enabling the "Run Ingestion" button so users learn about
+    configuration gaps before submitting the form.
+
+    Returns:
+        200 with ``{"ok": true}`` when all enabled sources are fully
+        configured.
+        422 with ``{"ok": false, "issues": [...]}`` when one or more enabled
+        sources have missing or empty required search fields.  Each issue in
+        the list has the shape
+        ``{"source": "<key>", "missing_fields": ["country", ...]}``.
+    """
+    issues = _get_search_validation_issues()
+    if not issues:
+        return jsonify({"ok": True})
+
+    return jsonify({
+        "ok": False,
+        "issues": [
+            {
+                "source": issue.source_key,
+                "missing_fields": issue.missing_fields,
+            }
+            for issue in issues
+        ],
+    }), 422
+
+
 @app.route("/ingest/status")
 def ingest_status():
     """Poll endpoint — returns an HTML partial reflecting current ingest state.
@@ -1302,13 +1367,26 @@ def settings():
         except OSError:
             error = "Could not save settings — check file permissions."
 
-        # Save technical search fields (results_per_page, max_pages) to config.json.
+        # Save search fields (country, what, where, results_per_page,
+        # max_pages) to config.json.
         if error is None and active_tab == "search":
             existing_cfg = load_config(_CONFIG_PATH)
             existing_search = existing_cfg.get("search") or {}
+            updated_search = dict(existing_search)
+
+            # Free-text search fields — store as-is (stripped).
+            for field_name in ("search_country", "search_what", "search_where"):
+                raw = request.form.get(field_name, "").strip()
+                config_key = field_name[len("search_"):]  # strip "search_" prefix
+                if raw:
+                    updated_search[config_key] = raw
+                elif field_name in request.form:
+                    # Explicit empty submission — allow clearing the field.
+                    updated_search.pop(config_key, None)
+
+            # Numeric search fields.
             rpp_str = request.form.get("search_results_per_page", "").strip()
             mp_str = request.form.get("search_max_pages", "").strip()
-            updated_search = dict(existing_search)
             if rpp_str:
                 try:
                     updated_search["results_per_page"] = int(rpp_str)
@@ -1319,6 +1397,7 @@ def settings():
                     updated_search["max_pages"] = int(mp_str)
                 except ValueError:
                     pass
+
             updated_cfg = dict(existing_cfg)
             updated_cfg["search"] = updated_search
             try:
@@ -1361,8 +1440,9 @@ def settings():
     if request.method == "POST" and error:
         pass  # fall through to render with error
 
-    # Pass technical search fields to the Search Settings tab.
+    # Pass search fields and validation issues to the Search Settings tab.
     search_cfg = load_config(_CONFIG_PATH).get("search") or {}
+    search_issues = _get_search_validation_issues()
 
     return render_template(
         "settings.html",
@@ -1373,6 +1453,7 @@ def settings():
         saved=saved,
         error=error,
         search_cfg=search_cfg,
+        search_issues=search_issues,
     )
 
 

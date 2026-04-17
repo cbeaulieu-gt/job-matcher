@@ -693,6 +693,22 @@ The left padding on `.ingest-event` is `calc(1rem - 3px)` (compensates for the 3
 | `.ingest-source-row` | Single source row: name left, "N fetched / N filtered / N passed" right |
 | `.ingest-source-name` | Source name cell; `--font-mono` uppercase, `--text-secondary` |
 | `#ingest-sr-announce` | Visually-hidden `aria-live="polite" aria-atomic="true"` region; populated by JS on terminal events only (`complete`/`aborted`) so screen readers announce once ("Ingest run complete. N scored, N filtered.") instead of announcing every one of 500+ individual events |
+| `.ingest-preflight-error` | Amber (`--score-mid-*`) notice injected above the event list when `/api/ingest/preflight` returns issues; removed when a new ingest starts. `role="alert"` |
+| `.ingest-preflight-detail` | Monospaced detail line listing source + missing fields inside `.ingest-preflight-error` |
+| `.ingest-preflight-link` | "Go to Search Settings →" link inside `.ingest-preflight-error`; `--score-mid-text` underline, brightens to `--text-accent-bright` on hover |
+
+### Settings Page: Search-Config Warning
+
+| Class | Element | Description |
+|---|---|---|
+| `.config-warn-banner` | `<div role="alert">` | Full-width amber banner (`--score-mid-*`) shown when an enabled source has missing search fields. Advisory — does not block saving. |
+| `.config-warn-icon` | `<span>` | `⚠` glyph, `aria-hidden`; `flex-shrink: 0` |
+| `.config-warn-body` | `<div>` | Text + link; `flex: 1` |
+| `.config-warn-link` | `<a>` | "Go to Search Settings →"; `--score-mid-text` underline |
+| `.settings-tab-btn--warn` | modifier on `.settings-tab-btn` | Colors the Search Settings tab label amber when issues exist |
+| `.tab-warn-badge` | `<span>` | `⚠` inline glyph appended to the tab label; `aria-label="configuration warning"` |
+| `.settings-input--warn` | modifier on `.settings-input` | Amber border + background tint on inputs whose field is in the missing-fields list |
+| `.field-required` | `<strong>` | Inline "Required for …" label; `--score-mid-text`, weight 600 |
 
 **Accessibility — why `aria-live` is off the event list:** At 500+ events per run, `aria-live="polite"` on the event list floods a screen reader's audio queue. `aria-live` is removed from `.ingest-event-list`; the `#ingest-sr-announce` hidden div handles announcements at the right granularity (terminal events only).
 

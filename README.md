@@ -61,6 +61,8 @@ Copy-Item config\profile.example.json config\profile.json
 
 `config/config.json` holds Adzuna-specific search parameters (`country`, `what`, `where`, etc.) and global scoring/filter options. Which sources are enabled and all source credentials (including Adzuna) are configured via the `/settings` UI after starting the web server.
 
+The **Search Settings** tab in `/settings` now exposes `country`, `what`, `where`, `results_per_page`, and `max_pages` directly — you no longer need to edit `config.json` by hand for these fields. If Adzuna is enabled but any required search field is missing, a warning banner is shown on the Settings page and the ingest drawer blocks the start button until the gaps are filled.
+
 LLM provider keys (Anthropic, OpenAI, Gemini) are configured via `config/providers.json` and the `/settings` UI.
 
 **Adzuna source settings (optional — only needed if you want to use the Adzuna source)**

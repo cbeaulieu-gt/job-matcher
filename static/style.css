@@ -2656,3 +2656,39 @@ input[type="number"] {
   border: 0;
 }
 
+/* ── Ingest drawer: pre-flight validation error ────────────────────────────── */
+
+/* Shown inside the ingest drawer when /api/ingest/preflight returns issues.
+   Uses amber (--score-mid-*) — same semantic as "warning / setup required". */
+.ingest-preflight-error {
+  margin: 0.75rem 0.75rem 0;
+  padding: 0.65rem 0.85rem;
+  background: var(--score-mid-bg);
+  border: 1px solid var(--score-mid-border);
+  border-radius: 5px;
+  color: var(--score-mid-text);
+  font-size: 0.8rem;
+  line-height: 1.55;
+}
+
+.ingest-preflight-detail {
+  display: block;
+  margin-top: 0.2rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.ingest-preflight-link {
+  display: inline-block;
+  margin-top: 0.3rem;
+  color: var(--score-mid-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  font-size: 0.8rem;
+}
+
+.ingest-preflight-link:hover {
+  color: var(--text-accent-bright);
+}
+

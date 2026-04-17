@@ -579,14 +579,32 @@
           evt.detail.issueRequest();
           return;
         }
-        return resp.json().then(function (body) {
-          if (submitBtn) { submitBtn.disabled = false; }
-          showPreflightError((body && body.issues) || []);
-        });
+        if (resp.status === 422) {
+          // Known validation failure — render the structured error and block.
+          return resp.json().then(function (body) {
+            if (submitBtn) { submitBtn.disabled = false; }
+            showPreflightError((body && body.issues) || []);
+          });
+        }
+        // 5xx or any other unexpected status — block with a generic message so
+        // the user knows something went wrong rather than silently proceeding.
+        if (submitBtn) { submitBtn.disabled = false; }
+        clearPreflightNotice();
+        var errNotice = document.createElement("div");
+        errNotice.id = preflightNoticeId;
+        errNotice.className = "ingest-preflight-error";
+        errNotice.setAttribute("role", "alert");
+        errNotice.innerHTML =
+          "<strong>&#9888; Cannot start ingest</strong> &mdash; " +
+          "Unable to verify settings \u2014 please try again.";
+        if (eventList && eventList.parentNode) {
+          eventList.parentNode.insertBefore(errNotice, eventList);
+        }
       })
-      .catch(function () {
-        // Network failure — allow the submit so a server-side error surfaces
-        // rather than silently blocking the user.
+      .catch(function (networkErr) {
+        // fetch() itself rejected (DNS failure, offline, etc.) — fail open so
+        // the user is not silently blocked when the server is unreachable.
+        console.warn("Preflight unreachable, allowing submit:", networkErr);
         if (submitBtn) { submitBtn.disabled = false; }
         evt.detail.issueRequest();
       });

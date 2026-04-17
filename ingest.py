@@ -140,13 +140,8 @@ def _configure_file_logging() -> None:
 # ---------------------------------------------------------------------------
 
 _REQUIRED_TOP_LEVEL: tuple[str, ...] = ()  # No top-level required keys remain; source credentials are in providers.json
-# _REQUIRED_SEARCH is the canonical list of config["search"] keys that Adzuna
-# requires.  It is intentionally kept in sync with
-# AdzunaClient.REQUIRED_SEARCH_FIELDS — both must list the same keys.
-# validate_search_config() is the preferred path for new callers; load_config()
-# uses it via _validate_required_search_keys() as a compatibility shim so
-# that the CLI exit behaviour is unchanged.
-_REQUIRED_SEARCH = ("country", "what", "results_per_page", "max_pages")
+# _REQUIRED_SCORING: keys that must exist inside config["scoring"].
+# load_config() validates these unconditionally because scoring is always needed.
 _REQUIRED_SCORING = ("threshold",)
 
 
@@ -237,15 +232,16 @@ def validate_search_config(
 
 
 def load_config(path: str = _DEFAULT_CONFIG_PATH) -> dict:
-    """Load and validate config/config.json.
+    """Load and structurally validate config/config.json.
 
-    Raises SystemExit with a descriptive message if the file cannot be read
-    or any required key is missing.
+    Performs only structural format validation: file must exist, be valid JSON,
+    and contain a ``search`` key that is a dict and a ``scoring.threshold`` key.
 
-    Search-field validation uses ``_REQUIRED_SEARCH`` unconditionally (the
-    legacy behaviour) so that a CLI run always fails fast on a missing search
-    block even when no enabled-source context is available.  The preferred,
-    source-aware check is :func:`validate_search_config`.
+    Search *field-content* validation (e.g. whether ``search.country`` is
+    non-empty) is **not** done here because the required fields depend on which
+    job sources are actually enabled — a context that is not available at this
+    point.  That check is delegated to :func:`validate_search_config`, which
+    ``main()`` calls after :func:`make_enabled_sources` returns.
 
     LLM provider API keys are no longer validated here — they are loaded from
     ``config/providers.json`` via :func:`credentials.load_providers`.
@@ -257,8 +253,8 @@ def load_config(path: str = _DEFAULT_CONFIG_PATH) -> dict:
         Parsed config dict.
 
     Raises:
-        SystemExit: If the file is missing, not valid JSON, or any required
-            key is absent, an empty string, or zero.
+        SystemExit: If the file is missing, not valid JSON, or
+            ``scoring.threshold`` is absent.
     """
     try:
         with open(path, encoding="utf-8") as fh:
@@ -273,16 +269,6 @@ def load_config(path: str = _DEFAULT_CONFIG_PATH) -> dict:
     for key in _REQUIRED_TOP_LEVEL:
         if key not in config or not config[key]:
             missing.append(key)
-
-    search = config.get("search", {})
-    for key in _REQUIRED_SEARCH:
-        # Deep validation: reject absent, empty string, and zero — not just
-        # missing keys.  Previously only key presence was checked, which
-        # allowed values like "" or 0 to pass here and crash Adzuna at
-        # runtime.
-        raw = search.get(key)
-        if raw is None or _is_search_field_empty(raw):
-            missing.append(f"search.{key}")
 
     scoring = config.get("scoring", {})
     for key in _REQUIRED_SCORING:
@@ -1263,6 +1249,19 @@ def run(
             if run_id is not None:
                 db.finish_ingest_run(run_id, status="success", counts={"fetched": 0})
             return
+
+        # Validate search-config fields now that we know which sources are
+        # enabled.  This is intentionally source-aware: a user who disables
+        # Adzuna will not see spurious "missing search.country" errors.
+        search_issues = validate_search_config(config, providers)
+        if search_issues:
+            for issue in search_issues:
+                logger.error(
+                    "Search config incomplete for %s: missing %s",
+                    issue.source_key,
+                    ", ".join(issue.missing_fields),
+                )
+            raise SystemExit("Fix search settings before ingesting.")
 
         chain = build_provider_chain(providers)
         dead_providers: set[str] = set()

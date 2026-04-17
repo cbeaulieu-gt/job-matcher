@@ -547,6 +547,10 @@
           Adzuna country code, e.g. <code>us</code>, <code>gb</code>, <code>au</code>.
           <strong class="field-required">Required for Adzuna.</strong>
         </p>
+        {# TODO: The expressions below use search_issues[0].missing_fields, which assumes at most
+           one source produces validation issues. When a second search-requiring plugin is added,
+           iterate all search_issues and OR the missing_fields lists together so every source's
+           incomplete fields are highlighted. See issue #252 for context. #}
         <input id="search_country" class="settings-input{% if search_issues and 'country' in (search_issues[0].missing_fields if search_issues else []) %} settings-input--warn{% endif %}"
                type="text" name="search_country"
                placeholder="us"

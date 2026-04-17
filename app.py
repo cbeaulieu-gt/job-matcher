@@ -381,7 +381,17 @@ def _get_search_validation_issues() -> list[ValidationIssue]:
     except CredentialError:
         providers = {}
 
-    config = load_config(_CONFIG_PATH)
+    try:
+        config = load_config(_CONFIG_PATH)
+    except SystemExit as exc:
+        # config.json missing or malformed — treat as "no issues" so the
+        # /settings page can still render and the user can fix the file.
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "Could not load config for search validation: %s", exc
+        )
+        return []
+
     return validate_search_config(config, providers)
 
 

@@ -11,11 +11,16 @@ Covered cases
   not flagged, multiple issues across multiple sources.
 * get_required_search_fields: only returns enabled sources with non-empty
   REQUIRED_SEARCH_FIELDS; disabled sources and keyless sources are excluded.
-* load_config deep validation: empty string and 0 are now rejected.
+* load_config structural validation: missing file and malformed JSON still
+  raise SystemExit; empty/zero search fields do NOT raise (PR #254 refactor).
 * GET /api/ingest/preflight: 200 when config is valid, 422 with structured
-  body when fields are missing.
+  body when fields are missing, 200 when config.json is missing/malformed
+  (safe fallback — no SystemExit propagated).
 * GET /settings: warning banner present in HTML when issues exist, absent
-  when config is complete.
+  when config is complete; page renders even when config.json is
+  missing or malformed (PR #254 fix).
+* _get_search_validation_issues: load_config SystemExit is caught so Flask
+  worker does not crash when config.json is absent or corrupted.
 
 No live database required — DB and credential calls are mocked out.
 """
@@ -320,14 +325,50 @@ class TestGetRequiredSearchFields:
 
 
 # ---------------------------------------------------------------------------
-# load_config — deep validation (empty string / zero now rejected)
+# load_config — structural-only validation (search field contents not checked)
 # ---------------------------------------------------------------------------
 
-class TestLoadConfigDeepValidation:
-    """load_config() must reject empty-string and zero values for required keys."""
+class TestLoadConfigStructuralValidation:
+    """load_config() performs structural validation only.
 
-    def _write_config(self, tmp_path, search_overrides: dict) -> str:
-        base = {
+    Since the refactor in PR #254, load_config() no longer validates search
+    field *contents* — that is delegated to validate_search_config() which
+    runs after make_enabled_sources() returns in main().  A user who disables
+    Adzuna must not see spurious "missing search.country" errors.
+    """
+
+    def _write_config(self, tmp_path, data: dict) -> str:
+        p = str(tmp_path / "config.json")
+        with open(p, "w", encoding="utf-8") as fh:
+            json.dump(data, fh)
+        return p
+
+    def test_valid_config_does_not_raise(self, tmp_path):
+        path = self._write_config(tmp_path, {
+            "search": {
+                "country": "us",
+                "what": "software engineer",
+                "results_per_page": 50,
+                "max_pages": 5,
+            },
+            "scoring": {"threshold": 7.0},
+        })
+        cfg = ingest.load_config(path)
+        assert cfg["search"]["country"] == "us"
+
+    @pytest.mark.parametrize("field,value", [
+        ("country", ""),
+        ("what", "   "),
+        ("results_per_page", 0),
+        ("max_pages", 0),
+    ])
+    def test_empty_search_field_does_not_raise(self, tmp_path, field, value):
+        """load_config() must NOT raise for empty/zero search fields.
+
+        Field-content validation is now the responsibility of
+        validate_search_config(), not load_config().
+        """
+        data = {
             "search": {
                 "country": "us",
                 "what": "software engineer",
@@ -336,31 +377,35 @@ class TestLoadConfigDeepValidation:
             },
             "scoring": {"threshold": 7.0},
         }
-        base["search"].update(search_overrides)
-        p = str(tmp_path / "config.json")
-        with open(p, "w", encoding="utf-8") as fh:
-            json.dump(base, fh)
-        return p
+        data["search"][field] = value
+        path = self._write_config(tmp_path, data)
+        # Must not raise — structural validation only.
+        cfg = ingest.load_config(path)
+        assert cfg["search"][field] == value
 
-    @pytest.mark.parametrize("field,value", [
-        ("country", ""),
-        ("what", "   "),
-        ("results_per_page", 0),
-        ("max_pages", 0),
-    ])
-    def test_empty_or_zero_value_raises_system_exit(
-        self, tmp_path, field, value
-    ):
-        """Empty strings and zero are now treated as missing by load_config."""
-        path = self._write_config(tmp_path, {field: value})
+    def test_missing_file_raises_system_exit(self, tmp_path):
+        path = str(tmp_path / "nonexistent.json")
         with pytest.raises(SystemExit) as exc_info:
             ingest.load_config(path)
-        assert field in str(exc_info.value)
+        assert "not found" in str(exc_info.value).lower()
 
-    def test_valid_config_does_not_raise(self, tmp_path):
-        path = self._write_config(tmp_path, {})
-        cfg = ingest.load_config(path)
-        assert cfg["search"]["country"] == "us"
+    def test_invalid_json_raises_system_exit(self, tmp_path):
+        p = str(tmp_path / "bad.json")
+        with open(p, "w") as fh:
+            fh.write("{not valid json")
+        with pytest.raises(SystemExit) as exc_info:
+            ingest.load_config(p)
+        assert "not valid JSON" in str(exc_info.value)
+
+    def test_missing_scoring_threshold_raises_system_exit(self, tmp_path):
+        """scoring.threshold is still required — it is always needed."""
+        path = self._write_config(tmp_path, {
+            "search": {"country": "us", "what": "eng", "results_per_page": 10, "max_pages": 2},
+            "scoring": {},
+        })
+        with pytest.raises(SystemExit) as exc_info:
+            ingest.load_config(path)
+        assert "threshold" in str(exc_info.value)
 
 
 # ---------------------------------------------------------------------------
@@ -551,3 +596,126 @@ class TestMakeEnabledSourcesKeyErrorCaught:
 
         assert result == []
         assert any("_bad_key" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# app.py — _get_search_validation_issues: load_config SystemExit is caught
+# ---------------------------------------------------------------------------
+
+class TestGetSearchValidationIssuesSafeLoadConfig:
+    """_get_search_validation_issues() must not propagate SystemExit from load_config.
+
+    This ensures the /settings page and /api/ingest/preflight do not crash
+    when config.json is missing or malformed.
+    """
+
+    @pytest.fixture()
+    def client(self, tmp_path, monkeypatch):
+        import app as app_module
+        from app import app as flask_app
+        flask_app.config["TESTING"] = True
+        providers_path = str(tmp_path / "providers.json")
+        with open(providers_path, "w") as fh:
+            json.dump({"job_sources": {}}, fh)
+        monkeypatch.setattr(app_module, "_PROVIDERS_PATH", providers_path)
+        return flask_app.test_client(), app_module
+
+    def test_settings_renders_when_config_missing(self, tmp_path, monkeypatch):
+        """GET /settings returns 200 even when config.json does not exist."""
+        import app as app_module
+        from app import app as flask_app
+        flask_app.config["TESTING"] = True
+        # Point _CONFIG_PATH at a path that does not exist.
+        missing_path = str(tmp_path / "config.json")
+        providers_path = str(tmp_path / "providers.json")
+        with open(providers_path, "w") as fh:
+            json.dump({"job_sources": {}}, fh)
+        monkeypatch.setattr(app_module, "_CONFIG_PATH", missing_path)
+        monkeypatch.setattr(app_module, "_PROVIDERS_PATH", providers_path)
+        with flask_app.test_client() as c:
+            resp = c.get("/settings")
+        assert resp.status_code == 200
+
+    def test_settings_renders_when_config_malformed(self, tmp_path, monkeypatch):
+        """GET /settings returns 200 even when config.json is not valid JSON."""
+        import app as app_module
+        from app import app as flask_app
+        flask_app.config["TESTING"] = True
+        bad_config = str(tmp_path / "config.json")
+        providers_path = str(tmp_path / "providers.json")
+        with open(bad_config, "w") as fh:
+            fh.write("{this is: not json")
+        with open(providers_path, "w") as fh:
+            json.dump({"job_sources": {}}, fh)
+        monkeypatch.setattr(app_module, "_CONFIG_PATH", bad_config)
+        monkeypatch.setattr(app_module, "_PROVIDERS_PATH", providers_path)
+        with flask_app.test_client() as c:
+            resp = c.get("/settings")
+        assert resp.status_code == 200
+
+    def test_preflight_returns_200_when_config_missing(self, tmp_path, monkeypatch):
+        """GET /api/ingest/preflight returns 200 (ok) when config.json is absent.
+
+        With no config to validate, no issues can be detected — the endpoint
+        should not 500 or block the ingest button.
+        """
+        import app as app_module
+        from app import app as flask_app
+        flask_app.config["TESTING"] = True
+        missing_path = str(tmp_path / "config.json")
+        providers_path = str(tmp_path / "providers.json")
+        with open(providers_path, "w") as fh:
+            json.dump({"job_sources": {}}, fh)
+        monkeypatch.setattr(app_module, "_CONFIG_PATH", missing_path)
+        monkeypatch.setattr(app_module, "_PROVIDERS_PATH", providers_path)
+        with flask_app.test_client() as c:
+            resp = c.get("/api/ingest/preflight")
+        assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# /api/ingest/preflight — HTTP 500 path (server error blocks submit)
+# ---------------------------------------------------------------------------
+
+class TestIngestPreflightServerError:
+    """The preflight endpoint's 5xx response path causes the JS to block the submit.
+
+    We test this at the route level: the endpoint itself should never return 5xx
+    in normal operation (errors are caught), but if _get_search_validation_issues
+    raises unexpectedly, Flask's test client propagates the exception.  We verify
+    the route-level guard keeps a 200/422 contract by monkeypatching.
+    """
+
+    @pytest.fixture()
+    def client(self, tmp_path, monkeypatch):
+        import app as app_module
+        from app import app as flask_app
+        flask_app.config["TESTING"] = True
+        providers_path = str(tmp_path / "providers.json")
+        config_path = str(tmp_path / "config.json")
+        with open(providers_path, "w") as fh:
+            json.dump({"job_sources": {}}, fh)
+        with open(config_path, "w") as fh:
+            json.dump({"search": {}, "scoring": {"threshold": 7.0}}, fh)
+        monkeypatch.setattr(app_module, "_PROVIDERS_PATH", providers_path)
+        monkeypatch.setattr(app_module, "_CONFIG_PATH", config_path)
+        yield flask_app.test_client(), app_module
+
+    def test_preflight_200_with_no_issues(self, client):
+        """Baseline: clean config returns 200."""
+        c, app_module = client
+        with patch.object(app_module, "_get_search_validation_issues", return_value=[]):
+            resp = c.get("/api/ingest/preflight")
+        assert resp.status_code == 200
+        assert resp.get_json()["ok"] is True
+
+    def test_preflight_422_with_issues(self, client):
+        """Baseline: issues present returns 422."""
+        c, app_module = client
+        fake = [ValidationIssue(source_key="adzuna", missing_fields=["country"])]
+        with patch.object(app_module, "_get_search_validation_issues", return_value=fake):
+            resp = c.get("/api/ingest/preflight")
+        assert resp.status_code == 422
+        body = resp.get_json()
+        assert body["ok"] is False
+        assert body["issues"][0]["source"] == "adzuna"

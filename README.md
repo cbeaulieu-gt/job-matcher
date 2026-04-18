@@ -416,3 +416,18 @@ docker compose -p job-matcher-pr-prod -f docker-compose.prod.yml exec web python
 # Stop and remove stacks (interactive — prompts before deleting volumes)
 ./scripts/docker-teardown.sh
 ```
+
+---
+
+## Troubleshooting
+
+**Web container exits immediately with `env: 'bash\r': No such file or directory`**
+
+This means the shell scripts in `scripts/` were checked out with CRLF line endings (common on Windows with `core.autocrlf=true`). The repo now ships a `.gitattributes` that forces LF on `.sh` files. If you cloned before that was added, re-run:
+
+```powershell
+git rm --cached -r .
+git reset --hard
+```
+
+to refresh the working tree against the new attributes. The Dockerfile also strips CR bytes from scripts during build as a safety net.

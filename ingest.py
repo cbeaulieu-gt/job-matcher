@@ -30,6 +30,16 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Load environment variables from a local .env file if present.
+# Precedence: parent-process env (shell, VSCode task, docker env_file) always
+# wins. This covers the native `python ingest.py` path where no external env
+# loader exists; under Docker, `env_file:` has already populated os.environ
+# before this runs, so load_dotenv(override=False) is a no-op.
+load_dotenv(override=False)
+
 import requests
 from bs4 import BeautifulSoup
 from geopy.distance import geodesic

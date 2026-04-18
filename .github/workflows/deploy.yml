@@ -84,6 +84,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Preflight — check dev env file exists
+        run: |
+          set -euo pipefail
+          ENV_FILE=/opt/job-matcher-pr/.env.dev
+          if [[ ! -f "${ENV_FILE}" ]]; then
+            echo "::error::${ENV_FILE} is missing. Run scripts/deploy-remote-linux.sh from a workstation to push it."
+            exit 1
+          fi
+
       - name: Deploy dev stack
         env:
           APP_VERSION: ${{ github.event.workflow_run.head_sha }}
@@ -117,11 +126,8 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Preflight — validate prod env file
-        env:
-          APP_VERSION: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          export APP_VERSION
           ENV_FILE=/opt/job-matcher-pr/.env.prod
           COMPOSE_FILE=/opt/job-matcher-pr/docker-compose.prod.yml
 
@@ -281,6 +287,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Preflight — check dev env file exists
+        run: |
+          set -euo pipefail
+          ENV_FILE=/opt/job-matcher-pr/.env.dev
+          if [[ ! -f "${ENV_FILE}" ]]; then
+            echo "::error::${ENV_FILE} is missing. Run scripts/deploy-remote-linux.sh from a workstation to push it."
+            exit 1
+          fi
+
       - name: Deploy dev stack
         env:
           APP_VERSION: ${{ github.sha }}
@@ -313,11 +328,8 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Preflight — validate prod env file
-        env:
-          APP_VERSION: ${{ github.sha }}
         run: |
           set -euo pipefail
-          export APP_VERSION
           ENV_FILE=/opt/job-matcher-pr/.env.prod
           COMPOSE_FILE=/opt/job-matcher-pr/docker-compose.prod.yml
 

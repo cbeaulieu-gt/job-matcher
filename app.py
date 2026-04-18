@@ -68,9 +68,13 @@ app.secret_key = _secret_key_env
 #
 # We scope this to APP_ENV=prod so that local dev (where `changeme_dev` is the
 # documented default password) continues to work untouched.
+#
+# The regex matches `changeme` only when bounded by `:` or `/` on the left and
+# `_` or `@` on the right, eliminating false positives on legitimate passwords
+# that happen to contain `changeme` as a substring of a longer word.
 if os.environ.get("APP_ENV", "").lower() == "prod":
     _database_url = os.environ.get("DATABASE_URL", "")
-    if "changeme" in _database_url.lower():
+    if re.search(r'[:/]changeme[_@]', _database_url, re.IGNORECASE):
         raise RuntimeError(
             "DATABASE_URL contains a 'changeme_*' placeholder. "
             "Edit .env.prod and set a real POSTGRES_PASSWORD, then recreate the "

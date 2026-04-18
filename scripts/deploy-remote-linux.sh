@@ -294,6 +294,21 @@ for LIVE_ENV in .env.prod .env.dev; do
         continue
     fi
 
+    # Pre-push sanity check: catch unedited local copies before they hit the wire.
+    # The GHA preflight will reject this server-side, but failing fast here saves
+    # the round trip and is a clearer error for the operator at their workstation.
+    if grep -qE '^(POSTGRES_PASSWORD|SECRET_KEY)=changeme' "${LOCAL_LIVE}"; then
+        echo ""
+        warn "Local ${LIVE_ENV} still contains 'changeme_*' placeholder values:"
+        grep -nE '^(POSTGRES_PASSWORD|SECRET_KEY)=changeme' "${LOCAL_LIVE}" || true
+        read -r -p "Push anyway? The prod GHA deploy will reject this file. [y/N] " PUSH_ANYWAY
+        echo ""
+        if [[ ! "${PUSH_ANYWAY}" =~ ^[Yy]$ ]]; then
+            warn "Skipped ${LIVE_ENV} -- remote unchanged."
+            continue
+        fi
+    fi
+
     # Check whether the remote already has a live file and confirm overwrite.
     # shellcheck disable=SC2029  # ${REMOTE_LIVE} and ${SSH_TARGET} intentionally expand client-side
     if ssh "${SSH_TARGET}" "[[ -f '${REMOTE_LIVE}' ]]" 2>/dev/null; then

@@ -160,3 +160,22 @@ def test_prod_accepts_real_database_url():
     combined = result.stderr + result.stdout
     assert "DATABASE_URL contains a 'changeme_" not in combined
     assert "SECRET_KEY must be set" not in combined
+
+
+def test_prod_empty_database_url_not_caught_by_changeme_guard():
+    """Empty DATABASE_URL in prod must fail later (DB connection), not from the
+    changeme guard. The guard's job is to catch *unedited* example values, not
+    to validate that DATABASE_URL is set at all -- that's Postgres/psycopg2's
+    concern further down the startup path.
+    """
+    result = _run_app_import({
+        "SECRET_KEY": "a" * 64,
+        "APP_ENV": "prod",
+        "DATABASE_URL": "",
+    })
+    combined = result.stderr + result.stdout
+    # The guard's signature phrase must not appear -- we want the startup
+    # to progress past the env guards and fail on something else (connection
+    # refused, missing URL, etc.) rather than being short-circuited by
+    # our changeme check.
+    assert "DATABASE_URL contains a 'changeme_" not in combined

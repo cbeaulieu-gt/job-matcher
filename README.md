@@ -166,6 +166,33 @@ The default dev password is `changeme_dev` (set in `.env.dev.example`). If you c
 
 ---
 
+## Running natively (without Docker)
+
+The app loads environment variables from a `.env` file at the repo root via
+`python-dotenv`. Copy the template and fill in real values:
+
+```powershell
+Copy-Item .env.example .env
+# Edit .env — at minimum generate a SECRET_KEY:
+#   python -c "import secrets; print(secrets.token_hex(32))"
+# You also need DATABASE_URL pointing at your local Postgres — the .env.example
+# template includes a default that matches the Docker dev stack's credentials.
+```
+
+Then run:
+
+```powershell
+.venv\Scripts\python app.py
+```
+
+Docker is unaffected: `docker-compose.dev.yml` and `docker-compose.prod.yml`
+read `.env.dev` / `.env.prod` via compose's `env_file:` directive, which
+populates the container environment before Python starts. Variables set by the
+parent process (shell, VSCode task `env:` block, compose `env_file:`) always
+take precedence over `.env` — `load_dotenv(override=False)`.
+
+---
+
 ## Running an ingestion
 
 ```bash

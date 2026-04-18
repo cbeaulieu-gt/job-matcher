@@ -8,6 +8,7 @@ Dockerfile        text eol=lf
 Dockerfile.*      text eol=lf
 *.yml             text eol=lf
 *.yaml            text eol=lf
+*.sql             text eol=lf
 
 # Treat these as binary (no EOL conversion, no diff).
 *.png  binary

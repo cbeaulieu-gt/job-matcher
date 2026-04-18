@@ -426,8 +426,12 @@ docker compose -p job-matcher-pr-prod -f docker-compose.prod.yml exec web python
 This means the shell scripts in `scripts/` were checked out with CRLF line endings (common on Windows with `core.autocrlf=true`). The repo now ships a `.gitattributes` that forces LF on `.sh` files. If you cloned before that was added, re-run:
 
 ```powershell
+# Re-materialize all tracked files under the new .gitattributes rules.
+# Does NOT discard uncommitted local edits.
 git rm --cached -r .
-git reset --hard
+git checkout -- .
 ```
 
 to refresh the working tree against the new attributes. The Dockerfile also strips CR bytes from scripts during build as a safety net.
+
+> **Warning:** If you have uncommitted changes you want to keep, commit or stash them first — `git checkout -- .` will leave *tracked* files alone but any uncommitted local edits to those files will be overwritten.

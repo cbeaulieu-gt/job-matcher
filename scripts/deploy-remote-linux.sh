@@ -25,6 +25,8 @@
 #   - SSH access with key-based or password auth
 #   - docker + docker compose plugin installed (checked in Step 3)
 #   - sudo access for docker-setup.sh (requires root for chown operations)
+#   - sudo access on the remote for the live .env push step
+#     (the script stages to /tmp then sudo-installs to /opt/job-matcher-pr)
 #
 # RE-RUN SAFETY:
 #   All steps are idempotent. Re-running after a partial failure is safe.
@@ -339,14 +341,24 @@ for LIVE_ENV in .env.prod .env.dev; do
         continue
     fi
     scp -q "${LOCAL_LIVE}" "${SSH_TARGET}:${REMOTE_TMP}"
+    # Defense-in-depth: enforce 600 on the staged file in case the remote umask is loose.
+    # shellcheck disable=SC2029  # ${REMOTE_TMP} and ${SSH_TARGET} intentionally expand client-side
+    ssh "${SSH_TARGET}" "chmod 600 '${REMOTE_TMP}'"
+    # Atomically place the file at the final destination with correct mode and ownership.
+    # ssh -tt allocates a pseudo-TTY so sudo can prompt for a password when passwordless
+    # sudo isn't configured (matches the pattern used at line ~205 for mkdir/chown).
+    # 2>&1 mixes stderr into the TTY stream so we can surface the failure reason.
     # shellcheck disable=SC2029  # ${REMOTE_TMP}, ${REMOTE_LIVE}, ${SSH_TARGET} intentionally expand client-side
-    if ! ssh "${SSH_TARGET}" "sudo install -m 600 -o \"\$(id -un)\" -g \"\$(id -gn)\" '${REMOTE_TMP}' '${REMOTE_LIVE}' && rm -f '${REMOTE_TMP}'"; then
-        warn "sudo install failed for ${LIVE_ENV} -- remote file may be unchanged."
+    if INSTALL_ERR=$(ssh -tt "${SSH_TARGET}" "sudo install -m 600 -o \"\$(id -un)\" -g \"\$(id -gn)\" '${REMOTE_TMP}' '${REMOTE_LIVE}' 2>&1"); then
+        ssh "${SSH_TARGET}" "rm -f '${REMOTE_TMP}'" 2>/dev/null || true
+        ok "Copied live ${LIVE_ENV} (chmod 600)"
+    else
+        warn "sudo install failed for ${LIVE_ENV}: ${INSTALL_ERR}"
+        warn "Check sudo access and filesystem permissions on ${SSH_TARGET}."
         # shellcheck disable=SC2029  # ${REMOTE_TMP} and ${SSH_TARGET} intentionally expand client-side
         ssh "${SSH_TARGET}" "rm -f '${REMOTE_TMP}'" 2>/dev/null || true
         continue
     fi
-    ok "Copied live ${LIVE_ENV} (chmod 600)"
 done
 
 # --- Fix line endings (Windows → Unix) ---

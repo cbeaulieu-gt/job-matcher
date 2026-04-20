@@ -327,10 +327,25 @@ for LIVE_ENV in .env.prod .env.dev; do
         fi
     fi
 
-    scp -q "${LOCAL_LIVE}" "${SSH_TARGET}:${REMOTE_LIVE}"
-    # Tighten permissions so other users on the host can't read secrets.
-    # shellcheck disable=SC2029  # ${REMOTE_LIVE} and ${SSH_TARGET} intentionally expand client-side
-    ssh "${SSH_TARGET}" "chmod 600 '${REMOTE_LIVE}'"
+    # Stage-then-install pattern: scp to a tmp path the SSH user owns, then
+    # use `sudo install` to atomically place the file at the final destination
+    # with correct mode and ownership. This avoids "Permission denied" when the
+    # target file is owned by root (e.g. from initial provisioning or GHA), and
+    # is atomic so the running stack never sees a half-written secrets file.
+    # shellcheck disable=SC2029  # ${LIVE_ENV} and ${SSH_TARGET} intentionally expand client-side
+    REMOTE_TMP=$(ssh "${SSH_TARGET}" "mktemp /tmp/.${LIVE_ENV}.XXXXXX")
+    if [[ -z "${REMOTE_TMP}" ]]; then
+        warn "Could not create temp file on remote -- skipped ${LIVE_ENV}."
+        continue
+    fi
+    scp -q "${LOCAL_LIVE}" "${SSH_TARGET}:${REMOTE_TMP}"
+    # shellcheck disable=SC2029  # ${REMOTE_TMP}, ${REMOTE_LIVE}, ${SSH_TARGET} intentionally expand client-side
+    if ! ssh "${SSH_TARGET}" "sudo install -m 600 -o \"\$(id -un)\" -g \"\$(id -gn)\" '${REMOTE_TMP}' '${REMOTE_LIVE}' && rm -f '${REMOTE_TMP}'"; then
+        warn "sudo install failed for ${LIVE_ENV} -- remote file may be unchanged."
+        # shellcheck disable=SC2029  # ${REMOTE_TMP} and ${SSH_TARGET} intentionally expand client-side
+        ssh "${SSH_TARGET}" "rm -f '${REMOTE_TMP}'" 2>/dev/null || true
+        continue
+    fi
     ok "Copied live ${LIVE_ENV} (chmod 600)"
 done
 

@@ -44,7 +44,7 @@ jobs:
           # Force push is intentional — this is a one-way mirror workflow.
           # The public repo should never receive direct commits; it only
           # ever receives pushes from this workflow.
-          git push public main --force
+          git push public HEAD:refs/heads/main --force
           git push public --tags --force
 
       - name: Sync wiki

@@ -355,11 +355,11 @@ for LIVE_ENV in .env.prod .env.dev; do
     # errors directly; we rely on the ssh exit code for success/failure
     # rather than capturing stderr into a variable.
     # shellcheck disable=SC2029  # ${REMOTE_TMP}, ${REMOTE_LIVE}, ${SSH_TARGET} intentionally expand client-side
-    if ssh -tt "${SSH_TARGET}" "sudo install -m 600 -o \"\$(id -un)\" -g \"\$(id -gn)\" '${REMOTE_TMP}' '${REMOTE_LIVE}' && rm -f '${REMOTE_TMP}'"; then
+    if ssh -tt "${SSH_TARGET}" "sudo install -m 600 -o \"\$(id -un)\" -g \"\$(id -gn)\" '${REMOTE_TMP}' '${REMOTE_LIVE}'"; then
+        ssh "${SSH_TARGET}" "rm -f '${REMOTE_TMP}'" 2>/dev/null || true
         ok "Copied live ${LIVE_ENV} (chmod 600)"
     else
         warn "sudo install failed for ${LIVE_ENV} (see output above for details)."
-        # shellcheck disable=SC2029
         ssh "${SSH_TARGET}" "rm -f '${REMOTE_TMP}'" 2>/dev/null || true
         continue
     fi

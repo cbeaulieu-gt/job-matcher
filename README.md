@@ -257,7 +257,7 @@ Run complete: 120 fetched | 74 pre-filtered | 12 dupes skipped | 34 scored (0 fa
 
 ### Watching progress live
 
-When the web UI is running, open the feed page and click **Run Ingest** to launch the ingest drawer. It tails the pipeline in real time over Server-Sent Events — each listing appears as it is processed, with tier-colored score tags (green / amber / red) and per-stage counters (fetched, filtered, duped, scored). For headless or Docker runs where the UI is not open, `docker logs job-matcher-pr-dev-app-1 -f` streams the same output to the terminal.
+When the web UI is running, open the feed page and click **Run Ingest** to launch the ingest drawer. It tails the pipeline in real time over Server-Sent Events — each listing appears as it is processed, with tier-colored score tags (green / amber / red) and per-stage counters (fetched, filtered, duped, scored). For headless or Docker runs where the UI is not open, `docker logs job-matcher-pr-dev-web-1 -f` streams the same output to the terminal.
 
 In Docker deployments, the PostgreSQL database is created automatically by Docker Compose via `DATABASE_URL`. For local development runs (`python ingest.py`), a SQLite file `jobs.db` is created automatically on the first run.
 

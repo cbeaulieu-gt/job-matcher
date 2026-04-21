@@ -59,141 +59,34 @@ app = create_app()
 # inject_demo_mode, csrf_localhost_guard) now live in web/security.py.
 # create_app() registers csrf_localhost_guard via app.before_request()
 # and inject_demo_mode via app.context_processor().
-_CONFIG_DIR: str = os.path.join(os.path.dirname(__file__), "config")
-_KEYS_PATH: str = os.path.join(_CONFIG_DIR, "keys.json")
-_CONFIG_PATH: str = os.path.join(_CONFIG_DIR, "config.json")
-_PROFILE_PATH: str = os.path.join(_CONFIG_DIR, "profile.json")
-_PROVIDERS_PATH: str = os.path.join(_CONFIG_DIR, "providers.json")
-
-# Default structure mirrors keys.example.json — used when keys.json is absent.
-_KEYS_DEFAULTS: dict = {
-    "providers": {
-        "anthropic": {"api_key": "", "model": "claude-haiku-4-5-20251001"},
-        "openai":    {"api_key": "", "model": "gpt-4o-mini"},
-        "gemini":    {"api_key": "", "model": "gemini-1.5-flash"},
-    },
-    "preferred_provider": "anthropic",
-}
-
 
 # ---------------------------------------------------------------------------
-# Config
+# Config / profile store — moved to services/profile_store.py (Phase 2)
 # ---------------------------------------------------------------------------
-
-def load_config(path: str = "config/config.json") -> dict:
-    """Load config/config.json if it exists; return safe defaults otherwise.
-
-    This allows the server to start and display the UI even before the user
-    has created their config file.
-    """
-    defaults = {
-        "scoring": {
-            "threshold": 7.0,
-        }
-    }
-    if not os.path.exists(path):
-        return defaults
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        # Ensure scoring.threshold has a fallback even if key is missing.
-        data.setdefault("scoring", {})
-        data["scoring"].setdefault("threshold", 7.0)
-        return data
-    except (json.JSONDecodeError, OSError):
-        return defaults
-
-
-def _write_json_atomic(path: str, data: dict) -> None:
-    """Write *data* as JSON to *path* atomically using a sibling .tmp file.
-
-    Writes to ``<path>.tmp`` first, then renames to ``<path>``.  The tmp file
-    is always cleaned up on failure so stale partials never accumulate.
-
-    Args:
-        path: Destination file path.
-        data: Dict to serialise as indented JSON.
-
-    Raises:
-        OSError: If writing or renaming fails.
-    """
-    tmp_path = path + ".tmp"
-    try:
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-        os.replace(tmp_path, path)
-    finally:
-        try:
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
-        except OSError:
-            pass
-
-
-def load_profile(path: str = _PROFILE_PATH) -> dict:
-    """Load config/profile.json if it exists; return an empty dict otherwise.
-
-    Returns an empty dict (not hardcoded defaults) so the profile form shows
-    blank fields rather than confusing placeholder values when the file is absent.
-
-    Legacy migration: education entries that are plain strings (old format
-    ``"education": ["B.S. in Computer Science"]``) are converted to structured
-    dicts on load so the template never receives a string where it expects a dict.
-    """
-    if not os.path.exists(path):
-        return {}
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return {}
-
-    # Normalise legacy free-text education strings to structured dicts.
-    raw_edu = data.get("education", [])
-    if raw_edu and any(not isinstance(e, dict) for e in raw_edu):
-        data["education"] = [
-            {"degree_type": "", "degree_field": str(e), "school": "", "graduation_year": ""}
-            if not isinstance(e, dict) else e
-            for e in raw_edu
-        ]
-
-    return data
-
+# Path constants, _KEYS_DEFAULTS, load_config, _write_json_atomic,
+# load_profile, _validate_profile_form, _parse_education_rows, and
+# _parse_repeating_rows now live in services/profile_store.py.
+# _KEYS_DEFAULTS is only used internally in services/profile_store.py
+# and is not re-exported here (no call sites in this module).
+# They are imported here so all existing call-sites in this module and
+# in the test suite resolve to the same objects without any change.
+from services.profile_store import (  # noqa: E402
+    _CONFIG_DIR,
+    _CONFIG_PATH,
+    _KEYS_PATH,
+    _PROFILE_PATH,
+    _PROVIDERS_PATH,
+    _parse_education_rows,
+    _parse_repeating_rows,
+    _validate_profile_form,
+    _write_json_atomic,
+    load_config,
+    load_profile,
+)
 
 CONFIG = load_config()
 # db.init_db() and ensure_plugins_registered() have moved to
 # web/__init__.py::create_app(), called above at module scope.
-
-
-# ---------------------------------------------------------------------------
-# Profile form validation
-# ---------------------------------------------------------------------------
-
-
-def _validate_profile_form(threshold_str: str) -> list[str]:
-    """Validate the structured profile form fields.
-
-    Returns a list of human-readable error strings; empty list means valid.
-    Validates only the fields that can be invalid in a structured form — raw
-    JSON parsing errors are no longer possible since we own the field types.
-
-    Args:
-        threshold_str: The raw string value submitted for ``scoring.threshold``.
-    """
-    errors: list[str] = []
-
-    # scoring.threshold must parse as a float in [0, 10].
-    if not threshold_str.strip():
-        errors.append("scoring.threshold is required")
-    else:
-        try:
-            val = float(threshold_str.strip())
-            if not (0 <= val <= 10):
-                errors.append("scoring.threshold must be between 0 and 10")
-        except ValueError:
-            errors.append("scoring.threshold must be a number")
-
-    return errors
 
 
 # ---------------------------------------------------------------------------
@@ -1302,65 +1195,8 @@ def settings():
     )
 
 
-def _parse_education_rows(form) -> list[dict]:
-    """Extract a list of structured education objects from the education table form fields.
-
-    Reads the four parallel ``edu_type[]``, ``edu_field[]``, ``edu_school[]``,
-    and ``edu_year[]`` arrays from the submitted form and zips them into
-    structured dicts.  Rows where all four fields are empty are silently
-    discarded.
-
-    Args:
-        form: The Flask ``request.form`` ImmutableMultiDict.
-
-    Returns:
-        List of dicts, each with keys ``degree_type``, ``degree_field``,
-        ``school``, and ``graduation_year``.
-    """
-    types = form.getlist("edu_type[]")
-    fields = form.getlist("edu_field[]")
-    schools = form.getlist("edu_school[]")
-    years = form.getlist("edu_year[]")
-
-    # Zip to the shortest list to guard against mismatched row counts.
-    rows = []
-    for deg_type, deg_field, school, year in zip(types, fields, schools, years):
-        deg_type = deg_type.strip()
-        deg_field = deg_field.strip()
-        school = school.strip()
-        year = year.strip()
-        # Discard non-numeric year values to prevent nonsense input from being persisted.
-        if year and not year.isdigit():
-            year = ""
-        # Skip rows where every field is empty.
-        if not any([deg_type, deg_field, school, year]):
-            continue
-        rows.append({
-            "degree_type": deg_type,
-            "degree_field": deg_field,
-            "school": school,
-            "graduation_year": year,
-        })
-    return rows
-
-
-def _parse_repeating_rows(form, field_name: str) -> list[str]:
-    """Extract a list of non-empty strings from repeating form row inputs.
-
-    The repeating-row pattern names inputs as ``<field_name>[]``, submitting
-    one value per row.  Empty rows (whitespace-only) are discarded so the
-    stored array does not contain blank entries.
-
-    Args:
-        form: The Flask ``request.form`` ImmutableMultiDict.
-        field_name: Base name used in the HTML (e.g. ``"primary_skills"``).
-
-    Returns:
-        List of stripped non-empty strings.
-    """
-    values = form.getlist(f"{field_name}[]")
-    return [v.strip() for v in values if v.strip()]
-
+# _parse_education_rows and _parse_repeating_rows are imported from
+# services/profile_store (see top-of-file imports block, Phase 2).
 
 # ---------------------------------------------------------------------------
 # PDF resume import — helpers

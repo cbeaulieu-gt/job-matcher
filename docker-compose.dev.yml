@@ -1,5 +1,11 @@
 name: job-matcher-pr-dev
 
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   db:
     image: postgres:16-alpine
@@ -24,6 +30,7 @@ services:
       retries: 5
       start_period: 30s
     restart: unless-stopped
+    logging: *default-logging
 
   web:
     # Local dev uses `build: .` so fresh clones don't need GHCR auth; compose
@@ -49,6 +56,7 @@ services:
       APP_ENV: dev
       APP_VERSION: ${APP_VERSION:-local}
     restart: unless-stopped
+    logging: *default-logging
     labels:
       ofelia.enabled: "true"
       ofelia.job-exec.daily-ingest-dev.schedule: "@daily"
@@ -66,6 +74,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     restart: unless-stopped
     command: daemon --docker
+    logging: *default-logging
 
 volumes:
   pgdata_dev:

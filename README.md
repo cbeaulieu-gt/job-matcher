@@ -426,7 +426,7 @@ Add these in **Settings → Secrets and variables → Actions** for the CI failu
 
 > **This is the primary and recommended deployment path.** Docker on Linux is the active deployment method. The native Windows deployment path has been retired — see [`docs/LEGACY_DEPLOYMENT.md`](docs/LEGACY_DEPLOYMENT.md) if you need those instructions.
 
-Use this approach to run Job Matcher as a Docker Compose stack on a Linux VM. The stack consists of a `web` container (Flask + waitress), a `db` container (PostgreSQL), and a `scheduler` container (Ofelia) that runs ingestion daily.
+Use this approach to run Job Matcher as a Docker Compose stack on a Linux VM. The stack consists of a `web` container (Flask + waitress), a `db` container (PostgreSQL), and a `scheduler` container (Ofelia) that runs ingestion daily. All services use bounded log rotation (`json-file` driver, 10 MB per file, 3 files max — ≤ 30 MB total per service) to prevent unbounded disk growth.
 
 For full documentation — stack architecture, environment variables, CI/CD pipeline, scheduled ingestion, backups, troubleshooting, teardown, and migration from Windows — see **[docs/DOCKER.md](docs/DOCKER.md)**.
 

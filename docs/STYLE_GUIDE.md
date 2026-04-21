@@ -306,17 +306,19 @@ All buttons extend `.btn` (base). Add a modifier class for semantic variants.
 
 #### `.btn-save` in a horizontal flex row
 
-`.btn-save` carries `margin-top: 4px` and `align-self: flex-start` so it sits correctly as a standalone submit below a form field. When you place it in a horizontal flex row alongside another button (e.g. a Dismiss action), set `align-items: center` on the wrapper — otherwise the default `align-items: stretch` combined with `.btn-save`'s `margin-top` causes the sibling button to render ~4px taller than intended.
+`.btn-save` carries `margin-top: 4px` (designed for standalone form submits) and `align-self: flex-start`. The `align-self` overrides any `align-items` set on the parent, so setting `align-items: center` on the wrapper has no effect on `.btn-save` itself. The `margin-top: 4px` then causes the flex container to be 4px taller than its siblings, making adjacent buttons (e.g. Dismiss) render visually taller than intended.
+
+The correct fix when placing `.btn-save` in a horizontal flex row alongside another button is to cancel its `margin-top` inline:
 
 ```html
-<!-- Correct: wrapper uses align-items: center -->
-<div style="display: flex; gap: 8px; align-items: center;">
-  <button type="submit" class="btn btn-save">Apply</button>
+<!-- Correct: cancel .btn-save's margin-top inline -->
+<div style="display: flex; gap: 8px;">
+  <button type="submit" class="btn btn-save" style="margin-top:0">Apply</button>
   <button type="button" class="btn btn-dismiss">Dismiss</button>
 </div>
 ```
 
-See `templates/profile.html` (prefilter suggestions panel) for the reference pattern. Alternative: use a `.btn-primary` class without the `margin-top` if `.btn-save`'s standalone positioning semantics are not needed.
+See `templates/profile.html:376` (prefilter suggestions panel) for the reference pattern. A broader refactor to invert the defaults is planned — until then, the inline `margin-top:0` is the correct approach for this layout.
 
 ### Forms & Settings
 

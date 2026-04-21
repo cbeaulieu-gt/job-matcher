@@ -23,6 +23,7 @@ immediately rather than at the first database call.
 """
 
 import json
+import logging
 import os
 import threading
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
@@ -30,6 +31,8 @@ from urllib.parse import quote, unquote, urlsplit, urlunsplit
 import psycopg2
 import psycopg2.extras
 import psycopg2.pool
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -72,7 +75,12 @@ def _encode_database_url_password(url: str) -> str:
     """
     try:
         parsed = urlsplit(url)
-    except Exception:
+    except (ValueError, AttributeError) as exc:
+        logger.warning(
+            "Failed to URL-encode DATABASE_URL password (%s);"
+            " using raw value",
+            type(exc).__name__,
+        )
         return url
 
     if not parsed.password:

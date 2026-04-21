@@ -141,6 +141,18 @@ class TestIdempotency:
         twice = _encode_database_url_password(once)
         assert once == twice
 
+    def test_password_of_only_encoded_reserved_chars_is_idempotent(self):
+        """A password composed entirely of encoded reserved chars is unchanged.
+
+        Regression test: ``%40%40%40`` is already a valid percent-encoded
+        sequence.  The decode-then-encode round-trip must reproduce the same
+        string and must not double-encode (e.g. ``%40`` → ``%2540``).
+        """
+        url = "postgresql://user:%40%40%40@host:5432/db"
+        result = _encode_database_url_password(url)
+        assert result == url
+        assert "%2540" not in result
+
 
 # ---------------------------------------------------------------------------
 # Pass-through: URLs with no password must be returned unchanged

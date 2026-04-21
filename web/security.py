@@ -8,10 +8,13 @@ request-scoped state, keeping this module independently testable.
 
 Module-level state
 ------------------
-``DEMO_MODE``
-    Re-exported here for convenience but the canonical value lives in
-    ``app`` at module scope.  ``create_app()`` wires the context
-    processor to read the ``app``-level variable.
+``DEMO_MODE`` is intentionally NOT re-exported from this module. The
+canonical value lives at ``app`` module scope (set by the
+``__main__`` block in ``app.py``).
+``web/__init__.py::create_app()`` wires up a context processor that
+reads it at request time via ``sys.modules["app"]``, which preserves
+the ability to toggle ``DEMO_MODE`` *after* ``create_app()`` has
+returned.
 """
 
 from __future__ import annotations

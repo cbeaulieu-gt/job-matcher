@@ -3,9 +3,13 @@ app.py — Flask web server for Job Matcher.
 
 Thin routing layer only. All data access goes through db.py.
 Business logic lives in ingest.py; none of it belongs here.
+
+Flask app construction, startup guards, filter registration, and
+CSRF wiring have moved to ``web/__init__.py::create_app()``.  This
+module now calls ``create_app()`` at import time and re-exports the
+names that the test suite imports directly from ``app``.
 """
 
-import ipaddress
 import json
 import os
 import re
@@ -18,9 +22,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from importlib.metadata import version as pkg_version, PackageNotFoundError
 
-from dotenv import load_dotenv
-
-from flask import Flask, render_template, make_response, request, jsonify, redirect, url_for, Response, session, stream_with_context, send_from_directory, abort
+from flask import render_template, make_response, request, jsonify, redirect, url_for, Response, session, stream_with_context, send_from_directory, abort
 
 import db
 from credentials import CredentialError, load_providers, save_providers
@@ -37,137 +39,26 @@ from providers.base import _sanitise_detail
 from job_sources import get_sources
 from ingest import validate_search_config, ValidationIssue
 
-# Load environment variables from a local .env file if present.
-# Precedence: parent-process env (shell, VSCode task, docker env_file) always
-# wins. This covers the native `python app.py` path where no external env
-# loader exists; under Docker, `env_file:` has already populated os.environ
-# before this runs, so load_dotenv(override=False) is a no-op.
-load_dotenv(override=False)
-
-app = Flask(__name__)
-
-# A stable secret key is required for session-based CSRF tokens.
-# Refuse to start with an empty or placeholder value — a fresh random key on
-# every restart invalidates session cookies and breaks CSRF protection.
-_secret_key_env = os.environ.get("SECRET_KEY", "")
-if not _secret_key_env or _secret_key_env.startswith("changeme"):
-    raise RuntimeError(
-        "SECRET_KEY must be set to a secure random value. "
-        'Generate one with: python -c "import secrets; print(secrets.token_hex(32))" '
-        "and set it in .env.dev / .env.prod."
-    )
-app.secret_key = _secret_key_env
-
-# Prod-only env placeholder guard.
-# In prod the stack must not start with example `changeme_*` values coming
-# straight out of .env.prod.example. The most common failure mode is a server
-# that was provisioned once and never had its live .env.prod edited -- the
-# stack would come up with a known-default Postgres password and a literal
-# changeme DATABASE_URL. Refuse to start so this is caught immediately instead
-# of silently running with example credentials.
-#
-# We scope this to APP_ENV=prod so that local dev (where `changeme_dev` is the
-# documented default password) continues to work untouched.
-#
-# The regex matches `changeme` only when bounded by `:` or `/` on the left and
-# `_` or `@` on the right, eliminating false positives on legitimate passwords
-# that happen to contain `changeme` as a substring of a longer word.
-if os.environ.get("APP_ENV", "").lower() == "prod":
-    _database_url = os.environ.get("DATABASE_URL", "")
-    if re.search(r'[:/]changeme[_@]', _database_url, re.IGNORECASE):
-        raise RuntimeError(
-            "DATABASE_URL contains a 'changeme_*' placeholder. "
-            "Edit .env.prod and set a real POSTGRES_PASSWORD, then recreate the "
-            "db container: docker compose -p job-matcher-pr-prod -f "
-            "docker-compose.prod.yml down -v && ... up -d"
-        )
-
-# Inject environment and version globals so all templates can render the status bar.
-app.jinja_env.globals['APP_ENV'] = os.environ.get('APP_ENV', 'local')
-app.jinja_env.globals['APP_VERSION'] = os.environ.get('APP_VERSION', 'local')
+# DEMO_MODE is read by web/__init__.py's context-processor closure at
+# request time.  The __main__ block may set it to True before the
+# server starts; keep it at module scope so the closure always sees
+# the current value.
 DEMO_MODE: bool = False
 
+# Build (or retrieve the already-built) Flask application.  All
+# startup guards, filter registration, db.init_db(), and plugin
+# registration happen inside create_app().
+from web import create_app  # noqa: E402
+app = create_app()
+
 
 # ---------------------------------------------------------------------------
-# CSRF guard — private-network Origin/Referer check
+# CSRF guard — moved to web/security.py; registered by create_app()
 # ---------------------------------------------------------------------------
-
-
-def _is_trusted_host(host: str) -> bool:
-    """Return True if *host* is localhost or any private/non-routable address.
-
-    Uses ``ipaddress.is_private`` which covers RFC 1918 (10.x, 172.16–31.x,
-    192.168.x), loopback (127.x.x.x, ::1), link-local (169.254.x.x,
-    fe80::/10), and other non-routable ranges — all stdlib, no new dependency.
-
-    ``host`` is the bare hostname or IP string extracted from a URL — brackets
-    have already been stripped from IPv6 addresses (e.g. ``::1``, not
-    ``[::1]``).
-    """
-    if host == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(host).is_private
-    except ValueError:
-        return False
-
-
-def _is_localhost_request() -> bool:
-    """Return True if the request originates from localhost or a private LAN address.
-
-    Checks the ``Origin`` header first (set by most browsers on same-origin
-    XHR/fetch), then falls back to ``Referer``.  If neither header is present
-    the request is allowed through — curl and other CLI tools do not send
-    Origin/Referer, so blocking headerless requests would break admin scripts
-    and testing.
-
-    The loop logic is:
-    - Header present AND regex matches AND host is trusted  → return True
-    - Header present AND regex matches AND host is NOT trusted → return False
-    - Header present BUT regex does not match (e.g. "null") → continue to next header
-    - No usable header found after the loop → return True (allow CLI/test clients)
-    """
-    for header in ("Origin", "Referer"):
-        value = request.headers.get(header, "").strip()
-        if not value:
-            continue
-        # Parse just the host portion — e.g. "http://localhost:5000/path" → "localhost"
-        # The IPv6 alternative captures "[::1]" (brackets included) from "http://[::1]:5000".
-        match = re.match(r"https?://(\[[^\]]+\]|[^/:]+)", value)
-        if not match:
-            # Header present but unparseable (e.g. "null") — try next header
-            continue
-        host = match.group(1).lower()
-        # Strip brackets from IPv6 addresses before passing to ipaddress module
-        if host.startswith("[") and host.endswith("]"):
-            host = host[1:-1]
-        if _is_trusted_host(host):
-            return True
-        return False  # Non-private origin found — block
-    return True  # No Origin/Referer header — allow (CLI tools, tests)
-
-
-@app.context_processor
-def inject_demo_mode():
-    """Inject demo_mode into all template contexts."""
-    return {"demo_mode": DEMO_MODE}
-
-
-@app.before_request
-def csrf_localhost_guard():
-    """Reject state-mutating requests that do not originate from a private network.
-
-    This tool is designed for local/LAN use only.  Any POST, PUT, PATCH, or
-    DELETE request whose ``Origin`` or ``Referer`` header resolves to a
-    publicly-routable host is rejected with 403 to prevent cross-site request
-    forgery.  Private addresses (localhost, RFC 1918, link-local) are allowed.
-
-    Requests with no Origin/Referer (e.g. curl, test clients) are allowed
-    through so that automated scripts and the pytest test suite are unaffected.
-    """
-    if request.method in ("POST", "PUT", "PATCH", "DELETE"):
-        if not _is_localhost_request():
-            return jsonify({"error": "Forbidden: requests must originate from a private network"}), 403
+# The guard functions (_is_trusted_host, _is_localhost_request,
+# inject_demo_mode, csrf_localhost_guard) now live in web/security.py.
+# create_app() registers csrf_localhost_guard via app.before_request()
+# and inject_demo_mode via app.context_processor().
 _CONFIG_DIR: str = os.path.join(os.path.dirname(__file__), "config")
 _KEYS_PATH: str = os.path.join(_CONFIG_DIR, "keys.json")
 _CONFIG_PATH: str = os.path.join(_CONFIG_DIR, "config.json")
@@ -270,10 +161,8 @@ def load_profile(path: str = _PROFILE_PATH) -> dict:
 
 
 CONFIG = load_config()
-db.init_db()
-
-from job_sources.auto_register import ensure_plugins_registered  # noqa: E402
-ensure_plugins_registered(_PROVIDERS_PATH)
+# db.init_db() and ensure_plugins_registered() have moved to
+# web/__init__.py::create_app(), called above at module scope.
 
 
 # ---------------------------------------------------------------------------
@@ -438,97 +327,11 @@ def _get_search_validation_issues() -> list[ValidationIssue]:
 
 
 # ---------------------------------------------------------------------------
-# Template filters
+# Template filters — moved to web/filters.py; registered by create_app()
 # ---------------------------------------------------------------------------
-
-@app.template_filter("salary_fmt")
-def salary_fmt(listing: dict) -> str | None:
-    """Format a salary range from a listing dict.
-
-    Returns a string like '$120k–$160k', '~$130k–$155k' (predicted),
-    '$120k' (min only), or None if both salary fields are absent.
-
-    Keeping this in Python rather than Jinja keeps the template readable and
-    the formatting logic testable.
-    """
-    lo = listing.get("salary_min")
-    hi = listing.get("salary_max")
-    predicted = listing.get("salary_is_predicted")
-
-    if lo is None and hi is None:
-        return None
-
-    prefix = "~" if predicted else ""
-
-    def fmt_k(val: int | float) -> str:
-        k = int(round(val / 1000))
-        return f"${k}k"
-
-    if lo is not None and hi is not None:
-        return f"{prefix}{fmt_k(lo)}–{fmt_k(hi)}"
-    if lo is not None:
-        return f"{prefix}{fmt_k(lo)}+"
-    return f"{prefix}{fmt_k(hi)}"
-
-
-@app.template_filter("parse_iso")
-def parse_iso(value: str | None) -> datetime | None:
-    """Parse an ISO 8601 string (with or without trailing 'Z') into a datetime.
-
-    Returns None when ``value`` is None, empty, or cannot be parsed so that
-    downstream filters (e.g. ``timeago``) can handle the None case gracefully.
-    """
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(value.rstrip("Z"))
-    except (ValueError, AttributeError):
-        return None
-
-
-@app.template_filter("timeago")
-def timeago(dt: datetime | None) -> str:
-    """Return a human-readable relative time string for a datetime, e.g. '3 hours ago'.
-
-    Uses UTC now as the reference point. The input datetime is treated as UTC
-    if it has no tzinfo. Falls back to the ISO 8601 string representation when
-    the input is None or not a datetime, so the template never raises.
-
-    Thresholds:
-      < 2 minutes  → 'just now'
-      < 60 minutes → 'N minutes ago'
-      < 24 hours   → 'N hours ago'
-      < 7 days     → 'N days ago'
-      otherwise    → formatted as 'YYYY-MM-DD HH:MM UTC'
-    """
-    if dt is None:
-        return "never"
-    if not isinstance(dt, datetime):
-        return str(dt)
-
-    # Treat naive datetimes as UTC to match how fetched_at is stored.
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-
-    now = datetime.now(tz=timezone.utc)
-    delta = now - dt
-    total_seconds = int(delta.total_seconds())
-
-    if total_seconds < 0:
-        # Clock skew or future timestamp — just show absolute.
-        return dt.strftime("%Y-%m-%d %H:%M UTC")
-    if total_seconds < 120:
-        return "just now"
-    if total_seconds < 3600:
-        minutes = total_seconds // 60
-        return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
-    if total_seconds < 86400:
-        hours = total_seconds // 3600
-        return f"{hours} hour{'s' if hours != 1 else ''} ago"
-    if total_seconds < 604800:
-        days = total_seconds // 86400
-        return f"{days} day{'s' if days != 1 else ''} ago"
-    return dt.strftime("%Y-%m-%d %H:%M UTC")
+# salary_fmt, parse_iso, and timeago now live in web/filters.py.
+# create_app() registers them via app.add_template_filter().
+# They are re-exported below for backward-compat with the test suite.
 
 
 # ---------------------------------------------------------------------------
@@ -3083,6 +2886,18 @@ def api_job_source_toggle(source_key: str):
         return "Could not save — check file permissions.", 500
 
     return jsonify({"ok": True}), 200
+
+
+# ---------------------------------------------------------------------------
+# Backward-compat re-exports — keep test-import contract intact
+# ---------------------------------------------------------------------------
+# Tests import these names directly from `app`.  Once all call sites
+# migrate to the canonical web/* paths these re-exports can be removed.
+from web.filters import salary_fmt, timeago  # noqa: E402, F401
+from web.security import (  # noqa: E402, F401
+    _is_trusted_host,
+    _is_localhost_request,
+)
 
 
 # ---------------------------------------------------------------------------

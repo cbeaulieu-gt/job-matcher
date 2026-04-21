@@ -533,7 +533,7 @@ Tab switching is handled by a small inline JS block (no library).
 
 | Class | Color | Notes |
 |---|---|---|
-| `.save-notice` | Green (`--score-high-*`) | Success; auto-fades after 4s via `notice-fade-out` animation |
+| `.save-notice` | Green (`--score-high-*`) | Success; auto-fades after 4s via `notice-fade-out` animation. At 100% the keyframe also collapses `max-height`, `margin-bottom`, `padding`, and `border-width` to `0` so the box takes up no layout space after the fade completes. `overflow: hidden` is required on the element for the collapse to animate smoothly. |
 | `.save-error` | Red (`--score-low-*`) | Persistent error |
 | `.setup-banner` | Amber (`--score-mid-*`) | Setup/configuration prompt; left border `--text-accent` |
 

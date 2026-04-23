@@ -36,12 +36,17 @@ def client():
 
 
 def _make_stats(**overrides) -> dict:
-    """Return a well-formed get_usage_stats() payload with sensible defaults."""
+    """Return a well-formed get_usage_stats() payload with sensible defaults.
+
+    Includes ``unknown_models`` (added in #306) so templates that reference
+    this key do not raise an ``UndefinedError``.
+    """
     base = {
         "total_scored": 10,
         "total_tokens_input": 5000,
         "total_tokens_output": 1200,
         "estimated_cost_usd": 0.0042,
+        "unknown_models": [],
         "by_date": [
             {
                 "date": "2026-04-08",

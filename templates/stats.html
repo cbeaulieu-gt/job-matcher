@@ -60,7 +60,7 @@
     <div class="stat-box">
       <div class="stat-value">
         {% if stats.estimated_cost_usd is not none %}
-          ${{ "%.4f" | format(stats.estimated_cost_usd) }}
+          ${{ "%.4f" | format(stats.estimated_cost_usd) }}{% if stats.unknown_models %}*{% endif %}
         {% else %}
           &mdash;
         {% endif %}
@@ -111,8 +111,14 @@
 
   {# ── Disclaimer ──────────────────────────────────────────────── #}
   <p class="stats-disclaimer">
-    Cost estimates use Haiku list pricing ($0.80/MTok input, $4.00/MTok output).
+    Known models use provider list pricing.
     Actual charges may differ.
+    {% if stats.unknown_models %}
+      * Includes estimated Haiku rates for
+      {{ stats.unknown_models | length }}
+      unrecognised model{{ 's' if stats.unknown_models | length != 1 else '' }}:
+      {{ stats.unknown_models | join(', ') }}.
+    {% endif %}
   </p>
 
 

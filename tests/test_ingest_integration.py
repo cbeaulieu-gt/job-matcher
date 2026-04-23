@@ -28,7 +28,8 @@ import json
 import pytest
 
 import web.ingest as web_ingest_module
-from app import app as flask_app, _stdout_reader
+from app import app as flask_app
+from services.ingest_control import _stdout_reader
 from ingest_events import EventQueue
 from services import ingest_control
 

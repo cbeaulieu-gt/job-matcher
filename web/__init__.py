@@ -1,27 +1,26 @@
-"""Web layer — Flask application factory and filter/hook registration.
+"""Web layer — Flask application factory and blueprint registration.
 
-``create_app()`` is the single authoritative place where the Flask
-``app`` object is constructed and all startup-time guards, template
-filters, context processors, and before-request hooks are wired up.
+``create_app()`` constructs the Flask app, registers Jinja filters
+(``web/filters.py``), the CSRF before-request hook and demo-mode
+context processor (``web/security.py``), and the five route blueprints:
+``feed_bp``, ``ingest_bp``, ``settings_bp``, ``profile_bp``,
+``admin_bp`` — all mounted at ``url_prefix=""`` so every URL path is
+unchanged from the pre-refactor monolith.  It then calls
+``db.init_db()`` and registers job-source plugins.
 
-After Phase 1 of the refactor, ``app.py`` delegates to this factory:
+``app.py`` is a thin entry-point shim that calls ``create_app()`` and
+runs the dev server; it contains no routes, helpers, or business logic.
+Pure-Python service helpers (config/profile I/O, PDF import, provider
+schemas, ingest control) live under ``services/`` with zero Flask
+imports.
 
-.. code-block:: python
-
-    from web import create_app
-    app = create_app()
-
-All route definitions remain in ``app.py`` for now and are imported
-as a side-effect of the ``from app import ...`` call inside
-``create_app()``.  Subsequent phases will migrate routes into
-blueprint modules under ``web/``.
+See the Architecture section of ``CLAUDE.md`` for the full module map.
 """
 
 from __future__ import annotations
 
 import os
 import re
-import sys as _sys
 from typing import Optional
 
 from dotenv import load_dotenv
@@ -158,25 +157,14 @@ def create_app() -> Flask:
     # ------------------------------------------------------------------
     # 8. Register the demo-mode context processor.
     # ------------------------------------------------------------------
-    # DEMO_MODE lives in app.py at module scope.  We cannot import
-    # ``app`` here at create_app() call-time because create_app() is
-    # itself called from inside app.py's module initialisation, which
-    # would produce a circular import with a partially-constructed
-    # module.  Instead we look up the module via sys.modules at
-    # *request* time — by then app.py is fully initialised and
-    # sys.modules["app"] is stable.  This also means that when the
-    # __main__ block sets DEMO_MODE=True after create_app() returns,
-    # every subsequent request sees the updated value.
+    # DEMO_MODE is signalled via the DEMO_MODE environment variable
+    # (value "1" = enabled).  The __main__ block in app.py sets this
+    # variable before the dev server starts; waitress (Docker) never
+    # executes that code path and the variable is absent, so demo mode
+    # is off by default.
     def _demo_mode_processor() -> dict:
         """Return demo_mode for injection into every template context."""
-        # Deliberate: look up "app" by its canonical module name. app.py
-        # is always imported as `app` throughout this codebase — tests
-        # use `from app import app as flask_app`, scripts use
-        # `python app.py`, and no caller imports it under an alias. If
-        # that ever changes, this processor will silently fall back to
-        # DEMO_MODE=False, which is the safe default.
-        _mod = _sys.modules.get("app")
-        demo = getattr(_mod, "DEMO_MODE", False) if _mod else False
+        demo = os.environ.get("DEMO_MODE") == "1"
         return inject_demo_mode(demo)
 
     app.context_processor(_demo_mode_processor)
@@ -223,12 +211,8 @@ def create_app() -> Flask:
     from job_sources.auto_register import (  # noqa: PLC0415
         ensure_plugins_registered,
     )
-    # _PROVIDERS_PATH is defined in app.py, but importing from app here
-    # would create a circular import (app.py -> create_app() -> app.py).
-    # Duplicating this one-line join is the lesser evil until Phase 2
-    # relocates the path constants to services/profile_store.py.
-    _providers_path = os.path.join(_root, "config", "providers.json")
-    ensure_plugins_registered(_providers_path)
+    from services.profile_store import _PROVIDERS_PATH  # noqa: PLC0415
+    ensure_plugins_registered(_PROVIDERS_PATH)
 
     _app_instance = app
     return app

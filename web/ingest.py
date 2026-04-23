@@ -37,42 +37,39 @@ from flask import (
 
 from ingest_events import event_queue
 from services import ingest_control
-from services.profile_store import _CONFIG_PATH, _PROVIDERS_PATH
 from services.provider_schemas import _get_search_validation_issues
 
 ingest_bp = Blueprint("ingest", __name__)
 
 
 def _get_providers_path() -> str:
-    """Return the current _PROVIDERS_PATH from app.py at call time.
+    """Return the current _PROVIDERS_PATH from ``services.profile_store``.
 
-    Reads from ``sys.modules["app"]._PROVIDERS_PATH`` so that
-    ``monkeypatch.setattr(app_module, "_PROVIDERS_PATH", ...)`` in the
-    test suite takes effect for ingest routes.
+    Reads the attribute from the canonical module at call time so that
+    ``monkeypatch.setattr(profile_store, "_PROVIDERS_PATH", ...)`` in
+    the test suite takes effect for ingest routes without any coupling
+    to ``app.py``.
 
     Returns:
         The providers.json file path string.
     """
-    mod = sys.modules.get("app")
-    if mod is not None:
-        return getattr(mod, "_PROVIDERS_PATH", _PROVIDERS_PATH)
-    return _PROVIDERS_PATH
+    import services.profile_store as _ps
+    return _ps._PROVIDERS_PATH
 
 
 def _get_config_path() -> str:
-    """Return the current _CONFIG_PATH from app.py at call time.
+    """Return the current _CONFIG_PATH from ``services.profile_store``.
 
-    Reads from ``sys.modules["app"]._CONFIG_PATH`` so that
-    ``monkeypatch.setattr(app_module, "_CONFIG_PATH", ...)`` in the
-    test suite takes effect for ingest routes.
+    Reads the attribute from the canonical module at call time so that
+    ``monkeypatch.setattr(profile_store, "_CONFIG_PATH", ...)`` in the
+    test suite takes effect for ingest routes without any coupling to
+    ``app.py``.
 
     Returns:
         The config.json file path string.
     """
-    mod = sys.modules.get("app")
-    if mod is not None:
-        return getattr(mod, "_CONFIG_PATH", _CONFIG_PATH)
-    return _CONFIG_PATH
+    import services.profile_store as _ps
+    return _ps._CONFIG_PATH
 
 
 def _render_ingest_idle() -> str:

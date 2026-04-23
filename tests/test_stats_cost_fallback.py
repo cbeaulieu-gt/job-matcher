@@ -378,3 +378,103 @@ estimated_cost_usd must be a float (not None).
         )
         assert day_entry is not None
         assert day_entry["cost_usd"] == pytest.approx(_KNOWN_IN, rel=1e-6)
+
+    # ------------------------------------------------------------------
+    # (e) NULL / empty model_used → labelled "(null)" in unknown_models.
+    # ------------------------------------------------------------------
+
+    def test_null_model_used_appears_as_null_label(self) -> None:
+        """Rows with model_used=None must be labelled '(null)' in unknown_models.
+
+        The DB stores NULL for rows that were never scored with an LLM
+        (e.g. score_failed rows).  ``get_usage_stats()`` must surface
+        these as the string ``"(null)"`` rather than omitting them or
+        raising an error.
+        """
+        db.insert_listing(_make_listing(
+            f"{_PREFIX}null-model-01",
+            model_used=None,
+            tokens_input=1_000_000,
+            tokens_output=0,
+        ))
+
+        stats = db.get_usage_stats()
+
+        assert "(null)" in stats["unknown_models"], (
+            "model_used=None must appear as '(null)' in unknown_models; "
+            f"got {stats['unknown_models']!r}"
+        )
+
+    def test_empty_string_model_used_appears_as_null_label(self) -> None:
+        """Rows with model_used='' must also be labelled '(null)' in unknown_models.
+
+        An empty string is falsy in Python, so the expression
+        ``mrow["model_used"] or "(null)"`` maps both None and '' to the
+        same label.  This test asserts that collapsed behaviour explicitly.
+        """
+        db.insert_listing(_make_listing(
+            f"{_PREFIX}empty-model-01",
+            model_used="",
+            tokens_input=0,
+            tokens_output=1_000_000,
+        ))
+
+        stats = db.get_usage_stats()
+
+        assert "(null)" in stats["unknown_models"], (
+            "model_used='' must appear as '(null)' in unknown_models; "
+            f"got {stats['unknown_models']!r}"
+        )
+
+    def test_null_and_empty_model_used_collapsed_to_single_entry(self) -> None:
+        """None and '' both map to '(null)' — only one entry in unknown_models.
+
+        Because both values are falsy, ``mrow["model_used"] or "(null)"``
+        produces the same label for both, and the dedup logic in
+        ``get_usage_stats()`` must not produce duplicate entries.
+        """
+        db.insert_listing(_make_listing(
+            f"{_PREFIX}null-model-02",
+            model_used=None,
+            tokens_input=500_000,
+            tokens_output=0,
+        ))
+        db.insert_listing(_make_listing(
+            f"{_PREFIX}empty-model-02",
+            model_used="",
+            tokens_input=0,
+            tokens_output=500_000,
+        ))
+
+        stats = db.get_usage_stats()
+
+        null_count = stats["unknown_models"].count("(null)")
+        assert null_count == 1, (
+            "Expected exactly one '(null)' entry in unknown_models; "
+            f"got {null_count} in {stats['unknown_models']!r}"
+        )
+
+    def test_null_model_used_total_cost_uses_fallback(self) -> None:
+        """Rows with model_used=None must contribute to total cost via fallback.
+
+        1 MTok input with model_used=None must yield _FALLBACK_IN USD,
+        proving the fallback path runs rather than being skipped entirely.
+        """
+        db.insert_listing(_make_listing(
+            f"{_PREFIX}null-model-03",
+            model_used=None,
+            tokens_input=1_000_000,
+            tokens_output=0,
+        ))
+
+        stats = db.get_usage_stats()
+
+        assert stats["estimated_cost_usd"] is not None, (
+            "estimated_cost_usd must not be None when model_used is NULL"
+        )
+        assert stats["estimated_cost_usd"] == pytest.approx(
+            _FALLBACK_IN, rel=1e-6
+        ), (
+            f"Expected fallback input rate {_FALLBACK_IN}, "
+            f"got {stats['estimated_cost_usd']}"
+        )

@@ -1320,6 +1320,9 @@ def run(
         # Per-provider cost tracking: {provider_name: {input, output, cost}}
         provider_costs: dict[str, dict] = {}
         source_fetch_counts: dict[str, int] = {}
+        # Track unknown model_used values already warned this run so each
+        # distinct SKU emits at most one WARN per run (not one per listing).
+        _warned_unknown_models: set[str] = set()
 
         # Cutoff used for --hours filtering.
         hours_cutoff: datetime | None = None
@@ -1447,8 +1450,15 @@ def run(
                             # Warn when model_used is not in the pricing table
                             # so that new or renamed SKUs surface in logs
                             # rather than silently falling back to Haiku rates.
+                            # Dedup: warn at most once per unknown SKU per run
+                            # so a 500-listing run with one new model does not
+                            # produce 500 identical WARN lines.
                             _model_used = score_result.get("model_used")
-                            if db._lookup_pricing(_model_used) is None:
+                            if (
+                                db._lookup_pricing(_model_used) is None
+                                and _model_used not in _warned_unknown_models
+                            ):
+                                _warned_unknown_models.add(_model_used)
                                 logger.warning(
                                     "Unknown model_used %r — Haiku fallback"
                                     " rates will be used for cost estimation."

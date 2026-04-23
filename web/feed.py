@@ -15,52 +15,44 @@ Owns the 10 routes that display and interact with job listings:
 
 from __future__ import annotations
 
-import sys
-
 from flask import Blueprint, make_response, render_template, request
 
 import db
 from services import ingest_control
-from services.profile_store import _PROVIDERS_PATH
 from services.provider_schemas import _config_warnings
 
-# CONFIG is kept in app.py for now (Phase 5a does not relocate module-level
-# globals).  We look it up from sys.modules at request time to avoid a
-# circular import and to pick up any monkeypatch the test suite applies to
-# ``app_module.CONFIG``.
-
-
 def _get_config() -> dict:
-    """Return the CONFIG dict from the app module.
+    """Return the current CONFIG dict from ``services.profile_store``.
 
-    Looks up ``sys.modules["app"].CONFIG`` at call time so that test
-    fixtures using ``monkeypatch.setattr(app_module, "CONFIG", ...)``
-    and the ``__main__`` demo-mode path both see their mutations reflected.
+    Calls ``load_config()`` at request time so that test fixtures using
+    ``monkeypatch.setattr(profile_store, "_CONFIG_PATH", ...)`` are
+    picked up on each request.  Returns an empty dict on any read error
+    so the feed can still render with default values.
 
     Returns:
-        The current CONFIG dict, or a minimal fallback if app.py has not
-        finished initialising.
+        The current config dict, or ``{}`` if the file is absent or
+        malformed.
     """
-    mod = sys.modules.get("app")
-    if mod is not None:
-        return getattr(mod, "CONFIG", {})
-    return {}
+    import services.profile_store as _ps
+    try:
+        return _ps.load_config(_ps._CONFIG_PATH)
+    except SystemExit:
+        return {}
 
 
 def _get_providers_path() -> str:
-    """Return the current _PROVIDERS_PATH from app.py.
+    """Return the current _PROVIDERS_PATH from ``services.profile_store``.
 
-    Reads from ``sys.modules["app"]._PROVIDERS_PATH`` at request time so
-    that ``monkeypatch.setattr(app_module, "_PROVIDERS_PATH", ...)`` in
-    the test suite takes effect for feed routes.
+    Reads the attribute from the canonical module at call time so that
+    ``monkeypatch.setattr(profile_store, "_PROVIDERS_PATH", ...)`` in
+    the test suite takes effect for feed routes without any coupling to
+    ``app.py``.
 
     Returns:
         The providers.json file path string.
     """
-    mod = sys.modules.get("app")
-    if mod is not None:
-        return getattr(mod, "_PROVIDERS_PATH", _PROVIDERS_PATH)
-    return _PROVIDERS_PATH
+    import services.profile_store as _ps
+    return _ps._PROVIDERS_PATH
 
 
 feed_bp = Blueprint("feed", __name__)

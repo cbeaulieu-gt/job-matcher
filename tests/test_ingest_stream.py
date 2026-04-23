@@ -178,7 +178,7 @@ class TestStdoutReader:
         """
         import io
         import logging
-        from app import _stdout_reader
+        from services.ingest_control import _stdout_reader
 
         # Build a fake EventQueue that records pushed events
         pushed = []

@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import os
 import re
-import sys as _sys
 from typing import Optional
 
 from dotenv import load_dotenv
@@ -158,25 +157,14 @@ def create_app() -> Flask:
     # ------------------------------------------------------------------
     # 8. Register the demo-mode context processor.
     # ------------------------------------------------------------------
-    # DEMO_MODE lives in app.py at module scope.  We cannot import
-    # ``app`` here at create_app() call-time because create_app() is
-    # itself called from inside app.py's module initialisation, which
-    # would produce a circular import with a partially-constructed
-    # module.  Instead we look up the module via sys.modules at
-    # *request* time — by then app.py is fully initialised and
-    # sys.modules["app"] is stable.  This also means that when the
-    # __main__ block sets DEMO_MODE=True after create_app() returns,
-    # every subsequent request sees the updated value.
+    # DEMO_MODE is signalled via the DEMO_MODE environment variable
+    # (value "1" = enabled).  The __main__ block in app.py sets this
+    # variable before the dev server starts; waitress (Docker) never
+    # executes that code path and the variable is absent, so demo mode
+    # is off by default.
     def _demo_mode_processor() -> dict:
         """Return demo_mode for injection into every template context."""
-        # Deliberate: look up "app" by its canonical module name. app.py
-        # is always imported as `app` throughout this codebase — tests
-        # use `from app import app as flask_app`, scripts use
-        # `python app.py`, and no caller imports it under an alias. If
-        # that ever changes, this processor will silently fall back to
-        # DEMO_MODE=False, which is the safe default.
-        _mod = _sys.modules.get("app")
-        demo = getattr(_mod, "DEMO_MODE", False) if _mod else False
+        demo = os.environ.get("DEMO_MODE") == "1"
         return inject_demo_mode(demo)
 
     app.context_processor(_demo_mode_processor)

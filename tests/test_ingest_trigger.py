@@ -18,7 +18,8 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import web.ingest as web_ingest_module
-from app import app as flask_app, _parse_ingest_summary
+from app import app as flask_app
+from services.ingest_control import _parse_ingest_summary
 from services import ingest_control
 
 

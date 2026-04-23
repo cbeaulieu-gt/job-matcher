@@ -18,7 +18,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import app as app_module
+import services.profile_store as _profile_store_module
 import web.settings as _settings_module
 from db import _lookup_pricing
 from app import app as flask_app
@@ -33,9 +33,9 @@ from job_sources import SOURCES, make_enabled_sources, JobSource
 
 @pytest.fixture()
 def tmp_providers_path(tmp_path, monkeypatch):
-    """Isolated providers.json path; patch app and web.settings bindings."""
+    """Isolated providers.json path; patch profile_store and web.settings."""
     path = str(tmp_path / "providers.json")
-    monkeypatch.setattr(app_module, "_PROVIDERS_PATH", path)
+    monkeypatch.setattr(_profile_store_module, "_PROVIDERS_PATH", path)
     monkeypatch.setattr(_settings_module, "_PROVIDERS_PATH", path)
     return path
 
@@ -43,7 +43,7 @@ def tmp_providers_path(tmp_path, monkeypatch):
 @pytest.fixture()
 def tmp_keys_path(tmp_path, monkeypatch):
     path = str(tmp_path / "keys.json")
-    monkeypatch.setattr(app_module, "_KEYS_PATH", path)
+    monkeypatch.setattr(_profile_store_module, "_KEYS_PATH", path)
     monkeypatch.setattr(_settings_module, "_KEYS_PATH", path)
     return path
 
@@ -51,7 +51,7 @@ def tmp_keys_path(tmp_path, monkeypatch):
 @pytest.fixture()
 def tmp_config_path(tmp_path, monkeypatch):
     path = str(tmp_path / "config.json")
-    monkeypatch.setattr(app_module, "_CONFIG_PATH", path)
+    monkeypatch.setattr(_profile_store_module, "_CONFIG_PATH", path)
     monkeypatch.setattr(_settings_module, "_CONFIG_PATH", path)
     return path
 
@@ -337,7 +337,7 @@ class TestIssue282ConfigWarningsFalsePositive:
             "job_sources": {},  # no adzuna entry
         })
 
-        from app import _config_warnings
+        from services.provider_schemas import _config_warnings
         # After Issue #326: _config_warnings now lives in services.provider_schemas and
         # requires providers_path= explicitly (no app-global fallback).
         warnings = _config_warnings(providers_path=tmp_providers_path)
@@ -356,7 +356,7 @@ class TestIssue282ConfigWarningsFalsePositive:
             },
         })
 
-        from app import _config_warnings
+        from services.provider_schemas import _config_warnings
         warnings = _config_warnings(providers_path=tmp_providers_path)
 
         assert warnings == []
@@ -373,7 +373,7 @@ class TestIssue282ConfigWarningsFalsePositive:
             },
         })
 
-        from app import _config_warnings
+        from services.provider_schemas import _config_warnings
         warnings = _config_warnings(providers_path=tmp_providers_path)
 
         assert len(warnings) == 1
@@ -391,7 +391,7 @@ class TestIssue282ConfigWarningsFalsePositive:
             },
         })
 
-        from app import _config_warnings
+        from services.provider_schemas import _config_warnings
         warnings = _config_warnings(providers_path=tmp_providers_path)
 
         assert warnings == []

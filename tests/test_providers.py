@@ -628,7 +628,7 @@ class TestMakeProvider:
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "env-key"}), \
              patch("providers.anthropic_provider.anthropic.Anthropic") as MockAnthopic:
             make_provider(config)
-        MockAnthopic.assert_called_once_with(api_key="env-key")
+        MockAnthopic.assert_called_once_with(api_key="env-key", timeout=pytest.approx(60.0))
 
     def test_openai_api_key_from_env(self):
         """make_provider() uses OPENAI_API_KEY env var when config key is absent."""
@@ -638,7 +638,7 @@ class TestMakeProvider:
         with patch.dict(os.environ, {"OPENAI_API_KEY": "oai-env-key"}), \
              patch("providers.openai_provider.openai.OpenAI") as MockOpenAI:
             make_provider(config)
-        MockOpenAI.assert_called_once_with(api_key="oai-env-key")
+        MockOpenAI.assert_called_once_with(api_key="oai-env-key", timeout=pytest.approx(60.0))
 
     def test_gemini_api_key_from_env(self):
         """make_provider() uses GOOGLE_API_KEY env var when config key is absent."""
@@ -648,4 +648,6 @@ class TestMakeProvider:
         with patch.dict(os.environ, {"GOOGLE_API_KEY": "google-env-key"}), \
              patch("providers.gemini_provider.genai.Client") as mock_client:
             make_provider(config)
-        mock_client.assert_called_once_with(api_key="google-env-key")
+        call_kwargs = mock_client.call_args.kwargs
+        assert call_kwargs["api_key"] == "google-env-key"
+        assert call_kwargs["http_options"].timeout == 60_000

@@ -12,6 +12,7 @@ import logging
 import time
 
 from google import genai
+from google.genai.types import HttpOptions
 
 from .base import LLMProvider, _sanitise_detail
 from .anthropic_provider import _parse_json_response
@@ -30,6 +31,11 @@ _GEMINI_PRICING: dict[str, tuple[float, float]] = {
 
 _FALLBACK_INPUT  = 0.075   # flash pricing as safe default
 _FALLBACK_OUTPUT = 0.30
+
+# Prevent silent indefinite hangs when Gemini's API stalls at the TCP layer.
+# Note: google-genai SDK takes timeout in MILLISECONDS, not seconds — do not
+# change 60_000 to 60 here.
+_LLM_TIMEOUT_MS = 60_000
 
 
 def _pricing_for_model(model: str) -> tuple[float, float]:
@@ -61,7 +67,7 @@ class GeminiProvider(LLMProvider):
     """
 
     def __init__(self, api_key: str, model: str) -> None:
-        self._client = genai.Client(api_key=api_key)
+        self._client = genai.Client(api_key=api_key, http_options=HttpOptions(timeout=_LLM_TIMEOUT_MS))
         self._model_name = model
         self._input_cost, self._output_cost = _pricing_for_model(model)
 
@@ -122,7 +128,7 @@ class GeminiProvider(LLMProvider):
             ``(state, detail)`` tuple describing the validation outcome.
         """
         try:
-            client = genai.Client(api_key=api_key)
+            client = genai.Client(api_key=api_key, http_options=HttpOptions(timeout=_LLM_TIMEOUT_MS))
             client.models.generate_content(
                 model=model,
                 contents="hi",

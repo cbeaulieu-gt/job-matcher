@@ -1154,7 +1154,7 @@ class TestValidateHelpers:
         class _FakeClient:
             messages = _FakeMessages()
 
-        monkeypatch.setattr(_anthropic, "Anthropic", lambda api_key: _FakeClient())
+        monkeypatch.setattr(_anthropic, "Anthropic", lambda **kwargs: _FakeClient())
         state, detail = AnthropicProvider.validate_credentials("sk-key", "claude-haiku-4-5-20251001")
         assert state == "valid"
         assert detail is None
@@ -1175,7 +1175,7 @@ class TestValidateHelpers:
         class _FakeClient:
             messages = _FakeMessages()
 
-        monkeypatch.setattr(_anthropic, "Anthropic", lambda api_key: _FakeClient())
+        monkeypatch.setattr(_anthropic, "Anthropic", lambda **kwargs: _FakeClient())
         monkeypatch.setattr(_anthropic, "AuthenticationError", _FakeAuthError)
         monkeypatch.setattr(_anthropic, "PermissionDeniedError", type("_NeverRaised", (Exception,), {}))
         monkeypatch.setattr(_anthropic, "NotFoundError", type("_NeverRaised2", (Exception,), {}))
@@ -1198,7 +1198,7 @@ class TestValidateHelpers:
         class _FakeClient:
             messages = _FakeMessages()
 
-        monkeypatch.setattr(_anthropic, "Anthropic", lambda api_key: _FakeClient())
+        monkeypatch.setattr(_anthropic, "Anthropic", lambda **kwargs: _FakeClient())
         monkeypatch.setattr(_anthropic, "AuthenticationError", type("_NeverRaised", (Exception,), {}))
         monkeypatch.setattr(_anthropic, "PermissionDeniedError", _FakePermError)
         monkeypatch.setattr(_anthropic, "NotFoundError", type("_NeverRaised2", (Exception,), {}))
@@ -1219,7 +1219,7 @@ class TestValidateHelpers:
         class _FakeClient:
             messages = _FakeMessages()
 
-        monkeypatch.setattr(_anthropic, "Anthropic", lambda api_key: _FakeClient())
+        monkeypatch.setattr(_anthropic, "Anthropic", lambda **kwargs: _FakeClient())
         monkeypatch.setattr(_anthropic, "AuthenticationError", type("_NeverRaised", (Exception,), {}))
         monkeypatch.setattr(_anthropic, "PermissionDeniedError", type("_NeverRaised2", (Exception,), {}))
         monkeypatch.setattr(_anthropic, "NotFoundError", _FakeNotFoundError)
@@ -1237,7 +1237,7 @@ class TestValidateHelpers:
         class _FakeClient:
             messages = _FakeMessages()
 
-        monkeypatch.setattr(_anthropic, "Anthropic", lambda api_key: _FakeClient())
+        monkeypatch.setattr(_anthropic, "Anthropic", lambda **kwargs: _FakeClient())
         # Real SDK error classes left in place — ConnectionError won't match them.
         state, detail = AnthropicProvider.validate_credentials("sk-key", "claude-haiku-4-5-20251001")
         assert state == "unreachable"
@@ -1261,7 +1261,7 @@ class TestValidateHelpers:
         class _FakeClient:
             messages = _FakeMessages()
 
-        monkeypatch.setattr(_anthropic, "Anthropic", lambda api_key: _FakeClient())
+        monkeypatch.setattr(_anthropic, "Anthropic", lambda **kwargs: _FakeClient())
         monkeypatch.setattr(_anthropic, "AuthenticationError", _FakeAuthError)
         monkeypatch.setattr(_anthropic, "PermissionDeniedError", type("_NeverRaised", (Exception,), {}))
         monkeypatch.setattr(_anthropic, "NotFoundError", type("_NeverRaised2", (Exception,), {}))
@@ -1287,7 +1287,7 @@ class TestValidateHelpers:
         class _FakeClient:
             messages = _FakeMessages()
 
-        monkeypatch.setattr(_anthropic, "Anthropic", lambda api_key: _FakeClient())
+        monkeypatch.setattr(_anthropic, "Anthropic", lambda **kwargs: _FakeClient())
         monkeypatch.setattr(_anthropic, "AuthenticationError", _FakeAuthError)
         monkeypatch.setattr(_anthropic, "PermissionDeniedError", type("_NeverRaised", (Exception,), {}))
         monkeypatch.setattr(_anthropic, "NotFoundError", type("_NeverRaised2", (Exception,), {}))
@@ -1314,7 +1314,7 @@ class TestValidateHelpers:
         class _FakeClient:
             chat = _FakeChat()
 
-        monkeypatch.setattr(_openai, "OpenAI", lambda api_key: _FakeClient())
+        monkeypatch.setattr(_openai, "OpenAI", lambda **kwargs: _FakeClient())
         state, detail = OpenAIProvider.validate_credentials("sk-oai", "gpt-4o-mini")
         assert state == "valid"
         assert detail is None
@@ -1335,7 +1335,7 @@ class TestValidateHelpers:
         class _FakeClient:
             chat = _FakeChat()
 
-        monkeypatch.setattr(_openai, "OpenAI", lambda api_key: _FakeClient())
+        monkeypatch.setattr(_openai, "OpenAI", lambda **kwargs: _FakeClient())
         monkeypatch.setattr(_openai, "AuthenticationError", _FakeAuthError)
         monkeypatch.setattr(_openai, "PermissionDeniedError", type("_NeverRaised", (Exception,), {}))
         monkeypatch.setattr(_openai, "NotFoundError", type("_NeverRaised2", (Exception,), {}))
@@ -1360,7 +1360,7 @@ class TestValidateHelpers:
         class _FakeClient:
             chat = _FakeChat()
 
-        monkeypatch.setattr(_openai, "OpenAI", lambda api_key: _FakeClient())
+        monkeypatch.setattr(_openai, "OpenAI", lambda **kwargs: _FakeClient())
         monkeypatch.setattr(_openai, "AuthenticationError", type("_NeverRaised", (Exception,), {}))
         monkeypatch.setattr(_openai, "PermissionDeniedError", type("_NeverRaised2", (Exception,), {}))
         monkeypatch.setattr(_openai, "NotFoundError", _FakeNotFoundError)
@@ -1381,7 +1381,7 @@ class TestValidateHelpers:
         class _FakeClient:
             chat = _FakeChat()
 
-        monkeypatch.setattr(_openai, "OpenAI", lambda api_key: _FakeClient())
+        monkeypatch.setattr(_openai, "OpenAI", lambda **kwargs: _FakeClient())
         state, detail = OpenAIProvider.validate_credentials("sk-oai", "gpt-4o-mini")
         assert state == "unreachable"
         assert detail is not None
@@ -1406,7 +1406,7 @@ class TestValidateHelpers:
         class _FakeClient:
             chat = _FakeChat()
 
-        monkeypatch.setattr(_openai, "OpenAI", lambda api_key: _FakeClient())
+        monkeypatch.setattr(_openai, "OpenAI", lambda **kwargs: _FakeClient())
         monkeypatch.setattr(_openai, "AuthenticationError", _FakeAuthError)
         monkeypatch.setattr(_openai, "PermissionDeniedError", type("_NeverRaised", (Exception,), {}))
         monkeypatch.setattr(_openai, "NotFoundError", type("_NeverRaised2", (Exception,), {}))
@@ -1435,7 +1435,7 @@ class TestValidateHelpers:
         class _FakeClient:
             chat = _FakeChat()
 
-        monkeypatch.setattr(_openai, "OpenAI", lambda api_key: _FakeClient())
+        monkeypatch.setattr(_openai, "OpenAI", lambda **kwargs: _FakeClient())
         monkeypatch.setattr(_openai, "AuthenticationError", _FakeAuthError)
         monkeypatch.setattr(_openai, "PermissionDeniedError", type("_NeverRaised", (Exception,), {}))
         monkeypatch.setattr(_openai, "NotFoundError", type("_NeverRaised2", (Exception,), {}))
@@ -1459,7 +1459,7 @@ class TestValidateHelpers:
         class _FakeClient:
             models = _FakeModels()
 
-        monkeypatch.setattr(_genai, "Client", lambda api_key: _FakeClient())
+        monkeypatch.setattr(_genai, "Client", lambda **kwargs: _FakeClient())
         state, detail = GeminiProvider.validate_credentials("gm-key", "gemini-1.5-flash")
         assert state == "valid"
         assert detail is None
@@ -1474,7 +1474,7 @@ class TestValidateHelpers:
         class _FakeClient:
             models = _FakeModels()
 
-        monkeypatch.setattr(_genai, "Client", lambda api_key: _FakeClient())
+        monkeypatch.setattr(_genai, "Client", lambda **kwargs: _FakeClient())
         state, detail = GeminiProvider.validate_credentials("gm-bad", "gemini-1.5-flash")
         assert state == "invalid_key"
         assert detail is not None
@@ -1490,7 +1490,7 @@ class TestValidateHelpers:
         class _FakeClient:
             models = _FakeModels()
 
-        monkeypatch.setattr(_genai, "Client", lambda api_key: _FakeClient())
+        monkeypatch.setattr(_genai, "Client", lambda **kwargs: _FakeClient())
         state, detail = GeminiProvider.validate_credentials("gm-key", "gemini-1.5-flash")
         assert state == "unreachable"
         assert detail is not None
@@ -1506,7 +1506,7 @@ class TestValidateHelpers:
         class _FakeClient:
             models = _FakeModels()
 
-        monkeypatch.setattr(_genai, "Client", lambda api_key: _FakeClient())
+        monkeypatch.setattr(_genai, "Client", lambda **kwargs: _FakeClient())
         state, detail = GeminiProvider.validate_credentials("gm-key", "gemini-bogus")
         assert state == "unknown_model"
         assert detail is not None
@@ -1524,7 +1524,7 @@ class TestValidateHelpers:
         class _FakeClient:
             models = _FakeModels()
 
-        monkeypatch.setattr(_genai, "Client", lambda api_key: _FakeClient())
+        monkeypatch.setattr(_genai, "Client", lambda **kwargs: _FakeClient())
         state, detail = GeminiProvider.validate_credentials(secret_key, "gemini-1.5-flash")
         assert state == "invalid_key"
         assert secret_key not in (detail or "")
@@ -1544,7 +1544,7 @@ class TestValidateHelpers:
         class _FakeClient:
             models = _FakeModels()
 
-        monkeypatch.setattr(_genai, "Client", lambda api_key: _FakeClient())
+        monkeypatch.setattr(_genai, "Client", lambda **kwargs: _FakeClient())
         state, detail = GeminiProvider.validate_credentials(secret_key, "gemini-1.5-flash")
         assert secret_key not in (detail or "")
         assert "[REDACTED]" in (detail or "")

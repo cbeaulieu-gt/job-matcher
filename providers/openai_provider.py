@@ -31,6 +31,9 @@ _OPENAI_PRICING: dict[str, tuple[float, float]] = {
 _FALLBACK_INPUT  = 0.15   # gpt-4o-mini pricing as safe default
 _FALLBACK_OUTPUT = 0.60
 
+# Prevent silent indefinite hangs when OpenAI's API stalls at the TCP layer.
+_LLM_TIMEOUT_SECONDS = 60.0
+
 
 def _pricing_for_model(model: str) -> tuple[float, float]:
     """Return ``(input_cost_per_mtok, output_cost_per_mtok)`` for *model*.
@@ -61,7 +64,7 @@ class OpenAIProvider(LLMProvider):
     """
 
     def __init__(self, api_key: str, model: str) -> None:
-        self._client = openai.OpenAI(api_key=api_key)
+        self._client = openai.OpenAI(api_key=api_key, timeout=_LLM_TIMEOUT_SECONDS)
         self._model = model
         self._input_cost, self._output_cost = _pricing_for_model(model)
 
@@ -118,7 +121,7 @@ class OpenAIProvider(LLMProvider):
             ``(state, detail)`` tuple describing the validation outcome.
         """
         try:
-            client = openai.OpenAI(api_key=api_key)
+            client = openai.OpenAI(api_key=api_key, timeout=_LLM_TIMEOUT_SECONDS)
             client.chat.completions.create(
                 model=model,
                 max_tokens=1,

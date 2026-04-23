@@ -1444,6 +1444,18 @@ def run(
                                 src_name,
                                 title,
                             )
+                            # Warn when model_used is not in the pricing table
+                            # so that new or renamed SKUs surface in logs
+                            # rather than silently falling back to Haiku rates.
+                            _model_used = score_result.get("model_used")
+                            if db._lookup_pricing(_model_used) is None:
+                                logger.warning(
+                                    "Unknown model_used %r — Haiku fallback"
+                                    " rates will be used for cost estimation."
+                                    " Add it to db._PRICING_TABLE to silence"
+                                    " this warning.",
+                                    _model_used,
+                                )
                             if _verbose:
                                 logger.info(
                                     "  verdict: %s\n  matched: %s\n  missing: %s\n  concerns: %s",

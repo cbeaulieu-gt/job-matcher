@@ -32,6 +32,7 @@ from scripts.eval_rubric import (
     _VALID_RECOMMENDATIONS,
     _normalize_seed,
     _compute_decision,
+    _build_run_meta,
 )
 
 
@@ -1212,3 +1213,65 @@ class TestComputeDecision:
         """Result dict carries the threshold constant (0.80) for serialization."""
         decision = _compute_decision([_make_eval(0, 1, 1)])
         assert decision["threshold"] == 0.80
+
+
+# ---------------------------------------------------------------------------
+# _build_run_meta() tests
+# ---------------------------------------------------------------------------
+
+
+class TestBuildRunMeta:
+    """Tests for _build_run_meta: constructs the metadata dict embedded in
+    both the markdown and JSON artifacts."""
+
+    def test_carries_all_required_fields(self):
+        """All required fields are present and match the supplied arguments."""
+        listings = [
+            {"id": "src-1", "score": 9.0, "title": "x"},
+            {"id": "src-2", "score": 6.0, "title": "y"},
+            {"id": "src-3", "score": 3.0, "title": "z"},
+        ]
+        meta = _build_run_meta(
+            listings=listings,
+            requested_counts={"high": 32, "mid": 36, "low": 32},
+            seed=20260424,
+            provider_label="anthropic/claude-haiku-4-5",
+            commit_sha="abc1234",
+            run_iso="2026-04-24T15:00:00",
+        )
+
+        assert meta["commit_sha"] == "abc1234"
+        assert meta["provider"] == "anthropic/claude-haiku-4-5"
+        assert meta["seed"] == 20260424
+        assert meta["run_iso"] == "2026-04-24T15:00:00"
+        assert meta["requested_counts"] == {"high": 32, "mid": 36, "low": 32}
+        assert meta["actual_counts"] == {"high": 1, "mid": 1, "low": 1}
+        assert meta["sampled_ids"] == ["src-1", "src-2", "src-3"]
+
+    def test_empty_listings_gives_zero_counts(self):
+        """Empty listings list produces zero actual_counts and empty sampled_ids."""
+        meta = _build_run_meta(
+            listings=[],
+            requested_counts={"high": 1, "mid": 1, "low": 1},
+            seed=0,
+            provider_label="x/y",
+            commit_sha="0",
+            run_iso="2026-04-24T00:00:00",
+        )
+        assert meta["actual_counts"] == {"high": 0, "mid": 0, "low": 0}
+        assert meta["sampled_ids"] == []
+
+    def test_missing_score_falls_to_unknown_bucket(self):
+        """Listings with unclassifiable scores don't contribute to tier counts."""
+        listings = [{"id": "a", "score": None, "title": "t"}]
+        meta = _build_run_meta(
+            listings=listings,
+            requested_counts={"high": 0, "mid": 0, "low": 0},
+            seed=0,
+            provider_label="x/y",
+            commit_sha="0",
+            run_iso="2026-04-24T00:00:00",
+        )
+        # Listings with unclassifiable scores don't contribute to tier counts.
+        assert meta["actual_counts"] == {"high": 0, "mid": 0, "low": 0}
+        assert meta["sampled_ids"] == ["a"]

@@ -882,6 +882,45 @@ def _compute_decision(evaluated: list[dict]) -> dict:
     }
 
 
+def _build_run_meta(
+    listings: list[dict],
+    requested_counts: dict,
+    seed: int,
+    provider_label: str,
+    commit_sha: str,
+    run_iso: str,
+) -> dict:
+    """Build the run-metadata dict embedded in both artifacts.
+
+    Args:
+        listings:         Listings actually returned by the sample query.
+        requested_counts: Dict with keys 'high'/'mid'/'low' showing what was
+                          asked for (pre-downgrade).
+        seed:             Seed used for the run.
+        provider_label:   String like 'anthropic/claude-haiku-4-5'.
+        commit_sha:       Git commit SHA (short or long). Caller supplies.
+        run_iso:          ISO-8601 timestamp string. Caller supplies.
+
+    Returns:
+        Dict with deterministic field set (see tests for exact shape).
+    """
+    actual_counts = {"high": 0, "mid": 0, "low": 0}
+    for listing in listings:
+        tier = _tier_of(listing.get("score"))
+        if tier in actual_counts:
+            actual_counts[tier] += 1
+
+    return {
+        "commit_sha": commit_sha,
+        "provider": provider_label,
+        "seed": seed,
+        "run_iso": run_iso,
+        "requested_counts": dict(requested_counts),
+        "actual_counts": actual_counts,
+        "sampled_ids": [listing.get("id") for listing in listings],
+    }
+
+
 def _print_summary(
     evaluated: list[dict],
     provider_label: str,

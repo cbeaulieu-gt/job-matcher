@@ -281,6 +281,22 @@ def _connect() -> psycopg2.extensions.connection:
         sys.exit(1)
 
 
+def _normalize_seed(seed: int) -> float:
+    """Map an integer seed into the [-1.0, 1.0] range setseed() requires.
+
+    PostgreSQL's ``setseed(value)`` accepts a float in [-1.0, 1.0]. We map
+    the Python int seed into that range via modulo and linear scaling so
+    any integer seed produces a deterministic, in-range value.
+
+    Args:
+        seed: Arbitrary integer seed.
+
+    Returns:
+        Normalized seed in [-1.0, 1.0].
+    """
+    return (seed % 10_000_000) / 10_000_000 * 2 - 1
+
+
 def _fetch_stratified_sample(
     conn: psycopg2.extensions.connection,
     high_n: int,

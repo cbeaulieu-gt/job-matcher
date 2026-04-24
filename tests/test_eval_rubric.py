@@ -30,6 +30,7 @@ from scripts.eval_rubric import (
     _SKILLS_WEIGHT,
     _ROLE_FIT_WEIGHT,
     _VALID_RECOMMENDATIONS,
+    _normalize_seed,
 )
 
 
@@ -1027,3 +1028,34 @@ def test_print_summary_old_path_reads_flat_missing_skills(capsys):
     assert "old_flat=3" in captured.out
     # combined avg should be 2 (may render as int or float)
     assert "new_combined(req+nth)=2" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# Issue #274: seed normalization + seeded sampling
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizeSeed:
+    """Tests for _normalize_seed: maps ints into the [-1.0, 1.0] range
+    that PostgreSQL's setseed() requires."""
+
+    def test_zero_maps_to_negative_one(self):
+        # (0 % 10_000_000) / 10_000_000 * 2 - 1 = -1.0
+        assert _normalize_seed(0) == -1.0
+
+    def test_five_million_maps_to_zero(self):
+        # (5_000_000 / 10_000_000) * 2 - 1 = 0.0
+        assert _normalize_seed(5_000_000) == 0.0
+
+    def test_ten_million_wraps_to_negative_one(self):
+        # (10_000_000 % 10_000_000) / 10_000_000 * 2 - 1 = -1.0
+        assert _normalize_seed(10_000_000) == -1.0
+
+    def test_large_seed_stays_in_range(self):
+        result = _normalize_seed(20260424)
+        assert -1.0 <= result <= 1.0
+
+    def test_negative_seed_handled(self):
+        # Python's modulo keeps sign of divisor, so (-1) % 10_000_000 = 9_999_999
+        result = _normalize_seed(-1)
+        assert -1.0 <= result <= 1.0

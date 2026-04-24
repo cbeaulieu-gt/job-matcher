@@ -36,6 +36,7 @@ from scripts.eval_rubric import (
     _build_run_meta,
     _render_json_sidecar,
     _render_markdown_report,
+    _parse_args,
 )
 
 
@@ -1439,3 +1440,44 @@ class TestRenderMarkdownReport:
         md = _render_markdown_report(evaluated, meta, decision)
         assert "## Per-Listing Results" in md
         assert "High role" in md  # the one synthetic listing
+
+
+# ---------------------------------------------------------------------------
+# _parse_args() — CLI flag tests (Issue #274 Task 7)
+# ---------------------------------------------------------------------------
+
+
+class TestParseArgs:
+    """Tests for the extended CLI argument parser."""
+
+    def test_seed_defaults_to_date_integer(self):
+        """Default seed is today's date as YYYYMMDD int."""
+        with patch("sys.argv", ["eval_rubric.py"]):
+            args = _parse_args()
+        # Default seed is today's date as YYYYMMDD int.
+        assert isinstance(args.seed, int)
+        assert args.seed >= 20260101  # sanity: positive and plausible
+
+    def test_seed_flag_overrides_default(self):
+        """--seed N stores N as an integer."""
+        with patch("sys.argv", ["eval_rubric.py", "--seed", "42"]):
+            args = _parse_args()
+        assert args.seed == 42
+
+    def test_output_defaults_to_none(self):
+        """--output is None when not supplied."""
+        with patch("sys.argv", ["eval_rubric.py"]):
+            args = _parse_args()
+        assert args.output is None
+
+    def test_output_flag_captures_path(self):
+        """--output PATH stores the given path string."""
+        with patch("sys.argv", ["eval_rubric.py", "--output", "docs/eval/x.md"]):
+            args = _parse_args()
+        assert args.output == "docs/eval/x.md"
+
+    def test_existing_count_flag_still_works(self):
+        """--count N is still accepted without error."""
+        with patch("sys.argv", ["eval_rubric.py", "--count", "50"]):
+            args = _parse_args()
+        assert args.count == 50

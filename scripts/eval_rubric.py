@@ -21,9 +21,11 @@ Environment:
 from __future__ import annotations
 
 import argparse
+from datetime import date, datetime
 import json
 import os
 import statistics
+import subprocess
 import sys
 from typing import Optional
 
@@ -1357,6 +1359,25 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print full LLM responses for each listing.",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=int(date.today().strftime("%Y%m%d")),
+        metavar="N",
+        help=(
+            "Integer seed for deterministic sampling. Defaults to today's "
+            "date as YYYYMMDD so runs on the same day reproduce the sample."
+        ),
+    )
+    parser.add_argument(
+        "--output",
+        metavar="PATH",
+        default=None,
+        help=(
+            "Write a markdown report to PATH and a JSON sidecar to the "
+            "same path with .json extension. Script still prints to stdout."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -1391,7 +1412,7 @@ def main() -> None:
     # --- Connect to database and fetch sample ---
     conn = _connect()
     try:
-        listings = _fetch_stratified_sample(conn, high_n, mid_n, low_n, seed=0)
+        listings = _fetch_stratified_sample(conn, high_n, mid_n, low_n, seed=args.seed)
     finally:
         conn.close()
 
@@ -1465,6 +1486,43 @@ def main() -> None:
 
     # --- Print summary ---
     _print_summary(evaluated=evaluated, provider_label=provider_label)
+
+    # --- Write artifacts if --output was set ---
+    if args.output:
+        try:
+            commit_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()[:7]
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            commit_sha = "unknown"
+
+        run_iso = datetime.now().isoformat(timespec="seconds")
+        requested_counts = {"high": high_n, "mid": mid_n, "low": low_n}
+
+        meta = _build_run_meta(
+            listings=listings,
+            requested_counts=requested_counts,
+            seed=args.seed,
+            provider_label=provider_label,
+            commit_sha=commit_sha,
+            run_iso=run_iso,
+        )
+        decision = _compute_decision(evaluated)
+
+        md_path = args.output
+        json_path = md_path.rsplit(".", 1)[0] + ".json"
+
+        os.makedirs(os.path.dirname(md_path) or ".", exist_ok=True)
+
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write(_render_markdown_report(evaluated, meta, decision))
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(_render_json_sidecar(evaluated, meta, decision), f, indent=2)
+
+        print(f"\nArtifacts written:\n  {md_path}\n  {json_path}")
 
 
 if __name__ == "__main__":

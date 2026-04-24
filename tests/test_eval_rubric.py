@@ -379,7 +379,9 @@ def test_fetch_stratified_sample_all_tiers():
     )
 
     with patch("scripts.eval_rubric.psycopg2.extras.RealDictCursor"):
-        results = _fetch_stratified_sample(mock_conn, high_n=1, mid_n=1, low_n=1)
+        results = _fetch_stratified_sample(
+            mock_conn, high_n=1, mid_n=1, low_n=1, seed=0
+        )
 
     assert len(results) >= 3  # At least one from each tier
 
@@ -392,13 +394,13 @@ def test_fetch_stratified_sample_respects_limits():
     mock_cursor.fetchall.return_value = []
 
     with patch("scripts.eval_rubric.psycopg2.extras.RealDictCursor"):
-        _fetch_stratified_sample(mock_conn, high_n=5, mid_n=10, low_n=15)
+        _fetch_stratified_sample(mock_conn, high_n=5, mid_n=10, low_n=15, seed=0)
 
-    # Should call execute 3 times (one per tier) with the limits
+    # Should call execute 4 times: one setseed + three tier queries
     calls = mock_cursor.execute.call_args_list
-    assert len(calls) == 3
-    # Verify limits are in the params (second arg to each execute call)
-    limits = [call[0][1][0] for call in calls]
+    assert len(calls) == 4
+    # Verify limits are in the params of the three tier calls (skip index 0)
+    limits = [call[0][1][0] for call in calls[1:]]
     assert 5 in limits
     assert 10 in limits
     assert 15 in limits
@@ -424,7 +426,7 @@ def test_fetch_stratified_sample_empty_tier():
     mock_cursor.fetchall.side_effect = mock_fetchall
 
     with patch("scripts.eval_rubric.psycopg2.extras.RealDictCursor"):
-        results = _fetch_stratified_sample(mock_conn, 2, 2, 2)
+        results = _fetch_stratified_sample(mock_conn, 2, 2, 2, seed=0)
 
     # Should still return results from high and low
     assert len(results) >= 2
@@ -1059,3 +1061,47 @@ class TestNormalizeSeed:
         # Python's modulo keeps sign of divisor, so (-1) % 10_000_000 = 9_999_999
         result = _normalize_seed(-1)
         assert -1.0 <= result <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# _fetch_stratified_sample() — seeded RNG tests
+# ---------------------------------------------------------------------------
+
+
+class TestFetchStratifiedSampleSeeded:
+    """Tests that the sample query seeds PostgreSQL's RNG before querying."""
+
+    def test_setseed_called_before_sample_queries(self):
+        # Arrange: mock cursor that returns empty rows for all three tier queries
+        mock_cursor = MagicMock()
+        mock_cursor.fetchall.return_value = []
+        mock_cursor.__enter__ = MagicMock(return_value=mock_cursor)
+        mock_cursor.__exit__ = MagicMock(return_value=False)
+
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+
+        # Act
+        _fetch_stratified_sample(mock_conn, 10, 10, 10, seed=20260424)
+
+        # Assert: first execute call must be SELECT setseed(...) with
+        # the normalized seed.
+        first_call = mock_cursor.execute.call_args_list[0]
+        assert "setseed" in first_call.args[0].lower()
+        # _normalize_seed(20260424) = (20260424 % 10_000_000) / 10_000_000 * 2 - 1
+        expected_normalized = (20260424 % 10_000_000) / 10_000_000 * 2 - 1
+        assert first_call.args[1] == (expected_normalized,)
+
+    def test_four_execute_calls_total(self):
+        """One setseed + three per-tier sample queries."""
+        mock_cursor = MagicMock()
+        mock_cursor.fetchall.return_value = []
+        mock_cursor.__enter__ = MagicMock(return_value=mock_cursor)
+        mock_cursor.__exit__ = MagicMock(return_value=False)
+
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+
+        _fetch_stratified_sample(mock_conn, 5, 5, 5, seed=42)
+
+        assert mock_cursor.execute.call_count == 4

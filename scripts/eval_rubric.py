@@ -302,6 +302,7 @@ def _fetch_stratified_sample(
     high_n: int,
     mid_n: int,
     low_n: int,
+    seed: int,
 ) -> list[dict]:
     """Fetch a stratified sample of scored listings with full descriptions.
 
@@ -311,13 +312,17 @@ def _fetch_stratified_sample(
     - Low tier:   score < 5
 
     If a tier has fewer listings than requested, all available are returned.
-    Listings are ordered randomly within each tier to avoid systematic bias.
+    Listings are ordered randomly within each tier via PostgreSQL's
+    ``random()`` function, seeded by ``setseed(_normalize_seed(seed))`` before
+    the first query so the sample is reproducible across runs for a given
+    ``seed`` and DB state.
 
     Args:
         conn:   Open psycopg2 connection.
         high_n: Target count for high-tier listings.
         mid_n:  Target count for mid-tier listings.
         low_n:  Target count for low-tier listings.
+        seed:   Integer seed for sample reproducibility.
 
     Returns:
         List of listing dicts (plain Python dicts), combined across tiers.
@@ -342,6 +347,7 @@ def _fetch_stratified_sample(
 
     results: list[dict] = []
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT setseed(%s)", (_normalize_seed(seed),))
         for where_clause, limit in tiers:
             cur.execute(
                 query.format(where_clause=where_clause),
@@ -1063,7 +1069,7 @@ def main() -> None:
     # --- Connect to database and fetch sample ---
     conn = _connect()
     try:
-        listings = _fetch_stratified_sample(conn, high_n, mid_n, low_n)
+        listings = _fetch_stratified_sample(conn, high_n, mid_n, low_n, seed=0)
     finally:
         conn.close()
 

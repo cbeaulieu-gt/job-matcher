@@ -974,6 +974,124 @@ def _render_json_sidecar(
     }
 
 
+def _render_markdown_report(
+    evaluated: list[dict],
+    meta: dict,
+    decision: dict,
+) -> str:
+    """Render the Markdown comparison report for a rubric eval run.
+
+    Produces a decision-ready artifact with the top-level Decision section
+    answering Issue #341's tune/no-change call, plus supporting per-tier
+    and per-listing tables.
+
+    Args:
+        evaluated: Per-listing results with ``listing``, ``old``, ``new``
+            keys.
+        meta:      Dict from ``_build_run_meta``.
+        decision:  Dict from ``_compute_decision``.
+
+    Returns:
+        Complete markdown document as a single string.
+    """
+    lines: list[str] = []
+
+    # --- Header ---
+    run_date = meta.get("run_iso", "").split("T")[0]
+    lines.append(f"# Rubric Eval Comparison — {run_date} (Issue #274)")
+    lines.append("")
+
+    # --- Metadata ---
+    lines.append("## Run Metadata")
+    lines.append(f"- Commit: `{meta['commit_sha']}`")
+    lines.append(f"- Provider: `{meta['provider']}`")
+    lines.append(f"- Seed: `{meta['seed']}`")
+    lines.append(f"- Run at: `{meta['run_iso']}`")
+    req = meta["requested_counts"]
+    act = meta["actual_counts"]
+    lines.append(
+        f"- Sample (requested): {sum(req.values())} listings "
+        f"({req['high']} high / {req['mid']} mid / {req['low']} low)"
+    )
+    lines.append(
+        f"- Sample (actual): {sum(act.values())} listings "
+        f"({act['high']} high / {act['mid']} mid / {act['low']} low)"
+    )
+    ids_joined = ", ".join(str(sid) for sid in meta["sampled_ids"])
+    lines.append(f"- Sampled source_ids: `{ids_joined}`")
+    lines.append("")
+
+    # --- Decision ---
+    lines.append("## Decision")
+    lines.append(
+        "- Metric: `required / (required + nice_to_have)` across all "
+        "successful evaluations"
+    )
+    lines.append(
+        f"- Threshold (Issue #341): "
+        f"`> {decision['threshold'] * 100:.0f}% → tune`; "
+        f"`≤ {decision['threshold'] * 100:.0f}% → close as \"no change\"`"
+    )
+    ratio = decision["required_ratio"]
+    if ratio is None:
+        lines.append("- **Aggregate result: insufficient data**")
+    else:
+        lines.append(f"- **Aggregate result: {ratio * 100:.1f}%**")
+    lines.append(f"- **RECOMMENDATION: {decision['recommendation']}**")
+    lines.append("")
+
+    # --- Per-tier table ---
+    lines.append("## Per-Tier Breakdown")
+    lines.append("| Tier | N | % required | % nice-to-have |")
+    lines.append("|------|---|------------|----------------|")
+    for tier_key, label in [("high", "High"), ("mid", "Mid"), ("low", "Low")]:
+        tb = decision["tier_breakdown"].get(tier_key)
+        if not tb:
+            continue
+        req_ratio = tb.get("required_ratio")
+        if req_ratio is None:
+            req_cell = "—"
+            nth_cell = "—"
+        else:
+            req_cell = f"{req_ratio * 100:.1f}%"
+            nth_cell = f"{(1 - req_ratio) * 100:.1f}%"
+        lines.append(
+            f"| {label} | {tb['n']} | {req_cell} | {nth_cell} |"
+        )
+    lines.append("")
+
+    # --- Per-listing table ---
+    lines.append("## Per-Listing Results")
+    lines.append(
+        "| source_id | title | tier | old_missing | required | nice_to_have |"
+    )
+    lines.append(
+        "|-----------|-------|------|-------------|----------|--------------|"
+    )
+    for e in evaluated:
+        listing = e.get("listing") or {}
+        old = e.get("old")
+        new = e.get("new")
+        title = _truncate(listing.get("title") or "", 50)
+        tier = _tier_of(listing.get("score"))
+        old_cell = (
+            len(old.get("missing_skills") or []) if old else "FAILED"
+        )
+        if new:
+            req_cell = len(new.get("missing_required_skills") or [])
+            nth_cell = len(new.get("missing_nice_to_have_skills") or [])
+        else:
+            req_cell = "FAILED"
+            nth_cell = "FAILED"
+        lines.append(
+            f"| `{listing.get('id', '?')}` | {title} | {tier} | "
+            f"{old_cell} | {req_cell} | {nth_cell} |"
+        )
+    lines.append("")
+
+    return "\n".join(lines)
+
+
 def _print_summary(
     evaluated: list[dict],
     provider_label: str,

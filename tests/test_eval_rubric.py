@@ -10,6 +10,7 @@ Covers:
   - _score_rubric() — new rubric scoring with validation and weighting
   - _print_summary() — summary stats including Issue #248 split metrics
   - Constants: weights, valid recommendations
+  - _render_markdown_report() — Markdown artifact for Issue #274
 """
 
 import json
@@ -34,6 +35,7 @@ from scripts.eval_rubric import (
     _compute_decision,
     _build_run_meta,
     _render_json_sidecar,
+    _render_markdown_report,
 )
 
 
@@ -1350,3 +1352,90 @@ class TestRenderJsonSidecar:
         assert row["old_missing"] is None
         assert row["required"] is None
         assert row["nice_to_have"] is None
+
+
+# ---------------------------------------------------------------------------
+# _render_markdown_report() tests
+# ---------------------------------------------------------------------------
+
+
+class TestRenderMarkdownReport:
+    """Tests for _render_markdown_report: produces the Markdown artifact."""
+
+    def _fixture_no_change(self):
+        """Fixture whose aggregate ratio lands below 0.80."""
+        meta = {
+            "commit_sha": "abc1234",
+            "provider": "anthropic/claude-haiku-4-5",
+            "seed": 20260424,
+            "run_iso": "2026-04-24T15:00:00",
+            "requested_counts": {"high": 32, "mid": 36, "low": 32},
+            "actual_counts": {"high": 1, "mid": 1, "low": 1},
+            "sampled_ids": ["src-a", "src-b", "src-c"],
+        }
+        decision = {
+            "required_ratio": 0.75,
+            "threshold": 0.80,
+            "recommendation": "no change needed",
+            "counts": {"required": 3, "nice_to_have": 1},
+            "tier_breakdown": {
+                "high": {"n": 1, "required": 1, "nice_to_have": 0, "required_ratio": 1.0},
+                "mid":  {"n": 1, "required": 1, "nice_to_have": 0, "required_ratio": 1.0},
+                "low":  {"n": 1, "required": 1, "nice_to_have": 1, "required_ratio": 0.5},
+            },
+        }
+        evaluated = [
+            {
+                "listing": {"id": "src-a", "title": "High role", "score": 9.0},
+                "old": {"missing_skills": ["x"], "score": 9.0},
+                "new": {
+                    "match_score": 9.0,
+                    "missing_required_skills": ["r"],
+                    "missing_nice_to_have_skills": [],
+                },
+            },
+        ]
+        return evaluated, meta, decision
+
+    def test_has_issue_274_header(self):
+        evaluated, meta, decision = self._fixture_no_change()
+        md = _render_markdown_report(evaluated, meta, decision)
+        assert "# Rubric Eval Comparison" in md
+        assert "Issue #274" in md
+
+    def test_decision_section_shows_recommendation(self):
+        evaluated, meta, decision = self._fixture_no_change()
+        md = _render_markdown_report(evaluated, meta, decision)
+        assert "## Decision" in md
+        assert "**RECOMMENDATION: no change needed**" in md
+        assert "75.0%" in md  # 0.75 formatted as percent
+
+    def test_decision_tune_recommendation(self):
+        evaluated, meta, decision = self._fixture_no_change()
+        decision = dict(decision)
+        decision["required_ratio"] = 0.85
+        decision["recommendation"] = "tune"
+        md = _render_markdown_report(evaluated, meta, decision)
+        assert "**RECOMMENDATION: tune**" in md
+        assert "85.0%" in md
+
+    def test_run_metadata_fields_present(self):
+        evaluated, meta, decision = self._fixture_no_change()
+        md = _render_markdown_report(evaluated, meta, decision)
+        assert "abc1234" in md  # commit
+        assert "anthropic/claude-haiku-4-5" in md
+        assert "20260424" in md  # seed
+        assert "src-a" in md and "src-b" in md and "src-c" in md
+
+    def test_per_tier_table_present(self):
+        evaluated, meta, decision = self._fixture_no_change()
+        md = _render_markdown_report(evaluated, meta, decision)
+        assert "## Per-Tier Breakdown" in md
+        assert "| Tier |" in md
+        assert "High" in md and "Mid" in md and "Low" in md
+
+    def test_per_listing_table_present(self):
+        evaluated, meta, decision = self._fixture_no_change()
+        md = _render_markdown_report(evaluated, meta, decision)
+        assert "## Per-Listing Results" in md
+        assert "High role" in md  # the one synthetic listing

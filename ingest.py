@@ -422,6 +422,9 @@ _REMOTE_KEYWORDS = ("remote", "worldwide")
 # on subsequent runs, so this rate limit only applies to new locations.
 _GEOCODE_USER_AGENT = "job_matcher/1.0 (github.com/job-matcher)"
 _GEOCODE_MIN_INTERVAL_S = 1.0  # Nominatim policy: 1 req/sec max
+# Constructor-level safety net — prevents indefinite hangs if Nominatim stalls
+# at the TCP layer (per-call timeouts in _resolve() still apply for each query).
+_NOMINATIM_TIMEOUT_SECONDS = 10
 
 
 def _is_remote_location(location: str) -> bool:
@@ -525,7 +528,7 @@ class GeoFilter:
     def _geolocator_instance(self):
         """Return (or lazily create) the Nominatim geolocator."""
         if self._geolocator is None:
-            self._geolocator = Nominatim(user_agent=_GEOCODE_USER_AGENT)
+            self._geolocator = Nominatim(user_agent=_GEOCODE_USER_AGENT, timeout=_NOMINATIM_TIMEOUT_SECONDS)
         return self._geolocator
 
     def _resolve(self, location_text: str) -> tuple[float, float] | None:

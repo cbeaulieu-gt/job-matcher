@@ -37,6 +37,9 @@ _FALLBACK_OUTPUT = 4.00
 
 _SCORE_KEYS = {"score", "matched_skills", "missing_skills", "concerns", "verdict"}
 
+# Prevent silent indefinite hangs when Anthropic's API stalls at the TCP layer.
+_LLM_TIMEOUT_SECONDS = 60.0
+
 
 def _pricing_for_model(model: str) -> tuple[float, float]:
     """Return ``(input_cost_per_mtok, output_cost_per_mtok)`` for *model*.
@@ -68,7 +71,7 @@ class AnthropicProvider(LLMProvider):
     """
 
     def __init__(self, api_key: str, model: str) -> None:
-        self._client = anthropic.Anthropic(api_key=api_key)
+        self._client = anthropic.Anthropic(api_key=api_key, timeout=_LLM_TIMEOUT_SECONDS)
         self._model = model
         self._input_cost, self._output_cost = _pricing_for_model(model)
 
@@ -126,7 +129,7 @@ class AnthropicProvider(LLMProvider):
             ``(state, detail)`` tuple describing the validation outcome.
         """
         try:
-            client = anthropic.Anthropic(api_key=api_key)
+            client = anthropic.Anthropic(api_key=api_key, timeout=_LLM_TIMEOUT_SECONDS)
             client.messages.create(
                 model=model,
                 max_tokens=1,

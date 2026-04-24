@@ -1366,7 +1366,8 @@ def _parse_args() -> argparse.Namespace:
         metavar="N",
         help=(
             "Integer seed for deterministic sampling. Defaults to today's "
-            "date as YYYYMMDD so runs on the same day reproduce the sample."
+            "date as YYYYMMDD, so runs on the same day reproduce the same "
+            "sample."
         ),
     )
     parser.add_argument(
@@ -1515,12 +1516,25 @@ def main() -> None:
         md_path = args.output
         json_path = md_path.rsplit(".", 1)[0] + ".json"
 
-        os.makedirs(os.path.dirname(md_path) or ".", exist_ok=True)
-
-        with open(md_path, "w", encoding="utf-8") as f:
-            f.write(_render_markdown_report(evaluated, meta, decision))
-        with open(json_path, "w", encoding="utf-8") as f:
-            json.dump(_render_json_sidecar(evaluated, meta, decision), f, indent=2)
+        try:
+            os.makedirs(os.path.dirname(md_path) or ".", exist_ok=True)
+            with open(md_path, "w", encoding="utf-8") as f:
+                f.write(_render_markdown_report(evaluated, meta, decision))
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    _render_json_sidecar(evaluated, meta, decision),
+                    f,
+                    indent=2,
+                )
+        except OSError as exc:
+            print(
+                f"\nERROR: failed to write artifacts to "
+                f"{md_path} / {json_path}: {exc}",
+                file=sys.stderr,
+            )
+            # Don't swallow — re-raise so the shell exit code reflects
+            # the failure.
+            raise
 
         print(f"\nArtifacts written:\n  {md_path}\n  {json_path}")
 

@@ -18,6 +18,8 @@ import os
 import sys
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from scripts.eval_rubric import (
@@ -1481,3 +1483,93 @@ class TestParseArgs:
         with patch("sys.argv", ["eval_rubric.py", "--count", "50"]):
             args = _parse_args()
         assert args.count == 50
+
+
+# ---------------------------------------------------------------------------
+# main() artifact-write error handling
+# ---------------------------------------------------------------------------
+
+
+class TestMainArtifactWriteError:
+    """Test that artifact write failures surface to stderr and re-raise."""
+
+    def test_oserror_on_markdown_write_raises_and_prints_to_stderr(
+        self, capsys
+    ):
+        """OSError during file write is printed to stderr and re-raised.
+
+        Verifies that a disk-full (or permissions) failure during artifact
+        output does not silently succeed: the error is written to stderr
+        and the exception propagates so the shell exit code reflects the
+        failure.
+        """
+        from scripts import eval_rubric
+
+        # Patch at call time: make open() raise on the markdown file.
+        def _raising_open(path, *args, **kwargs):
+            if path.endswith(".md"):
+                raise OSError("disk full")
+            return MagicMock()
+
+        # Minimal listing dict that satisfies the scoring loop without
+        # real DB or LLM calls.
+        fake_listing = {"title": "Test Job", "description": "desc"}
+
+        # Stub every upstream call inside main() that needs a real value
+        # so control reaches the write block with --output set.
+        with (
+            patch(
+                "sys.argv",
+                ["eval_rubric.py", "--output", "nonexistent/dir/x.md"],
+            ),
+            patch.object(
+                eval_rubric, "_connect", return_value=MagicMock()
+            ),
+            patch.object(
+                eval_rubric, "_build_chain", return_value=[MagicMock()]
+            ),
+            patch.object(
+                eval_rubric,
+                "_first_available_provider",
+                return_value=MagicMock(),
+            ),
+            patch.object(
+                eval_rubric, "_provider_name", return_value="fake"
+            ),
+            patch.object(
+                eval_rubric, "_provider_model", return_value="model"
+            ),
+            patch.object(
+                eval_rubric,
+                "_fetch_stratified_sample",
+                return_value=[fake_listing],
+            ),
+            patch.object(
+                eval_rubric, "_load_profile", return_value={}
+            ),
+            patch.object(
+                eval_rubric,
+                "_prepare_scoring_profile",
+                return_value={},
+            ),
+            patch.object(
+                eval_rubric, "_score_old", return_value=None
+            ),
+            patch.object(
+                eval_rubric, "_score_rubric", return_value=None
+            ),
+            patch.object(
+                eval_rubric, "_print_listing_comparison", return_value=None
+            ),
+            patch.object(
+                eval_rubric, "_print_summary", return_value=None
+            ),
+            patch("os.makedirs", return_value=None),
+            patch("builtins.open", side_effect=_raising_open),
+        ):
+            with pytest.raises(OSError, match="disk full"):
+                eval_rubric.main()
+
+        captured = capsys.readouterr()
+        assert "ERROR: failed to write artifacts" in captured.err
+        assert "disk full" in captured.err

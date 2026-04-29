@@ -1149,7 +1149,6 @@ def _build_source_clients(
     # Build aggregator clients for the named sources only.
     # We filter providers["job_sources"] to only the named keys so that
     # make_clients() does not try to instantiate plugins not in the flag set.
-    agg_providers = dict(providers)
     agg_job_sources = {
         k: v for k, v in (providers.get("job_sources") or {}).items()
         if k in aggregator_keys

@@ -37,11 +37,48 @@ def test_provider_module_has_no_job_aggregator_import():
             )
 
 
+def _protocol_members(cls: type) -> set[str]:
+    """Return the set of non-dunder members declared on a Protocol class.
+
+    Works on Python 3.11 and newer.  On 3.12+ the runtime populates
+    ``__protocol_attrs__``; on earlier versions we collect annotations
+    from ``__annotations__`` and callable attributes from ``__dict__``
+    (excluding dunder names and the ``_is_protocol`` sentinel).
+
+    Args:
+        cls: A class decorated with ``typing.Protocol``.
+
+    Returns:
+        Set of attribute and method names declared directly on the
+        Protocol (does not include inherited Protocol members).
+    """
+    # Python 3.12+ provides __protocol_attrs__ directly.
+    if hasattr(cls, "__protocol_attrs__"):
+        return set(cls.__protocol_attrs__)
+
+    members: set[str] = set()
+
+    # Collect annotated attributes declared on this Protocol class itself.
+    own_annotations = cls.__dict__.get("__annotations__", {})
+    for name in own_annotations:
+        if not name.startswith("_"):
+            members.add(name)
+
+    # Collect non-dunder callables declared directly in the class body
+    # (i.e. method definitions that appear in __dict__).
+    for name, value in cls.__dict__.items():
+        if name.startswith("_"):
+            continue
+        if callable(value) or isinstance(value, (classmethod, staticmethod)):
+            members.add(name)
+
+    return members
+
+
 def test_plugin_field_protocol_has_required_attributes():
     """PluginField Protocol exposes name, label, type, required, help_text, default."""
     from job_sources.provider import PluginField
-    from typing import get_protocol_members
-    members = get_protocol_members(PluginField)
+    members = _protocol_members(PluginField)
     for attr in ("name", "label", "type", "required", "help_text", "default"):
         assert attr in members, f"PluginField missing attribute: {attr}"
 
@@ -49,8 +86,7 @@ def test_plugin_field_protocol_has_required_attributes():
 def test_source_info_protocol_has_required_attributes():
     """SourceInfo Protocol exposes key, label, fields, is_enabled, credentials_required."""
     from job_sources.provider import SourceInfo
-    from typing import get_protocol_members
-    members = get_protocol_members(SourceInfo)
+    members = _protocol_members(SourceInfo)
     for attr in ("key", "label", "fields", "is_enabled", "credentials_required"):
         assert attr in members, f"SourceInfo missing attribute: {attr}"
 
@@ -58,8 +94,7 @@ def test_source_info_protocol_has_required_attributes():
 def test_source_client_protocol_has_source_and_pages():
     """SourceClient Protocol exposes SOURCE attribute and pages() method."""
     from job_sources.provider import SourceClient
-    from typing import get_protocol_members
-    members = get_protocol_members(SourceClient)
+    members = _protocol_members(SourceClient)
     assert "SOURCE" in members
     assert "pages" in members
 
@@ -67,7 +102,6 @@ def test_source_client_protocol_has_source_and_pages():
 def test_source_provider_protocol_has_required_methods():
     """SourceProvider Protocol exposes list_sources, make_clients, scrape."""
     from job_sources.provider import SourceProvider
-    from typing import get_protocol_members
-    members = get_protocol_members(SourceProvider)
+    members = _protocol_members(SourceProvider)
     for method in ("list_sources", "make_clients", "scrape"):
         assert method in members, f"SourceProvider missing method: {method}"

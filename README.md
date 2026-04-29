@@ -4,6 +4,17 @@ A locally-run job search tool that aggregates listings from multiple sources (Ad
 
 ---
 
+## Features
+
+- **Multi-source ingestion** — pulls from ten job boards (Adzuna, Jooble, JSearch, Jobicy, Himalayas, USAJobs, Remotive, RemoteOK, Arbeitnow, The Muse) with keyword, salary, and contract-type pre-filtering before any LLM call
+- **LLM scoring with BYOK** — score listings with Anthropic, OpenAI, or Google Gemini; automatic provider failover on auth or transient errors
+- **Live ingest drawer** — watch fetch, pre-filter, scrape, and score happen in real time from the feed page via Server-Sent Events; tier-colored score tags and per-stage counters update as each listing is processed
+- **PDF Profile Import** — upload a resume on `/settings` and let the LLM extract a skills profile; optionally request suggested `title_include` / `title_exclude` patterns, review a diff before anything writes to disk
+- **Administration tab** (`/admin`) — scheduled ingest run history, downloadable ingest logs, dependency versions, and CSRF-gated Clear Database action
+- **Scheduled ingest** — runs automatically via Ofelia (Docker), cron (macOS / Linux), or Windows Task Scheduler
+
+---
+
 ## Prerequisites
 
 - Python 3.11+
@@ -61,6 +72,8 @@ Copy-Item config\profile.example.json config\profile.json
 
 `config/config.json` holds Adzuna-specific search parameters (`country`, `what`, `where`, etc.) and global scoring/filter options. Which sources are enabled and all source credentials (including Adzuna) are configured via the `/settings` UI after starting the web server.
 
+The **Search Settings** tab in `/settings` now exposes `country`, `what`, `where`, `results_per_page`, and `max_pages` directly — you no longer need to edit `config.json` by hand for these fields. If Adzuna is enabled but any required search field is missing, a warning banner is shown on the Settings page and the ingest drawer blocks the start button until the gaps are filled.
+
 LLM provider keys (Anthropic, OpenAI, Gemini) are configured via `config/providers.json` and the `/settings` UI.
 
 **Adzuna source settings (optional — only needed if you want to use the Adzuna source)**
@@ -89,6 +102,105 @@ LLM provider keys (Anthropic, OpenAI, Gemini) are configured via `config/provide
 **6. Edit `config/profile.json` to match your skills**
 
 See [Customising your profile](#customising-your-profile) below.
+
+---
+
+## Local Development (VS Code + Docker)
+
+For developers working in VS Code with Docker Desktop, a setup script and task suite handle the full local workflow — including PostgreSQL via Docker Compose.
+
+### First-time setup
+
+Run the setup script once from a PowerShell terminal in the repo root (or any worktree):
+
+```powershell
+.\scripts\setup-local.ps1
+```
+
+The script is **idempotent** — safe to re-run at any time without clobbering existing config files. It:
+
+1. Creates `.venv` via `uv venv` (falls back to `python -m venv` if `uv` is not installed)
+2. Installs all Python dependencies via `uv pip install -r requirements.txt`
+3. Copies `config/*.example.json` files to their non-example names (skips any that already exist)
+4. Copies `.env.dev.example` → `.env.dev` (skips if it already exists)
+5. Creates the `logs/` directory if missing
+6. Prints next-steps guidance
+
+After the script runs, open `config/providers.json` (or use the `/settings` UI) to add your LLM API keys, and edit `config/profile.json` to match your skills.
+
+> **Important — set `SECRET_KEY` in `.env.dev` / `.env.prod` before starting Docker:**
+> Flask uses `SECRET_KEY` to sign session cookies. `docker compose up` will now
+> **refuse to start** if `SECRET_KEY` is missing or empty — the compose file uses
+> the `:?` error syntax so the container exits immediately with a clear message
+> rather than silently using an insecure value. The app itself also validates the
+> key at startup and raises a `RuntimeError` if it is absent or starts with
+> `changeme`. Generate a stable key once and add it to `.env.dev` (and `.env.prod`
+> for production):
+> ```powershell
+> python -c "import secrets; print(secrets.token_hex(32))"
+> # Paste the output as SECRET_KEY=<value> in .env.dev / .env.prod
+> ```
+> See `.env.dev.example` and `.env.prod.example` for the expected format.
+
+### VS Code tasks
+
+All common workflows are available as VS Code tasks. Open the Command Palette (`Ctrl+Shift+P`) and run **Tasks: Run Task**, or use `Ctrl+Shift+B` to trigger the default build task.
+
+| Task | What it does |
+|---|---|
+| **Start Job Matcher** (`Ctrl+Shift+B`) | Starts the dev DB and web UI in parallel (default build task) |
+| **Start Dev DB** | Spins up the PostgreSQL container via `docker-compose.dev.yml` |
+| **Start Web UI** | Runs `app.py` with `DATABASE_URL` pre-set for the dev database |
+| **Run Ingestion** | Runs `ingest.py --hours 24` against the dev database |
+| **Rescore Listings** | Runs `ingest.py --rescore` to re-evaluate all stored listings |
+| **Seed Demo DB** | Populates the database with demo data |
+| **Start Web UI (Demo)** | Runs `app.py --demo` for a demo walkthrough |
+| **Setup Local Dev** | Re-runs `scripts/setup-local.ps1` from within VS Code |
+
+All tasks that talk to PostgreSQL have `DATABASE_URL` pre-configured for the default dev credentials (`changeme_dev`). If you changed `POSTGRES_PASSWORD` in `.env.dev`, update the password in the `env` block of each affected task in `.vscode/tasks.json`.
+
+### Worktree support
+
+The **Start Dev DB** task resolves the main git worktree root at runtime using `git worktree list`, so it correctly locates `docker-compose.dev.yml` regardless of whether you have the repo open from the main checkout (`job-matcher-pr/`) or from a worktree (`.worktrees/<branch>/`). The setup script does the same via `git rev-parse --show-toplevel`.
+
+### Changing the default dev database password
+
+The default dev password is `changeme_dev` (set in `.env.dev.example`). If you change `POSTGRES_PASSWORD` in your `.env.dev`:
+
+1. Recreate the DB container so PostgreSQL picks up the new password:
+   ```powershell
+   docker compose -f docker-compose.dev.yml --env-file .env.dev -p job-matcher-pr-dev down -v
+   docker compose -f docker-compose.dev.yml --env-file .env.dev -p job-matcher-pr-dev up -d db
+   ```
+2. Update `DATABASE_URL` in `.vscode/tasks.json` to use the new password.
+3. Update your shell's `DATABASE_URL` export if you run `ingest.py` or `pytest` outside VS Code.
+
+---
+
+## Running natively (without Docker)
+
+The app loads environment variables from a `.env` file at the repo root via
+`python-dotenv`. Copy the template and fill in real values:
+
+```powershell
+Copy-Item .env.example .env
+# Edit .env — at minimum generate a SECRET_KEY:
+#   python -c "import secrets; print(secrets.token_hex(32))"
+# You also need DATABASE_URL pointing at your local Postgres — the .env.example
+# template includes a default that matches the Docker dev stack's credentials.
+```
+
+Then run:
+
+```powershell
+.venv\Scripts\python app.py
+```
+
+Docker is unaffected: `docker-compose.dev.yml` and `docker-compose.prod.yml`
+read `.env.dev` / `.env.prod` via compose's `env_file:` directive, which
+populates the container environment before Python starts. Variables set by the
+parent process (shell, VSCode task `env:` block, compose `env_file:`) always
+take precedence over `.env` — `load_dotenv(override=False)`.
 
 ---
 
@@ -143,6 +255,10 @@ At the end of each run a summary line is printed:
 Run complete: 120 fetched | 74 pre-filtered | 12 dupes skipped | 34 scored (0 failed) | 2 scrape fallbacks | ~42,000 tok | ~$0.0034
 ```
 
+### Watching progress live
+
+When the web UI is running, open the feed page and click **Run Ingest** to launch the ingest drawer. It tails the pipeline in real time over Server-Sent Events — each listing appears as it is processed, with tier-colored score tags (green / amber / red) and per-stage counters (fetched, filtered, duped, scored). For headless or Docker runs where the UI is not open, `docker logs job-matcher-pr-dev-web-1 -f` streams the same output to the terminal.
+
 In Docker deployments, the PostgreSQL database is created automatically by Docker Compose via `DATABASE_URL`. For local development runs (`python ingest.py`), a SQLite file `jobs.db` is created automatically on the first run.
 
 ---
@@ -164,6 +280,7 @@ Then open the web UI in your browser.
 - **Bookmarks** (`/bookmarks`) — listings you have saved for later review
 - **Applied** (`/applied`) — listings you have marked as applied; excluded from the main feed
 - **Stats** (`/stats`) — cumulative token usage and estimated API cost, broken down by day
+- **Admin** (`/admin`) — scheduled ingest runs, downloadable logs, dependency versions, and CSRF-gated Clear Database
 
 Each listing card shows the score, matched and missing skills, concerns, and the LLM's one-sentence verdict alongside the job title, company, location, salary, and a link to the original posting. Bookmark and dismiss actions update instantly without a page reload.
 
@@ -240,6 +357,10 @@ Example `location` block:
 
 Changes to `config/profile.json` take effect on the next ingestion run. Previously scored listings are not rescored automatically.
 
+### Importing from a PDF resume
+
+Go to `/settings` and use the **Import from PDF** panel to upload your resume. The LLM reads the PDF and extracts a structured skills profile. Before anything is written you are shown a diff of the proposed changes to `config/profile.json` so you can review and deselect individual skills. If you also enable **Suggest title filters**, the LLM proposes `title_include` and `title_exclude` patterns based on your experience; these are previewed against your current filter settings before being applied to `config/config.json`. Nothing lands without explicit confirmation — click **Apply** only when you are satisfied with the preview.
+
 ---
 
 For legacy Windows deployment instructions, see [`docs/LEGACY_DEPLOYMENT.md`](docs/LEGACY_DEPLOYMENT.md).
@@ -249,6 +370,23 @@ For legacy Windows deployment instructions, see [`docs/LEGACY_DEPLOYMENT.md`](do
 ## Automated deployment (self-hosted runner)
 
 Pushing to `main` triggers an automatic deployment on the homelab server via a self-hosted GitHub Actions runner.
+
+### Manual deploy from the Actions UI
+
+You can deploy any branch on demand without waiting for a push-triggered CI run:
+
+1. Go to **Actions → Deploy** in the GitHub repository.
+2. Click **Run workflow** (top-right of the workflow list).
+3. Select the branch you want to deploy from the dropdown and click **Run workflow**.
+
+**What happens:**
+
+- `pytest` runs first (PostgreSQL service spun up automatically). If tests fail, the deploy is cancelled.
+- Lint (ruff) is **not** required for a manual deploy — only broken tests block it. Linting (`ruff`) is intentionally not a blocker for manual dispatches: a lint violation doesn't change runtime behavior, and gating dev testing on style rules slows down the feedback loop. Tests are still required because deploying code that doesn't pass its own test suite would waste the environment.
+- The Docker image is built and pushed to GHCR for the selected branch.
+- Branch → environment routing follows the same logic as auto-deploy:
+  - `main` → prod stack (port 5001, `docker-compose.prod.yml`)
+  - Any other branch → dev stack (port 5000, `docker-compose.dev.yml`)
 
 ### Deployment flow
 
@@ -299,14 +437,34 @@ For full documentation — stack architecture, environment variables, CI/CD pipe
 sudo git clone https://github.com/cbeaulieu-gt/job-matcher-pr.git /opt/job-matcher-pr
 cd /opt/job-matcher-pr
 
-# One-time setup: creates directories, copies config examples, starts both stacks
+# One-time VM provisioning: creates directories, copies config examples, starts both stacks
 sudo ./scripts/docker-setup.sh
 ```
+
+### Pushing updates to a remote server
+
+`scripts/deploy-remote-linux.sh` is the recommended path for pushing updates from a workstation to a remote VM. Run it after any code change, `.env.*.example` schema addition, or config-example update:
+
+```bash
+./scripts/deploy-remote-linux.sh <host>
+```
+
+The script pushes compose files, helper scripts, and config examples over SSH, then prompts before overwriting the live `.env.prod` / `.env.dev` files and chmod 600s them after copying. It handles sudo and TTY requirements automatically.
+
+If you prefer to update the server directly, SSH in and diff `.env.prod` against `.env.prod.example` (`diff .env.prod .env.prod.example`), add any new keys by hand, then recreate the stack (`docker compose ... down && ... up -d`) to pick up the changes — compose freezes env vars at container creation time.
+
+### `.env.*.example` schema drift
+
+Live `.env.prod` / `.env.dev` files are **not** in git — the deployed server keeps its own. When `.env.*.example` gains a new required field, the live file on the server won't automatically pick it up, and the next GHA-triggered deploy will either fail (missing variable) or silently run with the previous config.
+
+The `deploy-prod` GHA job runs a preflight check (`docker compose config`) before each deploy and will fail the run with a `::error::` message if the live `.env.prod` is missing, still contains `changeme_*` placeholders, or leaves any compose variable unresolved.
 
 After the script completes:
 
 - **Dev** (port 5000): `http://<vm-ip>:5000/settings` — configure dev API keys
 - **Prod** (port 5001): `http://<vm-ip>:5001/settings` — configure prod API keys
+
+> **Fresh clone without GHCR access:** if you are starting the dev stack manually (outside `docker-setup.sh`), pass `--build` on the first run — `docker compose -p job-matcher-pr-dev --env-file .env.dev -f docker-compose.dev.yml up -d --build` — so compose builds the web image from the local Dockerfile instead of pulling from GHCR (which requires auth). Subsequent `up -d` calls reuse the cached build.
 
 ### Ops commands
 
@@ -322,4 +480,27 @@ docker compose -p job-matcher-pr-prod -f docker-compose.prod.yml exec web python
 
 # Stop and remove stacks (interactive — prompts before deleting volumes)
 ./scripts/docker-teardown.sh
+```
+
+---
+
+## Troubleshooting
+
+**Web container exits immediately with `env: 'bash\r': No such file or directory`**
+
+This means the shell scripts in `scripts/` were checked out with CRLF line endings (common on Windows with `core.autocrlf=true`). The repo now ships a `.gitattributes` that forces LF on `.sh` files — future checkouts will be clean. If you cloned before that was added, pick the option that fits your workflow:
+
+**Option 1 — rebuild the Docker image (recommended, non-destructive):** the Dockerfile strips CR bytes from scripts at build time, so a forced rebuild is all you need:
+
+```powershell
+docker compose -p job-matcher-pr-dev --env-file .env.dev `
+    -f docker-compose.dev.yml up -d --build --force-recreate
+```
+
+**Option 2 — refresh the working copy** (only needed if you run scripts natively, outside Docker):
+
+```powershell
+# WARNING: discards uncommitted changes to tracked files.
+# Commit or stash first if you have work in progress.
+git checkout HEAD -- .
 ```

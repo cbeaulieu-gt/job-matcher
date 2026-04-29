@@ -31,6 +31,7 @@ services:
       - ./logs:/app/logs:rw
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/jobmatcher_prod
+      SECRET_KEY: '${SECRET_KEY:?SECRET_KEY must be set in .env.prod — generate with: python -c ''import secrets; print(secrets.token_hex(32))''}'
       FLASK_DEBUG: "0"
       LOG_DIR: "/app/logs"
       APP_ENV: prod
@@ -39,7 +40,7 @@ services:
     labels:
       ofelia.enabled: "true"
       ofelia.job-exec.daily-ingest-prod.schedule: "@daily"
-      ofelia.job-exec.daily-ingest-prod.command: "python ingest.py --hours 25"
+      ofelia.job-exec.daily-ingest-prod.command: "bash -c 'INGEST_TRIGGER=scheduled python ingest.py --hours 25'"
 
   scheduler:
     image: mcuadros/ofelia:latest

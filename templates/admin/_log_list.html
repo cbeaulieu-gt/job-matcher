@@ -1,0 +1,26 @@
+{# Log file list — loaded via HTMX into the Logs pane #}
+{% if logs %}
+<table class="stats-table">
+  <thead>
+    <tr>
+      <th>Timestamp</th>
+      <th>Size</th>
+      <th>Action</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for log in logs %}
+      <tr>
+        <td>{{ log.timestamp }}</td>
+        <td>{{ log.size }}</td>
+        <td>
+          <a href="/admin/logs/{{ log.filename }}/download"
+             class="btn-small">Download</a>
+        </td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty-state">No logs yet</p>
+{% endif %}

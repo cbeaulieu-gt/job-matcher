@@ -1,15 +1,13 @@
-"""
-tests/test_ingest_trigger.py — Tests for POST /ingest/trigger and GET /ingest/status.
+"""Tests for POST /ingest/trigger and GET /ingest/status.
 
 Uses Flask's built-in test client and monkeypatches the module-level
 _ingest_process handle so no real subprocess is ever spawned.
 """
 
-import io
 import os
 import sys
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -23,12 +21,18 @@ from app import app as flask_app, _parse_ingest_summary
 
 @pytest.fixture(autouse=True)
 def reset_ingest_process(monkeypatch):
-    """Ensure _ingest_process and _ingest_log_file are always None before and after each test."""
+    """Reset all ingest-related globals before and after each test.
+
+    Resets _ingest_process, _ingest_log_file, and _ingest_just_completed
+    so tests do not bleed state into one another.
+    """
     monkeypatch.setattr(app_module, "_ingest_process", None)
     monkeypatch.setattr(app_module, "_ingest_log_file", None)
+    monkeypatch.setattr(app_module, "_ingest_just_completed", False)
     yield
     monkeypatch.setattr(app_module, "_ingest_process", None)
     monkeypatch.setattr(app_module, "_ingest_log_file", None)
+    monkeypatch.setattr(app_module, "_ingest_just_completed", False)
 
 
 @pytest.fixture()
@@ -38,23 +42,28 @@ def client():
         yield c
 
 
-def _make_mock_process(*, exited: bool = False, stdout: str = "") -> MagicMock:
+def _make_mock_process(*, exited: bool = False, stdout_lines: list | None = None) -> MagicMock:
     """Return a MagicMock that behaves like a running or finished Popen handle.
 
-    For exited processes, the caller should also set ``app_module._ingest_log_file``
-    to a file-like object containing ``stdout`` so that ``_ingest_running()``
-    can read it.  Use ``_make_log_file(stdout)`` as a convenience.
+    ``stdout_lines`` controls what the _stdout_reader thread sees.  Each element
+    is returned by successive readline() calls; a final empty string signals EOF
+    and terminates the reader loop.  Defaults to [""] (immediate clean EOF) so
+    the reader thread exits without producing MagicMock noise in stderr.
     """
+    if stdout_lines is None:
+        stdout_lines = [""]  # clean EOF by default
+
     proc = MagicMock()
     proc.poll.return_value = None if not exited else 0
+
+    # Give the mock a real readline() sequence so _stdout_reader terminates
+    # cleanly instead of trying to iterate a raw MagicMock.
+    readline_returns = list(stdout_lines)
+    if readline_returns[-1] != "":
+        readline_returns.append("")  # ensure EOF terminator
+    proc.stdout.readline.side_effect = readline_returns
+
     return proc
-
-
-def _make_log_file(content: str) -> io.StringIO:
-    """Return a StringIO positioned at the start, as a stand-in for the temp log file."""
-    buf = io.StringIO(content)
-    buf.seek(0)
-    return buf
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +80,6 @@ class TestIngestTrigger:
             return _make_mock_process()
 
         monkeypatch.setattr(app_module.subprocess, "Popen", mock_popen)
-        monkeypatch.setattr(app_module.tempfile, "TemporaryFile", lambda **kw: io.StringIO())
         resp = client.post("/ingest/trigger")
         assert resp.status_code == 202
         assert len(spawned) == 1
@@ -81,7 +89,6 @@ class TestIngestTrigger:
         monkeypatch.setattr(
             app_module.subprocess, "Popen", lambda *a, **kw: _make_mock_process()
         )
-        monkeypatch.setattr(app_module.tempfile, "TemporaryFile", lambda **kw: io.StringIO())
         resp = client.post("/ingest/trigger")
         body = resp.data.decode()
         assert "ingest-status" in body
@@ -96,7 +103,6 @@ class TestIngestTrigger:
             return _make_mock_process()
 
         monkeypatch.setattr(app_module.subprocess, "Popen", mock_popen)
-        monkeypatch.setattr(app_module.tempfile, "TemporaryFile", lambda **kw: io.StringIO())
         client.post("/ingest/trigger")
         assert "--hours" in spawned[0]
         assert "25" in spawned[0]
@@ -110,7 +116,6 @@ class TestIngestTrigger:
             return _make_mock_process()
 
         monkeypatch.setattr(app_module.subprocess, "Popen", mock_popen)
-        monkeypatch.setattr(app_module.tempfile, "TemporaryFile", lambda **kw: io.StringIO())
         client.post("/ingest/trigger", data={"hours": "48"})
         assert "48" in spawned[0]
 
@@ -123,7 +128,6 @@ class TestIngestTrigger:
             return _make_mock_process()
 
         monkeypatch.setattr(app_module.subprocess, "Popen", mock_popen)
-        monkeypatch.setattr(app_module.tempfile, "TemporaryFile", lambda **kw: io.StringIO())
         client.post("/ingest/trigger", data={"rescore": "1"})
         assert "--rescore" in spawned[0]
 
@@ -136,7 +140,6 @@ class TestIngestTrigger:
             return _make_mock_process()
 
         monkeypatch.setattr(app_module.subprocess, "Popen", mock_popen)
-        monkeypatch.setattr(app_module.tempfile, "TemporaryFile", lambda **kw: io.StringIO())
         client.post("/ingest/trigger")
         assert "--rescore" not in spawned[0]
 
@@ -149,7 +152,6 @@ class TestIngestTrigger:
             return _make_mock_process()
 
         monkeypatch.setattr(app_module.subprocess, "Popen", mock_popen)
-        monkeypatch.setattr(app_module.tempfile, "TemporaryFile", lambda **kw: io.StringIO())
         client.post("/ingest/trigger", data={"hours": "not-a-number"})
         assert "25" in spawned[0]
 
@@ -162,7 +164,6 @@ class TestIngestTrigger:
             return _make_mock_process()
 
         monkeypatch.setattr(app_module.subprocess, "Popen", mock_popen)
-        monkeypatch.setattr(app_module.tempfile, "TemporaryFile", lambda **kw: io.StringIO())
         client.post("/ingest/trigger")
         assert spawned[0][0] == sys.executable
 
@@ -171,7 +172,6 @@ class TestIngestTrigger:
         def failing_popen(cmd, **kwargs):
             raise OSError("python not found")
         monkeypatch.setattr(app_module.subprocess, "Popen", failing_popen)
-        monkeypatch.setattr(app_module.tempfile, "TemporaryFile", lambda **kw: io.StringIO())
         resp = client.post("/ingest/trigger")
         assert resp.status_code == 500
 
@@ -240,23 +240,55 @@ class TestIngestStatus:
     def test_completed_process_resets_to_idle(self, client, monkeypatch):
         """Once poll() returns non-None the handle is cleared and idle HTML is returned."""
         monkeypatch.setattr(app_module, "_ingest_process", _make_mock_process(exited=True))
-        monkeypatch.setattr(app_module, "_ingest_log_file", _make_log_file(""))
         resp = client.get("/ingest/status")
         body = resp.data.decode()
         assert "Run Ingestion" in body
         # Handle must be cleared.
         assert app_module._ingest_process is None
 
-    def test_idle_response_carries_hx_trigger_header(self, client):
-        """When returning idle state, HX-Trigger header signals ingestComplete."""
+    def test_idle_poll_without_prior_run_has_no_hx_trigger(self, client):
+        """An idle poll with no completed run must NOT carry HX-Trigger.
+
+        Regression test: the old code sent HX-Trigger on every idle poll,
+        which caused an infinite feed refresh loop (bug #223).
+        """
         resp = client.get("/ingest/status")
-        assert resp.headers.get("HX-Trigger") == "ingestComplete"
+        assert "HX-Trigger" not in resp.headers
 
     def test_running_response_has_no_hx_trigger_header(self, client, monkeypatch):
         """While still running, HX-Trigger must not be present."""
         monkeypatch.setattr(app_module, "_ingest_process", _make_mock_process())
         resp = client.get("/ingest/status")
         assert "HX-Trigger" not in resp.headers
+
+    def test_hx_trigger_sent_on_running_to_idle_transition(
+        self, client, monkeypatch
+    ):
+        """HX-Trigger: ingestComplete must fire on the first idle response
+        after a run finishes — the running→idle transition.
+        """
+        # Simulate an exited process so _ingest_running() sets the flag.
+        monkeypatch.setattr(
+            app_module, "_ingest_process", _make_mock_process(exited=True)
+        )
+        resp = client.get("/ingest/status")
+        assert resp.headers.get("HX-Trigger") == "ingestComplete"
+
+    def test_hx_trigger_not_sent_on_second_idle_poll(self, client, monkeypatch):
+        """HX-Trigger must only fire once per run, not on every idle poll.
+
+        After the transition response consumes the flag, subsequent idle
+        polls must not carry HX-Trigger — otherwise the feed would reload
+        on every poll (bug #223).
+        """
+        monkeypatch.setattr(
+            app_module, "_ingest_process", _make_mock_process(exited=True)
+        )
+        # First poll — transition fires
+        client.get("/ingest/status")
+        # Second poll — flag already consumed, no header
+        resp2 = client.get("/ingest/status")
+        assert "HX-Trigger" not in resp2.headers
 
 
 # ---------------------------------------------------------------------------
@@ -274,20 +306,32 @@ class TestIngestRunningHelper:
 
     def test_returns_false_and_clears_handle_after_exit(self, monkeypatch):
         monkeypatch.setattr(app_module, "_ingest_process", _make_mock_process(exited=True))
-        monkeypatch.setattr(app_module, "_ingest_log_file", _make_log_file(""))
         result = app_module._ingest_running()
         assert result is False
         assert app_module._ingest_process is None
 
     def test_sets_last_run_after_exit(self, monkeypatch):
-        """When process exits, _last_run should be populated from parsed log output."""
-        # Use the real format that ingest.py produces.
+        """When process exits, _last_run should be populated from the event queue
+        complete event (subprocess stdout is now piped through StdoutReader, not
+        a temp file — summary is extracted from the queue instead)."""
+        from ingest_events import EventQueue
         summary_line = (
             "Run complete: 1 source(s) | 5 fetched | 10 pre-filtered | 2 dupes skipped | "
             "3 scored (0 failed) | 0 scrape fallbacks | ~500 tok | ~$0.0001"
         )
+        # Seed a fresh queue with the complete event so _ingest_running() finds it.
+        q = EventQueue()
+        q.push({
+            "type": "complete",
+            "source": None,
+            "title": None,
+            "url": None,
+            "detail": {"summary": summary_line},
+            "timestamp": "2026-04-09T00:00:00+00:00",
+        })
+        monkeypatch.setattr(app_module, "event_queue", q)
         monkeypatch.setattr(app_module, "_ingest_process", _make_mock_process(exited=True))
-        monkeypatch.setattr(app_module, "_ingest_log_file", _make_log_file(summary_line))
+        monkeypatch.setattr(app_module, "_ingest_log_file", None)
         monkeypatch.setattr(app_module, "_last_run", None)
         app_module._ingest_running()
         assert app_module._last_run is not None
@@ -393,3 +437,53 @@ class TestIngestStatusLastRun:
         resp = client.get("/ingest/status")
         body = resp.data.decode()
         assert "Last run" not in body
+
+
+# ---------------------------------------------------------------------------
+# GET /feed/fragment — partial feed refresh endpoint
+# ---------------------------------------------------------------------------
+
+class TestFeedFragment:
+    """Tests for the /feed/fragment endpoint used by the ingestComplete swap."""
+
+    @pytest.fixture(autouse=True)
+    def patch_db(self):
+        """Patch db.get_feed and db.get_last_fetch_time for all fragment
+        tests so they do not require a live Postgres connection."""
+        with patch("db.get_feed", return_value=[]) as _get_feed, \
+                patch("db.get_last_fetch_time", return_value=None) as _glft:
+            self._get_feed = _get_feed
+            yield
+
+    def test_returns_200(self, client):
+        """Endpoint must return HTTP 200."""
+        resp = client.get("/feed/fragment")
+        assert resp.status_code == 200
+
+    def test_response_is_html(self, client):
+        """Content-Type must be text/html."""
+        resp = client.get("/feed/fragment")
+        assert "text/html" in resp.content_type
+
+    def test_response_contains_feed_content_wrapper(self, client):
+        """Response must include the #feed-content wrapper element so HTMX
+        can perform an outerHTML swap on the target."""
+        resp = client.get("/feed/fragment")
+        body = resp.data.decode()
+        assert 'id="feed-content"' in body
+
+    def test_response_does_not_contain_full_page_chrome(self, client):
+        """Fragment must not include the full page shell (nav, head, etc.)
+        — only the swappable content region."""
+        resp = client.get("/feed/fragment")
+        body = resp.data.decode()
+        assert "<html" not in body
+        assert "<head" not in body
+        assert "site-header" not in body
+
+    def test_accepts_filter_params(self, client):
+        """Filter query params must be accepted without error."""
+        resp = client.get(
+            "/feed/fragment?min_score=7&remote_only=1&sort=score"
+        )
+        assert resp.status_code == 200

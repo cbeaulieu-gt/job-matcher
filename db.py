@@ -192,6 +192,8 @@ class _Conn:
         if exc_type is not None:
             try:
                 self._conn.rollback()
+            # Catch-all: stale run cleanup is best-effort; swallow any rollback error
+            # so the original exception is not masked.
             except Exception:
                 pass
         self._pool.putconn(self._conn)
@@ -295,6 +297,25 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_listings_redirect_url ON listings (redirect_url)"
         )
 
+        # --- #114: Reclassify JSearch listings with full API descriptions ---
+        # JSearch provides complete job descriptions via the API, but the
+        # pipeline previously marked all skip_scrape listings as "snippet".
+        try:
+            cur = conn.execute(
+                """UPDATE listings
+                   SET description_source = 'full'
+                   WHERE source = 'jsearch'
+                     AND LENGTH(description) >= 100
+                     AND description_source = 'snippet'"""
+            )
+            if cur.rowcount:
+                print(
+                    f"Migration #114: reclassified {cur.rowcount} JSearch listings from "
+                    "'snippet' to 'full'"
+                )
+        except (psycopg2.ProgrammingError, psycopg2.DataError) as e:
+            print(f"Migration #114 (JSearch reclassify): {e}")
+
         # Geocache table — stores resolved lat/lon for location strings so that
         # repeated ingest runs do not re-call Nominatim for the same location.
         conn.execute("""
@@ -305,6 +326,126 @@ def init_db() -> None:
                 cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        # Ingest run tracking table — records start/end of each pipeline run
+        # so the Admin UI can show run history and scheduler health.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS ingest_runs (
+                id              SERIAL PRIMARY KEY,
+                trigger_source  TEXT NOT NULL,
+                started_at      TIMESTAMPTZ NOT NULL,
+                finished_at     TIMESTAMPTZ,
+                status          TEXT NOT NULL,
+                fetched         INTEGER DEFAULT 0,
+                filtered        INTEGER DEFAULT 0,
+                scored          INTEGER DEFAULT 0,
+                failed_count    INTEGER DEFAULT 0,
+                cost_usd        NUMERIC(10, 4) DEFAULT 0,
+                log_filename    TEXT,
+                error_message   TEXT
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ingest_runs_started_at "
+            "ON ingest_runs (started_at DESC)"
+        )
+
+        # Stale-row sweep: a SIGKILL'd ingest leaves status='running' forever.
+        # 1 hour: longest observed ingest run is ~15 min; 1h gives 4x margin.
+        conn.execute("""
+            UPDATE ingest_runs
+               SET status = 'failed',
+                   error_message = 'process died — detected on next startup'
+             WHERE status = 'running'
+               AND started_at < NOW() - INTERVAL '1 hour'
+        """)
+
+
+# ---------------------------------------------------------------------------
+# Ingest run helpers
+# ---------------------------------------------------------------------------
+
+def create_ingest_run(trigger_source: str, log_filename: str | None = None) -> int:
+    """Insert a new ingest_runs row at status='running' and return its id.
+
+    Args:
+        trigger_source: How this run was triggered (``'scheduled'``,
+            ``'manual_ui'``, or ``'manual_cli'``).
+        log_filename:   Base filename of the per-run log file, or ``None``
+            if file logging is unavailable.
+
+    Returns:
+        The ``id`` of the newly created row.
+    """
+    with get_connection() as conn:
+        cur = conn.execute(
+            """INSERT INTO ingest_runs (trigger_source, started_at, status, log_filename)
+               VALUES (%s, NOW(), 'running', %s)
+               RETURNING id""",
+            (trigger_source, log_filename),
+        )
+        return cur.fetchone()["id"]
+
+
+def finish_ingest_run(
+    run_id: int,
+    status: str,
+    counts: dict | None = None,
+    cost_usd: float = 0,
+    error_message: str | None = None,
+) -> None:
+    """Update an ingest_runs row with final status and metrics.
+
+    Args:
+        run_id:        The ``id`` returned by :func:`create_ingest_run`.
+        status:        Final run status — ``'success'`` or ``'failed'``.
+        counts:        Dict with optional keys ``fetched``, ``filtered``,
+            ``scored``, ``failed``.  Missing keys default to 0.
+        cost_usd:      Estimated LLM cost for the run in USD.
+        error_message: Short error description when ``status='failed'``;
+            truncated to 500 characters.
+    """
+    counts = counts or {}
+    with get_connection() as conn:
+        conn.execute(
+            """UPDATE ingest_runs
+                  SET finished_at   = NOW(),
+                      status        = %s,
+                      fetched       = %s,
+                      filtered      = %s,
+                      scored        = %s,
+                      failed_count  = %s,
+                      cost_usd      = %s,
+                      error_message = %s
+                WHERE id = %s""",
+            (
+                status,
+                counts.get("fetched", 0),
+                counts.get("filtered", 0),
+                counts.get("scored", 0),
+                counts.get("failed", 0),
+                cost_usd,
+                (error_message or "")[:500] if error_message else None,
+                run_id,
+            ),
+        )
+
+
+def get_recent_ingest_runs(limit: int = 10) -> list[dict]:
+    """Return the most recent ingest runs, newest first.
+
+    Args:
+        limit: Maximum number of rows to return (default 10).
+
+    Returns:
+        List of dicts with all ``ingest_runs`` columns.
+    """
+    with get_connection() as conn:
+        cur = conn.execute(
+            "SELECT * FROM ingest_runs ORDER BY started_at DESC LIMIT %s",
+            (limit,),
+        )
+        return [dict(row) for row in cur.fetchall()]
 
 
 # ---------------------------------------------------------------------------

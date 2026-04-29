@@ -20,19 +20,25 @@ python ingest.py -v                # Short form of --verbose
 # Run web UI (http://localhost:5000)
 python app.py
 
-# Run tests (requires PostgreSQL — set DATABASE_URL before running)
-# Option A: use the docker-compose dev database
+# Run tests (requires PostgreSQL pointed at a TEST database — set DATABASE_URL)
+# Option A: use jobmatcher_test (created automatically on fresh docker volume;
+#           for existing setups run once: docker exec job-matcher-pr-dev-db-1
+#           psql -U jobmatcher -d postgres -c "CREATE DATABASE jobmatcher_test;")
 # PowerShell
-#   $env:DATABASE_URL = "postgresql://jobmatcher:<password>@localhost:5432/jobmatcher"; pytest
+#   $env:DATABASE_URL = "postgresql://jobmatcher:<password>@localhost:5432/jobmatcher_test"; pytest
 # Bash/zsh
-#   export DATABASE_URL="postgresql://jobmatcher:<password>@localhost:5432/jobmatcher" && pytest
+#   export DATABASE_URL="postgresql://jobmatcher:<password>@localhost:5432/jobmatcher_test" && pytest
 # (<password> is in .env.dev or docker-compose.dev.yml)
-# Option B: DATABASE_URL already exported in your shell
+# Option B: DATABASE_URL already exported in your shell pointing at a test DB
 pytest
 pytest tests/test_prefilter.py     # Single file
 pytest -k "test_title_include"     # By name pattern
-# NOTE: test isolation uses TRUNCATE on a shared PostgreSQL instance, not isolated
-# SQLite files. Always run tests against a throwaway/dev database — never production.
+# TEST ISOLATION: each test uses scoped DELETE with a test-specific source_id
+# prefix (e.g. "test_114_", "cdb-") — only rows inserted by that test are
+# removed. No blanket TRUNCATE is used anywhere in the suite.
+# SAFETY GUARD: conftest.py refuses to run against a DB whose name does not
+# contain "test" (e.g. jobmatcher_dev). Set ALLOW_NON_TEST_DB=1 to override
+# (emits a warning). This prevents accidental data loss on dev/prod databases.
 ```
 
 ## Architecture
@@ -79,12 +85,15 @@ Results include a `model_used` field stored as `"provider/model"` per listing. S
 ## Deployment
 
 **Docker (active deployment path):**
-- Dev stack (port 5000): `docker compose -p job-matcher-pr-dev -f docker-compose.dev.yml up -d`
-- Prod stack (port 5001): `docker compose -p job-matcher-pr-prod -f docker-compose.prod.yml up -d`
+- Dev stack (port 5000): `docker compose -p job-matcher-pr-dev --env-file .env.dev -f docker-compose.dev.yml up -d --build` (use `--build` on first run if you lack GHCR access; subsequent runs can drop it)
+- Prod stack (port 5001): `docker compose -p job-matcher-pr-prod --env-file .env.prod -f docker-compose.prod.yml up -d`
 - Credentials: copy `.env.dev.example` → `.env.dev` and `.env.prod.example` → `.env.prod`
 - Config/logs: dev uses `./config-dev` and `./logs-dev`; prod uses `./config` and `./logs`
 - `scripts/docker-setup.sh` — one-time VM provisioning
 - `scripts/docker-status.sh` / `scripts/docker-teardown.sh` — ops helpers
+- `scripts/deploy-remote-linux.sh` — workstation-driven remote update. Pushes compose files, scripts, config examples, **and live `.env.prod` / `.env.dev`** (with overwrite confirmation + chmod 600). Run this after editing any `.env.*.example` schema to get the new required fields onto the server.
+
+**Env-file migration rule:** when `.env.prod.example` or `.env.dev.example` gains a new required field (a new `SECRET_KEY`-style variable, a renamed DB, etc.), the running server's live `.env.*` does **not** automatically pick it up. The `deploy-prod` GHA job now runs a preflight `docker compose config` + `changeme_*` grep against `/opt/job-matcher-pr/.env.prod` and will fail the run with `::error::` if the live file is missing, unedited, or still has unresolved compose variables — catch the drift at CI time instead of during a partial `up -d`.
 
 ## UI Development
 

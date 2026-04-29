@@ -25,17 +25,30 @@ import logging
 import math
 import os
 import re
+import sys
 import time
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
+
+from dotenv import load_dotenv
+
 import requests
 from bs4 import BeautifulSoup
 from geopy.distance import geodesic
 from geopy.geocoders import Nominatim
 
 import db
-from job_sources import make_enabled_sources
+from job_sources import make_enabled_sources, get_required_search_fields
 from providers import build_provider_chain, LLMProvider
 from credentials import CredentialError, load_providers
+
+# Load environment variables from a local .env file if present.
+# Precedence: parent-process env (shell, VSCode task, docker env_file) always
+# wins. This covers the native `python ingest.py` path where no external env
+# loader exists; under Docker, `env_file:` has already populated os.environ
+# before this runs, so load_dotenv(override=False) is a no-op.
+load_dotenv(override=False)
 
 _CONFIG_DIR = os.path.join(os.path.dirname(__file__), "config")
 _DEFAULT_CONFIG_PATH = os.path.join(_CONFIG_DIR, "config.json")
@@ -53,6 +66,28 @@ logger = logging.getLogger("ingest")
 # the full breakdown (verdict, matched/missing skills, concerns) at INFO level.
 _verbose = False
 
+# Set by _configure_file_logging() so that run() can record the log filename
+# in the ingest_runs table without needing a return value from that function.
+_current_log_file: str | None = None
+
+
+def _detect_trigger_source() -> str:
+    """Determine how this ingest run was triggered.
+
+    Reads the ``INGEST_TRIGGER`` environment variable.  Recognised values are
+    ``'scheduled'`` (set by Ofelia) and ``'ui'``/``'manual_ui'`` (set by the
+    Flask UI subprocess call).  Anything else is treated as a manual CLI run.
+
+    Returns:
+        One of ``'scheduled'``, ``'manual_ui'``, or ``'manual_cli'``.
+    """
+    trigger = os.environ.get("INGEST_TRIGGER", "").lower()
+    if trigger == "scheduled":
+        return "scheduled"
+    if trigger in ("ui", "manual_ui"):
+        return "manual_ui"
+    return "manual_cli"
+
 
 def _configure_file_logging() -> None:
     """Attach a FileHandler writing to a timestamped per-run log file.
@@ -66,10 +101,8 @@ def _configure_file_logging() -> None:
     """
     MAX_LOG_FILES = 30
 
-    log_dir = os.environ.get(
-        "LOG_DIR",
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
-    )
+    from paths import get_log_dir
+    log_dir = str(get_log_dir())
     try:
         os.makedirs(log_dir, exist_ok=True)
     except (PermissionError, OSError) as exc:
@@ -83,6 +116,8 @@ def _configure_file_logging() -> None:
 
     ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_file = os.path.join(log_dir, f"ingest_{ts}.log")
+    global _current_log_file
+    _current_log_file = log_file
 
     try:
         handler = logging.FileHandler(log_file, encoding="utf-8")
@@ -115,18 +150,121 @@ def _configure_file_logging() -> None:
 # ---------------------------------------------------------------------------
 
 _REQUIRED_TOP_LEVEL: tuple[str, ...] = ()  # No top-level required keys remain; source credentials are in providers.json
-_REQUIRED_SEARCH = ("country", "what", "results_per_page", "max_pages")
+# _REQUIRED_SCORING: keys that must exist inside config["scoring"].
+# load_config() validates these unconditionally because scoring is always needed.
 _REQUIRED_SCORING = ("threshold",)
 
 
-def load_config(path: str = _DEFAULT_CONFIG_PATH) -> dict:
-    """Load and validate config/config.json.
+# ---------------------------------------------------------------------------
+# Search-config validation
+# ---------------------------------------------------------------------------
 
-    Raises SystemExit with a descriptive message if the file cannot be read
-    or any required key is missing.
+
+@dataclass
+class ValidationIssue:
+    """A single search-config validation failure for one source.
+
+    Attributes:
+        source_key: The plugin key (e.g. ``"adzuna"``) whose required
+            search fields are missing or empty.
+        missing_fields: List of ``config["search"]`` key names that are
+            absent, empty strings, or zero.
+    """
+
+    source_key: str
+    missing_fields: list[str] = field(default_factory=list)
+
+
+def _is_search_field_empty(value: object) -> bool:
+    """Return True when *value* should be treated as "not configured".
+
+    A field is considered empty when it is ``None``, an empty or
+    whitespace-only string, or a numeric zero.  Non-zero numbers and
+    non-empty strings are considered configured.
+
+    Args:
+        value: The raw value read from ``config["search"]``.
+
+    Returns:
+        ``True`` if the field is absent or empty; ``False`` otherwise.
+    """
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, (int, float)):
+        return value == 0
+    return False
+
+
+def validate_search_config(
+    config: dict,
+    providers_data: dict,
+) -> list[ValidationIssue]:
+    """Validate that enabled sources have the search-config fields they need.
+
+    For every enabled source that declares ``REQUIRED_SEARCH_FIELDS``,
+    checks each required key in ``config["search"]`` for presence,
+    non-empty string value, and non-zero numeric value.
+
+    This is the **single, shared validator** used by:
+      * ``load_config()`` (CLI path — raises ``SystemExit`` on failure)
+      * ``/settings`` GET render (advisory warning banner)
+      * ``/api/ingest/preflight`` (ingest drawer pre-flight check)
+
+    Args:
+        config:         Full config dict (from ``config/config.json``).
+        providers_data: Full providers dict (from ``credentials.load_providers``).
+                        Used to determine which sources are currently enabled.
+
+    Returns:
+        List of :class:`ValidationIssue` objects — one per source with
+        missing or empty required fields.  An empty list means all enabled
+        sources are fully configured.
+    """
+    search: dict = config.get("search") or {}
+    required_by_source = get_required_search_fields(providers_data)
+
+    issues: list[ValidationIssue] = []
+    for source_key, required_fields in required_by_source:
+        missing: list[str] = []
+        for field_name in required_fields:
+            raw = search.get(field_name)
+            if raw is None or _is_search_field_empty(raw):
+                missing.append(field_name)
+        if missing:
+            issues.append(ValidationIssue(
+                source_key=source_key,
+                missing_fields=missing,
+            ))
+
+    return issues
+
+
+def load_config(path: str = _DEFAULT_CONFIG_PATH) -> dict:
+    """Load and structurally validate config/config.json.
+
+    Performs only structural format validation: file must exist, be valid JSON,
+    and contain a ``search`` key that is a dict and a ``scoring.threshold`` key.
+
+    Search *field-content* validation (e.g. whether ``search.country`` is
+    non-empty) is **not** done here because the required fields depend on which
+    job sources are actually enabled — a context that is not available at this
+    point.  That check is delegated to :func:`validate_search_config`, which
+    ``main()`` calls after :func:`make_enabled_sources` returns.
 
     LLM provider API keys are no longer validated here — they are loaded from
     ``config/providers.json`` via :func:`credentials.load_providers`.
+
+    Args:
+        path: Filesystem path to ``config.json``.
+
+    Returns:
+        Parsed config dict.
+
+    Raises:
+        SystemExit: If the file is missing, not valid JSON, or
+            ``scoring.threshold`` is absent.
     """
     try:
         with open(path, encoding="utf-8") as fh:
@@ -141,11 +279,6 @@ def load_config(path: str = _DEFAULT_CONFIG_PATH) -> dict:
     for key in _REQUIRED_TOP_LEVEL:
         if key not in config or not config[key]:
             missing.append(key)
-
-    search = config.get("search", {})
-    for key in _REQUIRED_SEARCH:
-        if key not in search:
-            missing.append(f"search.{key}")
 
     scoring = config.get("scoring", {})
     for key in _REQUIRED_SCORING:
@@ -944,6 +1077,61 @@ def _inject_env_var_credentials(providers: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Plugin isolation helper
+# ---------------------------------------------------------------------------
+
+def _safe_pages(client):
+    """Wrap ``client.pages()`` so an unhandled exception from a plugin aborts
+    only that source, not the entire ingest run.
+
+    Any ``Exception`` that escapes the plugin's ``pages()`` generator is caught
+    here, logged at ERROR level with a full traceback, and then the generator
+    simply returns — leaving the outer ``for client in sources:`` loop free to
+    continue with the next source.
+
+    ``GeneratorExit`` is explicitly re-raised (PEP 479) so Python's generator
+    close protocol works correctly when the consumer stops iterating early.
+    ``SystemExit`` is caught by its own branch so the ingest run survives a
+    plugin that calls ``sys.exit()``.  ``KeyboardInterrupt`` is deliberately NOT
+    caught — Ctrl-C must still exit the process.
+
+    Args:
+        client: A :class:`JobSource` instance whose ``pages()`` iterator is
+                to be consumed safely.
+
+    Yields:
+        Lists of normalised listing dicts, exactly as ``client.pages()`` would.
+    """
+    _log = logging.getLogger("ingest")
+    try:
+        yield from client.pages()
+    except SystemExit as exc:  # noqa: BLE001
+        # SystemExit is a BaseException, not an Exception — it bypasses a plain
+        # ``except Exception:`` clause and would otherwise silently kill the
+        # entire process with no traceback.  Catch it here, log the exit code,
+        # and let the outer sources loop continue to the next plugin.
+        _log.error(
+            "Plugin %r called sys.exit(%r) — aborting this source only. "
+            "Full traceback follows.",
+            client.SOURCE,
+            exc.code,
+            exc_info=True,
+        )
+    except GeneratorExit:
+        # PEP 479: generators must re-raise GeneratorExit, not swallow it.
+        # This exception is only raised when the *consumer* closes the generator
+        # early (e.g. a ``break`` in the outer loop) — it is NOT a plugin error.
+        raise
+    except Exception:  # noqa: BLE001
+        _log.error(
+            "Plugin %r raised an unhandled exception — skipping source. "
+            "Full traceback follows.",
+            client.SOURCE,
+            exc_info=True,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
 
@@ -982,307 +1170,404 @@ def run(
                         Default: ``"config/providers.json"``.
                         Override in tests to inject a temp file.
     """
-    config = load_config(config_path)
-    profile = load_profile(profile_path)
+    # ---------------------------------------------------------------------- #
+    # Pre-pipeline setup — errors here are caught and logged before the main #
+    # try block so they appear in the log file, not silently on stderr only. #
+    # ---------------------------------------------------------------------- #
+    try:
+        config = load_config(config_path)
+        profile = load_profile(profile_path)
+    except SystemExit as exc:
+        # load_config/load_profile raise SystemExit, which bypasses a plain
+        # except Exception.  Extract the message and log it so the error
+        # appears in the log file, then re-raise to preserve the exit code.
+        logger.error("Startup error: %s", exc)
+        raise
+
     job_type = config["search"].get("what", "").strip()
 
     if hours is not None:
         config["search"]["max_days_old"] = math.ceil(hours / 24)
 
-    db.init_db()
+    try:
+        db.init_db()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Database initialisation failed: %s", exc)
+        sys.exit(1)
 
-    # Initialise the geospatial filter.  Geocodes location.center up-front if
-    # location.center and location.radius_km are both set in the profile.
-    geo = GeoFilter(profile=profile)
-    if geo.is_active:
-        _loc = profile.get("location", {})
-        logger.info(
-            "  Geo filter: center=%r radius=%s km fallback=%s",
-            _loc.get("center"),
-            _loc.get("radius_km"),
-            _loc.get("geocode_fallback", "pass"),
+    # Record this run in the ingest_runs table so the Admin UI can show history.
+    # If this fails (e.g. ingest_runs table missing), run_id is set to None and
+    # the run continues without admin-UI tracking.
+    run_id: int | None = None
+    _log_name = Path(_current_log_file).name if _current_log_file else None
+    try:
+        run_id = db.create_ingest_run(
+            trigger_source=_detect_trigger_source(),
+            log_filename=_log_name,
         )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Could not create ingest_runs record (admin UI will not show this run): %s", exc
+        )
+
+    # _pipeline_error stores any unhandled exception so the finally block can
+    # record it in ingest_runs without swallowing the exception.
+    _pipeline_error: BaseException | None = None
 
     try:
-        providers = load_providers(
-            providers_path=providers_path,
-            keys_path=keys_path,
-            config_path=config_path,
-        )
-    except CredentialError as exc:
-        logger.warning(
-            "No credentials found — skipping ingest run. %s", exc
-        )
-        return
+        # ------------------------------------------------------------------ #
+        # Pipeline body (geo filter → load providers → source loop → summary) #
+        # ------------------------------------------------------------------ #
 
-    _inject_env_var_credentials(providers)
+        # Initialise the geospatial filter.  Geocodes location.center up-front if
+        # location.center and location.radius_km are both set in the profile.
+        geo = GeoFilter(profile=profile)
+        if geo.is_active:
+            _loc = profile.get("location", {})
+            logger.info(
+                "  Geo filter: center=%r radius=%s km fallback=%s",
+                _loc.get("center"),
+                _loc.get("radius_km"),
+                _loc.get("geocode_fallback", "pass"),
+            )
 
-    from job_sources.auto_register import ensure_plugins_registered
-    ensure_plugins_registered(providers_path)
+        try:
+            providers = load_providers(
+                providers_path=providers_path,
+                keys_path=keys_path,
+                config_path=config_path,
+            )
+        except CredentialError as exc:
+            logger.warning(
+                "No credentials found — skipping ingest run. %s", exc
+            )
+            if run_id is not None:
+                db.finish_ingest_run(run_id, status="failed", error_message=str(exc))
+            return
 
-    sources = make_enabled_sources(providers, config)
-    if not sources:
-        logger.warning(
-            "No job sources are enabled. Enable at least one source in Settings > Sources."
-        )
-        logger.info("Run complete: 0 fetched | no sources enabled")
-        return
+        _inject_env_var_credentials(providers)
 
-    chain = build_provider_chain(providers)
-    dead_providers: set[str] = set()
+        from job_sources.auto_register import ensure_plugins_registered
+        ensure_plugins_registered(providers_path)
 
-    # --- Run start banner ---
-    logger.info("=" * 60)
-    logger.info("INGEST RUN STARTED")
-    logger.info(
-        "  Search: '%s' | max_pages: %d | max_days_old: %d",
-        config["search"].get("what", ""),
-        config["search"].get("max_pages", 0),
-        config["search"].get("max_days_old", 0),
-    )
-    pf = config.get("prefilter", {})
-    if pf:
-        logger.info(
-            "  Prefilter: title_include=%s | salary_floor=%s",
-            pf.get("title_include", []),
-            pf.get("salary_min") or config.get("search", {}).get("salary_min"),
-        )
-    logger.info(
-        "  Sources: %s",
-        ", ".join(c.SOURCE for c in sources),
-    )
-    if chain:
-        logger.info(
-            "  LLM providers: %s",
-            " | ".join(f"{_provider_name(p)}/{_provider_model(p)}" for p in chain),
-        )
-    else:
-        logger.warning("  No LLM providers configured — scoring will fail for all listings")
-    logger.info("=" * 60)
+        sources = make_enabled_sources(providers, config)
+        if not sources:
+            logger.warning(
+                "No job sources are enabled. Enable at least one source in Settings > Sources."
+            )
+            logger.info("Run complete: 0 fetched | no sources enabled")
+            if run_id is not None:
+                db.finish_ingest_run(run_id, status="success", counts={"fetched": 0})
+            return
 
-    # Counters.
-    fetched = 0
-    prefiltered = 0
-    deduped = 0
-    scraped_ok = 0
-    scraped_fallback = 0
-    scraped_skipped = 0
-    scored = 0
-    score_failed = 0
-    total_tokens_input = 0
-    total_tokens_output = 0
-    # Per-provider cost tracking: {provider_name: {input, output, cost}}
-    provider_costs: dict[str, dict] = {}
-    source_fetch_counts: dict[str, int] = {}
-
-    # Cutoff used for --hours filtering.
-    hours_cutoff: datetime | None = None
-    if hours is not None:
-        from datetime import timedelta
-        hours_cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
-
-    for client in sources:
-        logger.info("Fetching from source: %s", client.SOURCE)
-        for page in client.pages():
-            for listing in page:
-                fetched += 1
-                src_name = listing.get("source", client.SOURCE)
-                source_fetch_counts[src_name] = source_fetch_counts.get(src_name, 0) + 1
-                title = listing.get("title", "(no title)")
-
-                # --- Hours filter (created_at) ---
-                if hours_cutoff is not None:
-                    created_raw = listing.get("created_at", "")
-                    if created_raw:
-                        try:
-                            created_dt = datetime.fromisoformat(
-                                created_raw.replace("Z", "+00:00")
-                            )
-                            if created_dt < hours_cutoff:
-                                prefiltered += 1
-                                logger.info(
-                                    "FILTERED  [%s] %s — created_at older than %d hours",
-                                    src_name, title, hours,
-                                )
-                                continue
-                        except (ValueError, TypeError):
-                            pass  # Unparseable date — let the listing through.
-
-                # --- Pre-filter ---
-                reason = prefilter(listing, config)
-                if reason is not None:
-                    prefiltered += 1
-                    logger.info("FILTERED  [%s] %s — %s", src_name, title, reason)
-                    continue
-
-                # --- Geospatial filter ---
-                geo_reason = geo.check(listing)
-                if geo_reason is not None:
-                    prefiltered += 1
-                    logger.info("FILTERED  [%s] %s — %s", src_name, title, geo_reason)
-                    continue
-
-                # --- Dedup ---
-                # Open one connection and reuse it for both dedup checks to avoid
-                # two open/close round-trips per listing.
-                with db.get_connection() as _dedup_conn:
-                    _is_dupe = db.listing_exists(
-                        _dedup_conn, listing["source"], listing["source_id"]
-                    )
-                    if not _is_dupe:
-                        redirect_url = listing.get("redirect_url", "")
-                        if redirect_url:
-                            _is_dupe = db.listing_exists_by_url(_dedup_conn, redirect_url)
-                if _is_dupe:
-                    deduped += 1
-                    logger.info("DUPE      [%s] %s", src_name, title)
-                    continue
-
-                # --- Scrape ---
-                # Sources that set skip_scrape=True (e.g. Jooble, whose /jdp/
-                # pages return HTTP 403 to cold requests) have already provided
-                # the best available description via the API.  Skip the HTTP
-                # round-trip and use the API description directly.
-                if listing.get("skip_scrape"):
-                    scraped_skipped += 1
-                    listing["description_source"] = "snippet"
-                    logger.info("SCRAPE SKIP      [%s] %s", src_name, title)
-                else:
-                    description, ok = scrape_description(
-                        listing["redirect_url"],
-                        fallback=listing["description"],
-                    )
-                    if ok:
-                        scraped_ok += 1
-                        listing["description_source"] = "full"
-                    else:
-                        scraped_fallback += 1
-                        listing["description_source"] = "snippet"
-                        logger.info("SCRAPE FALLBACK  [%s] %s", src_name, title)
-                    listing["description"] = description
-
-                # --- Score ---
-                score_result = score_listing_with_fallback(
-                    listing=listing,
-                    profile=profile,
-                    chain=chain,
-                    dead_providers=dead_providers,
+        # Validate search-config fields now that we know which sources are
+        # enabled.  This is intentionally source-aware: a user who disables
+        # Adzuna will not see spurious "missing search.country" errors.
+        search_issues = validate_search_config(config, providers)
+        if search_issues:
+            for issue in search_issues:
+                logger.error(
+                    "Search config incomplete for %s: missing %s",
+                    issue.source_key,
+                    ", ".join(issue.missing_fields),
                 )
+            raise SystemExit("Fix search settings before ingesting.")
 
-                if score_result is None:
-                    score_failed += 1
-                    logger.warning("SCORE FAILED  [%s] %s", src_name, title)
-                    listing.update(
-                        {
-                            "score": None,
-                            "matched_skills": [],
-                            "missing_skills": [],
-                            "concerns": [],
-                            "verdict": None,
-                            "seen": 0,
-                        }
-                    )
-                else:
-                    scored += 1
-                    logger.info(
-                        "SCORED %d/10  [%s] %s",
-                        score_result.get("score", 0),
-                        src_name,
-                        title,
-                    )
-                    if _verbose:
-                        logger.info(
-                            "  verdict: %s\n  matched: %s\n  missing: %s\n  concerns: %s",
-                            score_result.get("verdict", ""),
-                            ", ".join(score_result.get("matched_skills") or []) or "none",
-                            ", ".join(score_result.get("missing_skills") or []) or "none",
-                            ", ".join(score_result.get("concerns") or []) or "none",
-                        )
-                    else:
-                        logger.debug(
-                            "  verdict: %s | matched: %s | missing: %s",
-                            score_result.get("verdict", ""),
-                            ", ".join(score_result.get("matched_skills") or []) or "none",
-                            ", ".join(score_result.get("missing_skills") or []) or "none",
-                        )
-                    tok_in = score_result.get("tokens_input") or 0
-                    tok_out = score_result.get("tokens_output") or 0
-                    total_tokens_input += tok_in
-                    total_tokens_output += tok_out
+        chain = build_provider_chain(providers)
+        dead_providers: set[str] = set()
 
-                    # Accumulate per-provider cost for the run summary.
-                    used_provider = score_result.get("model_used", "").split("/")[0] or "unknown"
-                    if used_provider not in provider_costs:
-                        # Retrieve the matching provider to get its pricing rates.
-                        matched = next(
-                            (p for p in chain if _provider_name(p) == used_provider),
-                            None,
-                        )
-                        provider_costs[used_provider] = {
-                            "input": 0,
-                            "output": 0,
-                            "cost": 0.0,
-                            "_in_rate": matched.input_cost_per_mtok if matched else 0.0,
-                            "_out_rate": matched.output_cost_per_mtok if matched else 0.0,
-                        }
-                    bucket = provider_costs[used_provider]
-                    bucket["input"] += tok_in
-                    bucket["output"] += tok_out
-                    bucket["cost"] += (
-                        tok_in  / 1_000_000 * bucket["_in_rate"]
-                        + tok_out / 1_000_000 * bucket["_out_rate"]
-                    )
-
-                    listing.update(score_result)
-                    listing["seen"] = 1
-
-                # --- Persist ---
-                listing["fetched_at"] = datetime.now(timezone.utc).isoformat()
-                listing["bookmarked"] = 0
-                listing["dismissed"] = 0
-                listing["job_type"] = job_type or None
-
-                # Populate posted_at from created_at when the source's normalise()
-                # does not set it directly (non-Adzuna sources).  db.insert_listing()
-                # defaults posted_at to NULL via setdefault — setting it here ensures
-                # date-sort works correctly for all sources.
-                if not listing.get("posted_at"):
-                    listing["posted_at"] = listing.get("created_at") or None
-
-                try:
-                    db.insert_listing(listing)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("DB insert failed  [%s] %s: %s", src_name, title, exc)
-
-        source_count = source_fetch_counts.get(client.SOURCE, 0)
-        logger.info("Fetched %d listing(s) from %s", source_count, client.SOURCE)
-
-    total_tokens = total_tokens_input + total_tokens_output
-    run_cost = sum(b["cost"] for b in provider_costs.values())
-    logger.info(
-        "Run complete: %d source(s) | %d fetched | %d pre-filtered | "
-        "%d dupes skipped | %d scored (%d failed) | "
-        "%d scrape skipped | %d scrape fallbacks | ~%s tok | ~$%.4f",
-        len(sources), fetched, prefiltered,
-        deduped, scored, score_failed,
-        scraped_skipped, scraped_fallback, f"{total_tokens:,}", run_cost,
-    )
-    if len(provider_costs) > 1:
-        breakdown = " | ".join(
-            f"{name}: ~{b['input'] + b['output']:,} tok ~${b['cost']:.4f}"
-            for name, b in provider_costs.items()
-        )
-        logger.info("  Cost breakdown: %s", breakdown)
-    if source_fetch_counts:
-        logger.info("  Sources: %s", " | ".join(f"{src}: {cnt}" for src, cnt in source_fetch_counts.items()))
-    if geo.is_active:
+        # --- Run start banner ---
+        logger.info("=" * 60)
+        logger.info("INGEST RUN STARTED")
         logger.info(
-            "  Geocache: %d hit(s) | %d miss(es) | %d failed | %d discarded by radius",
-            geo.hits, geo.misses, geo.failed, geo.geo_discarded,
+            "  Search: '%s' | max_pages: %d | max_days_old: %d",
+            config["search"].get("what", ""),
+            config["search"].get("max_pages", 0),
+            config["search"].get("max_days_old", 0),
         )
-    logger.info("=" * 60)
-    logger.info("INGEST RUN COMPLETE")
-    logger.info("=" * 60)
+        pf = config.get("prefilter", {})
+        if pf:
+            logger.info(
+                "  Prefilter: title_include=%s | salary_floor=%s",
+                pf.get("title_include", []),
+                pf.get("salary_min") or config.get("search", {}).get("salary_min"),
+            )
+        logger.info(
+            "  Sources: %s",
+            ", ".join(c.SOURCE for c in sources),
+        )
+        if chain:
+            logger.info(
+                "  LLM providers: %s",
+                " | ".join(f"{_provider_name(p)}/{_provider_model(p)}" for p in chain),
+            )
+        else:
+            logger.warning("  No LLM providers configured — scoring will fail for all listings")
+        logger.info("=" * 60)
+
+        # Counters.
+        fetched = 0
+        prefiltered = 0
+        deduped = 0
+        scraped_ok = 0
+        scraped_fallback = 0
+        scraped_skipped = 0
+        scored = 0
+        score_failed = 0
+        listing_failed = 0
+        total_tokens_input = 0
+        total_tokens_output = 0
+        # Per-provider cost tracking: {provider_name: {input, output, cost}}
+        provider_costs: dict[str, dict] = {}
+        source_fetch_counts: dict[str, int] = {}
+
+        # Cutoff used for --hours filtering.
+        hours_cutoff: datetime | None = None
+        if hours is not None:
+            from datetime import timedelta
+            hours_cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+        for client in sources:
+            logger.info("Fetching from source: %s", client.SOURCE)
+            for page in _safe_pages(client):
+                # Emit fetched event before per-listing loop to maintain ordering invariant
+                # for SSE clients (prevents filtered > fetched in drawer). See issue #200.
+                logger.info("Fetched %d listing(s) from %s", len(page), client.SOURCE)
+                for listing in page:
+                    fetched += 1
+                    src_name = listing.get("source", client.SOURCE)
+                    source_fetch_counts[src_name] = source_fetch_counts.get(src_name, 0) + 1
+                    title = listing.get("title", "(no title)")
+                    try:
+                        # --- Hours filter (created_at) ---
+                        if hours_cutoff is not None:
+                            created_raw = listing.get("created_at", "")
+                            if created_raw:
+                                try:
+                                    created_dt = datetime.fromisoformat(
+                                        created_raw.replace("Z", "+00:00")
+                                    )
+                                    if created_dt < hours_cutoff:
+                                        prefiltered += 1
+                                        logger.info(
+                                            "FILTERED  [%s] %s — created_at older than %d hours",
+                                            src_name, title, hours,
+                                        )
+                                        continue
+                                except (ValueError, TypeError):
+                                    pass  # Unparseable date — let the listing through.
+
+                        # --- Pre-filter ---
+                        reason = prefilter(listing, config)
+                        if reason is not None:
+                            prefiltered += 1
+                            logger.info("FILTERED  [%s] %s — %s", src_name, title, reason)
+                            continue
+
+                        # --- Geospatial filter ---
+                        geo_reason = geo.check(listing)
+                        if geo_reason is not None:
+                            prefiltered += 1
+                            logger.info("FILTERED  [%s] %s — %s", src_name, title, geo_reason)
+                            continue
+
+                        # --- Dedup ---
+                        # Open one connection and reuse it for both dedup checks to avoid
+                        # two open/close round-trips per listing.
+                        with db.get_connection() as _dedup_conn:
+                            _is_dupe = db.listing_exists(
+                                _dedup_conn, listing["source"], listing["source_id"]
+                            )
+                            if not _is_dupe:
+                                redirect_url = listing.get("redirect_url", "")
+                                if redirect_url:
+                                    _is_dupe = db.listing_exists_by_url(_dedup_conn, redirect_url)
+                        if _is_dupe:
+                            deduped += 1
+                            logger.info("DUPE      [%s] %s", src_name, title)
+                            continue
+
+                        # --- Scrape ---
+                        # Sources that set skip_scrape=True provide the description via
+                        # API.  If the source also sets description_is_full=True AND the
+                        # description is long enough (>= _SCRAPE_MIN_LENGTH), classify
+                        # as "full"; otherwise fall back to "snippet".
+                        if listing.get("skip_scrape"):
+                            scraped_skipped += 1
+                            if (listing.get("description_is_full")
+                                    and len(listing.get("description", "")) >= _SCRAPE_MIN_LENGTH):
+                                listing["description_source"] = "full"
+                                logger.info("SCRAPE SKIP (full) [%s] %s", src_name, title)
+                            else:
+                                listing["description_source"] = "snippet"
+                                logger.info("SCRAPE SKIP (snippet) [%s] %s", src_name, title)
+                        else:
+                            description, ok = scrape_description(
+                                listing["redirect_url"],
+                                fallback=listing["description"],
+                            )
+                            if ok:
+                                scraped_ok += 1
+                                listing["description_source"] = "full"
+                            else:
+                                scraped_fallback += 1
+                                listing["description_source"] = "snippet"
+                                logger.info("SCRAPE FALLBACK  [%s] %s", src_name, title)
+                            listing["description"] = description
+
+                        # --- Score ---
+                        score_result = score_listing_with_fallback(
+                            listing=listing,
+                            profile=profile,
+                            chain=chain,
+                            dead_providers=dead_providers,
+                        )
+
+                        if score_result is None:
+                            score_failed += 1
+                            logger.warning("SCORE FAILED  [%s] %s", src_name, title)
+                            listing.update(
+                                {
+                                    "score": None,
+                                    "matched_skills": [],
+                                    "missing_skills": [],
+                                    "concerns": [],
+                                    "verdict": None,
+                                    "seen": 0,
+                                }
+                            )
+                        else:
+                            scored += 1
+                            logger.info(
+                                "SCORED %d/10  [%s] %s",
+                                score_result.get("score", 0),
+                                src_name,
+                                title,
+                            )
+                            if _verbose:
+                                logger.info(
+                                    "  verdict: %s\n  matched: %s\n  missing: %s\n  concerns: %s",
+                                    score_result.get("verdict", ""),
+                                    ", ".join(score_result.get("matched_skills") or []) or "none",
+                                    ", ".join(score_result.get("missing_skills") or []) or "none",
+                                    ", ".join(score_result.get("concerns") or []) or "none",
+                                )
+                            else:
+                                logger.debug(
+                                    "  verdict: %s | matched: %s | missing: %s",
+                                    score_result.get("verdict", ""),
+                                    ", ".join(score_result.get("matched_skills") or []) or "none",
+                                    ", ".join(score_result.get("missing_skills") or []) or "none",
+                                )
+                            tok_in = score_result.get("tokens_input") or 0
+                            tok_out = score_result.get("tokens_output") or 0
+                            total_tokens_input += tok_in
+                            total_tokens_output += tok_out
+
+                            # Accumulate per-provider cost for the run summary.
+                            used_provider = score_result.get("model_used", "").split("/")[0] or "unknown"
+                            if used_provider not in provider_costs:
+                                # Retrieve the matching provider to get its pricing rates.
+                                matched = next(
+                                    (p for p in chain if _provider_name(p) == used_provider),
+                                    None,
+                                )
+                                provider_costs[used_provider] = {
+                                    "input": 0,
+                                    "output": 0,
+                                    "cost": 0.0,
+                                    "_in_rate": matched.input_cost_per_mtok if matched else 0.0,
+                                    "_out_rate": matched.output_cost_per_mtok if matched else 0.0,
+                                }
+                            bucket = provider_costs[used_provider]
+                            bucket["input"] += tok_in
+                            bucket["output"] += tok_out
+                            bucket["cost"] += (
+                                tok_in  / 1_000_000 * bucket["_in_rate"]
+                                + tok_out / 1_000_000 * bucket["_out_rate"]
+                            )
+
+                            listing.update(score_result)
+                            listing["seen"] = 1
+
+                        # --- Persist ---
+                        listing["fetched_at"] = datetime.now(timezone.utc).isoformat()
+                        listing["bookmarked"] = 0
+                        listing["dismissed"] = 0
+                        listing["job_type"] = job_type or None
+
+                        # Populate posted_at from created_at when the source's normalise()
+                        # does not set it directly (non-Adzuna sources).  db.insert_listing()
+                        # defaults posted_at to NULL via setdefault — setting it here ensures
+                        # date-sort works correctly for all sources.
+                        if not listing.get("posted_at"):
+                            listing["posted_at"] = listing.get("created_at") or None
+
+                        try:
+                            db.insert_listing(listing)
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning("DB insert failed  [%s] %s: %s", src_name, title, exc)
+
+                    except Exception:  # noqa: BLE001
+                        listing_failed += 1
+                        logger.exception(
+                            "LISTING FAILED  [%s] %s — unhandled exception in per-listing pipeline",
+                            src_name,
+                            title,
+                        )
+
+        total_tokens = total_tokens_input + total_tokens_output
+        run_cost = sum(b["cost"] for b in provider_costs.values())
+        logger.info(
+            "Run complete: %d source(s) | %d fetched | %d pre-filtered | "
+            "%d dupes skipped | %d scored (%d failed) | "
+            "%d listing error(s) | "
+            "%d scrape skipped | %d scrape fallbacks | ~%s tok | ~$%.4f",
+            len(sources), fetched, prefiltered,
+            deduped, scored, score_failed,
+            listing_failed,
+            scraped_skipped, scraped_fallback, f"{total_tokens:,}", run_cost,
+        )
+        if len(provider_costs) > 1:
+            breakdown = " | ".join(
+                f"{name}: ~{b['input'] + b['output']:,} tok ~${b['cost']:.4f}"
+                for name, b in provider_costs.items()
+            )
+            logger.info("  Cost breakdown: %s", breakdown)
+        if source_fetch_counts:
+            logger.info("  Sources: %s", " | ".join(f"{src}: {cnt}" for src, cnt in source_fetch_counts.items()))
+        if geo.is_active:
+            logger.info(
+                "  Geocache: %d hit(s) | %d miss(es) | %d failed | %d discarded by radius",
+                geo.hits, geo.misses, geo.failed, geo.geo_discarded,
+            )
+        logger.info("=" * 60)
+        logger.info("INGEST RUN COMPLETE")
+        logger.info("=" * 60)
+
+        if run_id is not None:
+            db.finish_ingest_run(
+                run_id,
+                status="success",
+                counts={
+                    "fetched": fetched,
+                    "filtered": prefiltered,
+                    "scored": scored,
+                    "failed": score_failed,
+                },
+                cost_usd=run_cost,
+            )
+    except Exception as exc:  # noqa: BLE001
+        if run_id is not None:
+            try:
+                db.finish_ingest_run(
+                    run_id,
+                    status="failed",
+                    error_message=str(exc),
+                )
+            except Exception:  # noqa: BLE001
+                logger.warning("Could not record run failure in database")
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -1313,7 +1598,11 @@ def rescore(
                         Default: ``"config/providers.json"``.
                         Override in tests to inject a temp file.
     """
-    profile = load_profile(profile_path)
+    try:
+        profile = load_profile(profile_path)
+    except SystemExit as exc:
+        logger.error("Startup error: %s", exc)
+        raise
 
     try:
         providers = load_providers(
@@ -1330,7 +1619,12 @@ def rescore(
     chain = build_provider_chain(providers)
     dead_providers: set[str] = set()
 
-    listings = db.get_all_scored()
+    try:
+        listings = db.get_all_scored()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Could not fetch listings from database: %s", exc)
+        sys.exit(1)
+
     if not listings:
         logger.info("No scored listings to rescore.")
         return

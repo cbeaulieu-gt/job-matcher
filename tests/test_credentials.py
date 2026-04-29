@@ -602,3 +602,76 @@ class TestMissingProviderOrderKey:
             assert isinstance(chain[2], GeminiProvider)
         finally:
             _stop_patches()
+
+
+# ===========================================================================
+# save_providers() — stale lock file cleanup (issue #231)
+# ===========================================================================
+
+class TestSaveProvidersStalelock:
+    """save_providers() must clean up a stale .lock file after timing out.
+
+    On Windows, save_providers() uses an O_EXCL lock file for concurrency.
+    If a previous process crashed and left the lock file, subsequent calls
+    spin for 5 s and then proceed without the lock — but previously they left
+    the stale file in place, causing every future call to also spin for 5 s.
+    The fix: remove the lock file after the timeout so the next caller
+    does not have to wait.
+    """
+
+    def test_stale_lock_is_removed_after_timeout(self, tmp_path, monkeypatch):
+        """After a lock acquisition timeout, the stale .lock file must be deleted.
+
+        Regression for issue #231: a stale providers.json.lock left by a prior
+        crash caused every subsequent save_providers() call to spin for 5 s
+        before proceeding, making the settings save appear to hang.
+        """
+        import sys as _sys
+
+        if _sys.platform != "win32":
+            # Lock file behaviour is Windows-only; skip on other platforms.
+            return
+
+        from credentials import save_providers
+
+        providers_path = str(tmp_path / "providers.json")
+        _write(tmp_path / "providers.json", {
+            "provider_order": [],
+            "llm": {"anthropic": {"api_key": "sk-x", "model": "claude-haiku-4-5-20251001"}},
+            "job_sources": {},
+        })
+
+        # Create a stale lock file (simulates a previous crash).
+        lock_path = providers_path + ".lock"
+        open(lock_path, "w").close()
+        assert os.path.exists(lock_path), "Pre-condition: lock file must exist"
+
+        # Shorten the timeout to avoid a real 5-second wait in CI.
+        import time as _time
+        real_monotonic = _time.monotonic
+
+        call_count = {"n": 0}
+
+        def fast_monotonic():
+            """Return deadline-exceeded immediately on the second call."""
+            call_count["n"] += 1
+            if call_count["n"] >= 2:
+                return real_monotonic() + 10.0  # force deadline exceeded
+            return real_monotonic()
+
+        monkeypatch.setattr(_time, "monotonic", fast_monotonic)
+
+        save_providers(
+            {"llm": {"anthropic": {"api_key": "sk-new"}}},
+            providers_path=providers_path,
+        )
+
+        # The stale lock file must have been removed.
+        assert not os.path.exists(lock_path), (
+            "Stale .lock file must be removed after timeout so future callers "
+            "do not also spin — regression for issue #231"
+        )
+        # The write must still have succeeded.
+        with open(providers_path, encoding="utf-8") as fh:
+            saved = json.load(fh)
+        assert saved["llm"]["anthropic"]["api_key"] == "sk-new"

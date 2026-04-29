@@ -9,19 +9,23 @@ import ipaddress
 import json
 import os
 import re
+import secrets
 import subprocess
 import sys
-import tempfile
 import threading
 import time as _time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from importlib.metadata import version as pkg_version, PackageNotFoundError
 
-from flask import Flask, render_template, make_response, request, jsonify, redirect, url_for
+from dotenv import load_dotenv
+
+from flask import Flask, render_template, make_response, request, jsonify, redirect, url_for, Response, session, stream_with_context, send_from_directory, abort
 
 import db
 from credentials import CredentialError, load_providers, save_providers
+from paths import LOG_DIR
+from ingest_events import IngestEventParser, event_queue
 from io import BytesIO
 
 from pypdf import PdfReader
@@ -31,8 +35,52 @@ from providers import _PROVIDER_CLASS_MAP, build_provider_chain, generate_with_f
 from providers.anthropic_provider import strip_fences
 from providers.base import _sanitise_detail
 from job_sources import get_sources
+from ingest import validate_search_config, ValidationIssue
+
+# Load environment variables from a local .env file if present.
+# Precedence: parent-process env (shell, VSCode task, docker env_file) always
+# wins. This covers the native `python app.py` path where no external env
+# loader exists; under Docker, `env_file:` has already populated os.environ
+# before this runs, so load_dotenv(override=False) is a no-op.
+load_dotenv(override=False)
 
 app = Flask(__name__)
+
+# A stable secret key is required for session-based CSRF tokens.
+# Refuse to start with an empty or placeholder value — a fresh random key on
+# every restart invalidates session cookies and breaks CSRF protection.
+_secret_key_env = os.environ.get("SECRET_KEY", "")
+if not _secret_key_env or _secret_key_env.startswith("changeme"):
+    raise RuntimeError(
+        "SECRET_KEY must be set to a secure random value. "
+        'Generate one with: python -c "import secrets; print(secrets.token_hex(32))" '
+        "and set it in .env.dev / .env.prod."
+    )
+app.secret_key = _secret_key_env
+
+# Prod-only env placeholder guard.
+# In prod the stack must not start with example `changeme_*` values coming
+# straight out of .env.prod.example. The most common failure mode is a server
+# that was provisioned once and never had its live .env.prod edited -- the
+# stack would come up with a known-default Postgres password and a literal
+# changeme DATABASE_URL. Refuse to start so this is caught immediately instead
+# of silently running with example credentials.
+#
+# We scope this to APP_ENV=prod so that local dev (where `changeme_dev` is the
+# documented default password) continues to work untouched.
+#
+# The regex matches `changeme` only when bounded by `:` or `/` on the left and
+# `_` or `@` on the right, eliminating false positives on legitimate passwords
+# that happen to contain `changeme` as a substring of a longer word.
+if os.environ.get("APP_ENV", "").lower() == "prod":
+    _database_url = os.environ.get("DATABASE_URL", "")
+    if re.search(r'[:/]changeme[_@]', _database_url, re.IGNORECASE):
+        raise RuntimeError(
+            "DATABASE_URL contains a 'changeme_*' placeholder. "
+            "Edit .env.prod and set a real POSTGRES_PASSWORD, then recreate the "
+            "db container: docker compose -p job-matcher-pr-prod -f "
+            "docker-compose.prod.yml down -v && ... up -d"
+        )
 
 # Inject environment and version globals so all templates can render the status bar.
 app.jinja_env.globals['APP_ENV'] = os.environ.get('APP_ENV', 'local')
@@ -358,6 +406,37 @@ def _config_warnings() -> list[str]:
     return warnings
 
 
+def _get_search_validation_issues() -> list[ValidationIssue]:
+    """Return search-config validation issues for enabled sources.
+
+    Loads providers and config safely (returns empty list on any error) and
+    delegates to :func:`ingest.validate_search_config`.  Used by the
+    ``/settings`` GET render and the ``/api/ingest/preflight`` endpoint so
+    the same logic is never duplicated.
+
+    Returns:
+        List of :class:`ingest.ValidationIssue` objects.  Empty when all
+        enabled sources have complete search configuration.
+    """
+    try:
+        providers = load_providers(providers_path=_PROVIDERS_PATH)
+    except CredentialError:
+        providers = {}
+
+    try:
+        config = load_config(_CONFIG_PATH)
+    except SystemExit as exc:
+        # config.json missing or malformed — treat as "no issues" so the
+        # /settings page can still render and the user can fix the file.
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "Could not load config for search validation: %s", exc
+        )
+        return []
+
+    return validate_search_config(config, providers)
+
+
 # ---------------------------------------------------------------------------
 # Template filters
 # ---------------------------------------------------------------------------
@@ -508,6 +587,55 @@ def feed():
     )
 
 
+@app.route("/feed/fragment")
+def feed_fragment():
+    """Feed content fragment — returns only the listing cards (or empty state).
+
+    Used by the ``ingestComplete`` HTMX listener to refresh just the
+    ``#feed-content`` container after an ingest run completes, without
+    reloading the full page (which would destroy the ingest drawer).
+
+    Accepts the same filter query params as ``/``:
+      - min_score, remote_only, search, job_type, sort
+    """
+    threshold = CONFIG["scoring"]["threshold"]
+    if not isinstance(threshold, (int, float)) or threshold < 0:
+        threshold = 7.0
+
+    min_score_raw = request.args.get("min_score")
+    try:
+        min_score = float(min_score_raw) if min_score_raw else None
+    except ValueError:
+        min_score = None
+    remote_only = request.args.get("remote_only") == "1"
+    search = request.args.get("search", "").strip() or None
+    job_type = request.args.get("job_type", "").strip() or None
+    sort = request.args.get("sort", "").strip() or None
+
+    listings = db.get_feed(
+        threshold=threshold,
+        min_score=min_score,
+        remote_only=remote_only,
+        search=search,
+        job_type=job_type,
+        sort=sort,
+    )
+    last_fetch_time = db.get_last_fetch_time()
+    new_count = sum(1 for listing in listings if listing["opened_at"] is None)
+    resp = make_response(
+        render_template(
+            "_feed_fragment.html",
+            listings=listings,
+            threshold=threshold,
+            new_count=new_count,
+            last_fetch_time=last_fetch_time,
+        ),
+        200,
+    )
+    resp.headers["Content-Type"] = "text/html"
+    return resp
+
+
 @app.route("/bookmarks")
 def bookmarks():
     """Bookmarked listings only."""
@@ -615,7 +743,6 @@ def stats():
         stats=data,
         view="stats",
         config_warnings=_config_warnings(),
-        runtime_versions=RUNTIME_VERSIONS,
     )
 
 
@@ -695,11 +822,24 @@ _ingest_lock: threading.Lock = threading.Lock()
 # Holds the running Popen handle while ingest.py is active. None when idle.
 _ingest_process: subprocess.Popen | None = None
 
-# Temp file that receives subprocess stdout, avoiding OS pipe-buffer deadlock.
-_ingest_log_file: "tempfile.SpooledTemporaryFile | None" = None
+# Legacy handle — no longer written; kept so existing tests/monkeypatches that
+# set _ingest_log_file still work without AttributeError.
+_ingest_log_file: "object | None" = None
 
 # Stores the result of the most recently completed ingest run.
 _last_run: dict | None = None
+
+# Set to True when _ingest_running() first observes that the subprocess has
+# exited.  Consumed (cleared back to False) by the first /ingest/status
+# response that sends HX-Trigger: ingestComplete, so the event fires exactly
+# once per run — not on every subsequent idle poll.
+_ingest_just_completed: bool = False
+
+# Maximum number of concurrent SSE connections to /ingest/stream.
+# Limited to 2 to prevent resource exhaustion — each connection holds an open
+# HTTP connection plus an event queue subscription. Typical use case is 1
+# browser tab; 2 allows for tab duplication or a background monitoring process.
+MAX_SSE_CONNECTIONS: int = 2
 
 # Matches the summary line that ingest.py prints at the end of each run:
 #   Run complete: 2 source(s) | 25 fetched | 10 pre-filtered | 5 dupes skipped |
@@ -739,6 +879,60 @@ def _parse_ingest_summary(output: str) -> dict:
     return {"new": 0, "filtered": 0, "errors": 0, "completed_at": datetime.now(timezone.utc)}
 
 
+def _stdout_reader(proc: subprocess.Popen) -> None:
+    """Daemon thread: reads ingest subprocess stdout line-by-line,
+    parses each into a structured event, and pushes to the global queue.
+
+    On exception: kills the subprocess and pushes an aborted event.
+    On EOF without a complete event: pushes an aborted event so SSE clients
+    disconnect cleanly rather than spinning forever.
+    """
+    parser = IngestEventParser()
+    saw_complete = False
+    try:
+        # readline() returns '' (empty string, not '\n') at EOF — iter sentinel stops on that
+        for raw_line in iter(proc.stdout.readline, ""):
+            line = raw_line.rstrip("\n")
+            if not line:
+                continue
+            try:
+                event = parser.parse(line)
+            except Exception:
+                app.logger.exception("IngestEventParser failed on line: %r", line)
+                continue
+            if event is not None:
+                if event["type"] == "complete":
+                    saw_complete = True
+                event_queue.push(event)
+    except Exception:
+        app.logger.exception("StdoutReader crashed")
+        try:
+            proc.kill()
+        except OSError:
+            pass
+        event_queue.push({
+            "type": "aborted",
+            "source": None,
+            "title": None,
+            "url": None,
+            "detail": {"error": "reader thread crashed"},
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+        return
+
+    # EOF — subprocess exited
+    if not saw_complete:
+        exit_code = proc.wait()
+        event_queue.push({
+            "type": "aborted",
+            "source": None,
+            "title": None,
+            "url": None,
+            "detail": {"error": f"process exited with code {exit_code}"},
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+
+
 def _ingest_running() -> bool:
     """Return True if an ingest subprocess is currently active.
 
@@ -747,32 +941,29 @@ def _ingest_running() -> bool:
 
     Polls the process exit code: if poll() returns None the process is still
     running. If it has exited, read the temp log file to capture stdout, parse
-    the summary into ``_last_run``, and reset the handle to None so a new run
-    can start.
+    the summary into ``_last_run``, reset the handle to None so a new run can
+    start, and set ``_ingest_just_completed`` so the next /ingest/status
+    response fires ``HX-Trigger: ingestComplete`` exactly once.
     """
-    global _ingest_process, _ingest_log_file, _last_run
+    global _ingest_process, _ingest_log_file, _last_run, _ingest_just_completed
     with _ingest_lock:
         if _ingest_process is None:
             return False
         if _ingest_process.poll() is not None:
-            # Process has finished — read temp log and clear handles.
-            output = ""
+            # Process has exited — extract summary from event queue for
+            # backward compat.  Clean up legacy log file handle if present
+            # (no-op for new PIPE-based runs).
             if _ingest_log_file is not None:
                 try:
-                    _ingest_log_file.seek(0)
-                    output = _ingest_log_file.read()
-                    if isinstance(output, bytes):
-                        output = output.decode("utf-8", errors="replace")
+                    _ingest_log_file.close()
                 except (OSError, ValueError):
-                    output = ""
-                finally:
-                    try:
-                        _ingest_log_file.close()
-                    except OSError:
-                        pass
-                    _ingest_log_file = None
-            _last_run = _parse_ingest_summary(output)
+                    pass
+                _ingest_log_file = None
+            _last_run = _parse_ingest_summary(event_queue.get_latest_summary())
             _ingest_process = None
+            # Mark the running→idle transition so /ingest/status sends
+            # HX-Trigger: ingestComplete exactly once (not on every idle poll).
+            _ingest_just_completed = True
             return False
         return True
 
@@ -791,18 +982,17 @@ def _render_ingest_running() -> str:
 def ingest_trigger():
     """Spawn ingest.py as a background subprocess.
 
-    Returns 202 with the 'Running...' HTML partial when the process is started.
+    Returns 202 with the 'Running...' HTML partial when the process starts.
     Returns 409 with a JSON error body if a run is already in progress — the
     caller can check Content-Type to distinguish the two response shapes.
 
     Uses sys.executable so the subprocess runs in the same virtualenv as the
     app server, picking up all installed dependencies automatically.
 
-    stdout is redirected to a NamedTemporaryFile rather than subprocess.PIPE.
-    This avoids the OS pipe-buffer deadlock: if the process emits more than
-    ~64 KB of output (common with 200+ listings), a PIPE write blocks until the
-    reader drains it — but app.py only reads after the process exits, causing
-    a hang.  A temp file has no such size limit.
+    stdout and stderr are merged and piped via subprocess.PIPE to a
+    StdoutReader daemon thread. The reader parses each line into a structured
+    event and pushes it to the global event queue for real-time SSE
+    consumption by /ingest/stream subscribers.
     """
     global _ingest_process, _ingest_log_file
 
@@ -827,21 +1017,66 @@ def ingest_trigger():
             return jsonify({"error": "already running"}), 409
 
         try:
-            log_file = tempfile.TemporaryFile(mode="w+", suffix=".log", prefix="ingest_")
             proc = subprocess.Popen(
                 cmd,
-                stdout=log_file,
+                stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,  # line-buffered
+                # Force unbuffered output from the child so log lines reach
+                # the parent pipe immediately even when stderr is not a tty.
+                env={**os.environ, "PYTHONUNBUFFERED": "1", "INGEST_TRIGGER": "manual_ui"},
             )
         except (OSError, PermissionError) as e:
             return jsonify({"error": f"Failed to start ingestion: {e}"}), 500
+        event_queue.clear()
 
-        _ingest_log_file = log_file
         _ingest_process = proc
+        _ingest_log_file = None  # no longer used; kept for backward compat
+
+        reader = threading.Thread(
+            target=_stdout_reader,
+            args=(proc,),
+            daemon=True,
+        )
+        reader.start()
 
     resp = make_response(_render_ingest_running(), 202)
     resp.headers["Content-Type"] = "text/html"
     return resp
+
+
+@app.route("/api/ingest/preflight", methods=["GET"])
+def ingest_preflight():
+    """Pre-flight validation endpoint for the ingest drawer.
+
+    Returns a JSON object describing whether the current configuration is
+    valid enough to start an ingest run.  The ingest drawer calls this
+    before enabling the "Run Ingestion" button so users learn about
+    configuration gaps before submitting the form.
+
+    Returns:
+        200 with ``{"ok": true}`` when all enabled sources are fully
+        configured.
+        422 with ``{"ok": false, "issues": [...]}`` when one or more enabled
+        sources have missing or empty required search fields.  Each issue in
+        the list has the shape
+        ``{"source": "<key>", "missing_fields": ["country", ...]}``.
+    """
+    issues = _get_search_validation_issues()
+    if not issues:
+        return jsonify({"ok": True})
+
+    return jsonify({
+        "ok": False,
+        "issues": [
+            {
+                "source": issue.source_key,
+                "missing_fields": issue.missing_fields,
+            }
+            for issue in issues
+        ],
+    }), 422
 
 
 @app.route("/ingest/status")
@@ -849,17 +1084,75 @@ def ingest_status():
     """Poll endpoint — returns an HTML partial reflecting current ingest state.
 
     While the process is running, returns the polling div so HTMX keeps
-    refreshing. Once it stops, returns the idle button and triggers a feed
-    refresh by setting HX-Trigger so the caller can react.
+    refreshing. Once it stops, returns the idle button.
+
+    ``HX-Trigger: ingestComplete`` is sent only on the running→idle transition
+    (i.e. the first idle response after a run finishes), not on every
+    subsequent idle poll. This prevents the ``ingestComplete`` listener from
+    firing repeatedly and causing an infinite refresh loop.
     """
+    global _ingest_just_completed
     running = _ingest_running()
     html = _render_ingest_running() if running else _render_ingest_idle()
     resp = make_response(html, 200)
     resp.headers["Content-Type"] = "text/html"
-    if not running:
-        # Signal HTMX to reload the feed once the job completes.
+    if not running and _ingest_just_completed:
+        # Consume the flag — subsequent idle polls will NOT carry this header.
+        _ingest_just_completed = False
         resp.headers["HX-Trigger"] = "ingestComplete"
     return resp
+
+
+@app.route("/ingest/stream")
+def ingest_stream():
+    """SSE endpoint streaming real-time ingest events.
+
+    Yields events from the EventQueue in SSE wire format. Supports replay
+    via Last-Event-ID header (format: "{run_id}:{event_id}"). Returns 429
+    if max connections exceeded.
+    """
+    if event_queue.connection_count >= MAX_SSE_CONNECTIONS:
+        return jsonify({"error": "too many connections"}), 429
+
+    # Parse Last-Event-ID: "{run_id}:{event_id}" or just "{event_id}"
+    last_event_id_raw = request.headers.get("Last-Event-ID", "")
+    last_id = 0
+    if last_event_id_raw:
+        parts = last_event_id_raw.rsplit(":", 1)
+        if len(parts) == 2:
+            req_run_id, id_str = parts
+            try:
+                candidate_id = int(id_str)
+            except ValueError:
+                candidate_id = 0
+            # Stale run_id → replay from beginning
+            if req_run_id == event_queue.run_id:
+                last_id = candidate_id
+        else:
+            try:
+                last_id = int(parts[0])
+            except ValueError:
+                last_id = 0
+
+    def generate():
+        event_queue.connect()
+        try:
+            for event in event_queue.subscribe(last_id=last_id):
+                eid = event.get("id", 0)
+                run_id = event.get("run_id", event_queue.run_id)
+                data = json.dumps(event, separators=(",", ":"))
+                yield f"id: {run_id}:{eid}\ndata: {data}\n\n"
+        finally:
+            event_queue.disconnect()
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 def _build_llm_schemas(
@@ -990,6 +1283,12 @@ def settings():
             # distinguish "provider's form was on the page and submitted blank" from
             # "provider wasn't on the page at all" by limiting this block to
             # active_tab == "llm" above.
+            #
+            # Load the current stored state once so we can fill in missing
+            # non-password field defaults when the JS dirty-tracker omits
+            # unchanged fields from the POST body (fixes issue #231).
+            _current_providers = _load_providers_safe()
+            _current_llm = _current_providers.get("llm") or {}
             for provider_key, cls in _PROVIDER_CLASS_MAP.items():
                 schema = cls.settings_schema()
                 provider_updates: dict = {}
@@ -1020,7 +1319,27 @@ def settings():
                     clear_key = f"__clear__{provider_key}__{field['name']}"
                     if request.form.get(clear_key) == "1":
                         provider_updates[field["name"]] = ""
+                # When the provider is being updated (at least one field was
+                # submitted), ensure every non-password field that was NOT in
+                # the POST body (because JS dirty-tracking only sends changed
+                # fields) is written with its current stored value or its
+                # schema default.  Without this, a user who only edits the
+                # API key and never touches the model dropdown will end up with
+                # no model in providers.json, causing has_values to return False
+                # and the provider to show as "not configured" after every save.
                 if provider_updates:
+                    stored_cfg = _current_llm.get(provider_key) or {}
+                    for field in schema["fields"]:
+                        if field.get("type") == "password":
+                            continue
+                        field_name = field["name"]
+                        if field_name in provider_updates:
+                            continue
+                        stored_val = stored_cfg.get(field_name, "")
+                        if not stored_val:
+                            default_val = field.get("default", "")
+                            if default_val:
+                                provider_updates[field_name] = default_val
                     updates["llm"][provider_key] = provider_updates
 
         elif active_tab == "sources":
@@ -1090,13 +1409,26 @@ def settings():
         except OSError:
             error = "Could not save settings — check file permissions."
 
-        # Save technical search fields (results_per_page, max_pages) to config.json.
+        # Save search fields (country, what, where, results_per_page,
+        # max_pages) to config.json.
         if error is None and active_tab == "search":
             existing_cfg = load_config(_CONFIG_PATH)
             existing_search = existing_cfg.get("search") or {}
+            updated_search = dict(existing_search)
+
+            # Free-text search fields — store as-is (stripped).
+            for field_name in ("search_country", "search_what", "search_where"):
+                raw = request.form.get(field_name, "").strip()
+                config_key = field_name[len("search_"):]  # strip "search_" prefix
+                if raw:
+                    updated_search[config_key] = raw
+                elif field_name in request.form:
+                    # Explicit empty submission — allow clearing the field.
+                    updated_search.pop(config_key, None)
+
+            # Numeric search fields.
             rpp_str = request.form.get("search_results_per_page", "").strip()
             mp_str = request.form.get("search_max_pages", "").strip()
-            updated_search = dict(existing_search)
             if rpp_str:
                 try:
                     updated_search["results_per_page"] = int(rpp_str)
@@ -1107,6 +1439,7 @@ def settings():
                     updated_search["max_pages"] = int(mp_str)
                 except ValueError:
                     pass
+
             updated_cfg = dict(existing_cfg)
             updated_cfg["search"] = updated_search
             try:
@@ -1149,10 +1482,9 @@ def settings():
     if request.method == "POST" and error:
         pass  # fall through to render with error
 
-    listing_count = db.get_listing_count()
-
-    # Pass technical search fields to the Search Settings tab.
+    # Pass search fields and validation issues to the Search Settings tab.
     search_cfg = load_config(_CONFIG_PATH).get("search") or {}
+    search_issues = _get_search_validation_issues()
 
     return render_template(
         "settings.html",
@@ -1162,8 +1494,8 @@ def settings():
         active_tab=active_tab,
         saved=saved,
         error=error,
-        listing_count=listing_count,
         search_cfg=search_cfg,
+        search_issues=search_issues,
     )
 
 
@@ -1269,20 +1601,74 @@ If a field cannot be confidently extracted, use an empty array, empty string, or
 
 JSON only:"""
 
-def _build_import_prompt(resume_text: str) -> str:
+# Appended to _IMPORT_PROMPT_FRESH (before the final "JSON only:" sentinel)
+# when the caller opts in to prefilter title suggestions.  Kept separate so
+# the base prompt is byte-for-byte identical when the toggle is off.
+_IMPORT_PROMPT_PREFILTER_EXTENSION = """
+Additionally, suggest job-title keyword filters based on the roles this
+candidate has held and the jobs they would plausibly target:
+- "prefilter_suggestions": object with exactly two keys:
+  - "title_include": array of lowercase substring strings that SHOULD appear
+    in a job title for it to be relevant (e.g. ["engineer", "developer"])
+  - "title_exclude": array of lowercase substring strings that should NEVER
+    appear in a job title (e.g. ["manager", "director", "intern"])
+
+Rules for prefilter_suggestions:
+- Use simple substrings, not regular expressions.
+- All strings must be lowercase.
+- "title_include" and "title_exclude" must be completely disjoint — no string
+  may appear in both lists (case-insensitively).
+- If you cannot confidently suggest filters, use empty arrays for both keys.
+- Do NOT include "require_contract_time" or "require_contract_type" — those
+  are separate user preferences, not resume-derived."""
+
+
+def _build_import_prompt(
+    resume_text: str,
+    suggest_filters: bool = False,
+) -> str:
     """Build the LLM prompt for PDF resume import.
 
     Both fresh and merge modes use the same extraction-only prompt.  Merging
     is handled deterministically by ``_merge_import_result()`` after the LLM
     responds, so the LLM never needs to see the existing profile.
 
+    When ``suggest_filters`` is ``True`` the prefilter extension is appended
+    to the prompt so the LLM also returns ``prefilter_suggestions``.  When it
+    is ``False`` the prompt is byte-for-byte identical to the legacy prompt —
+    no extra tokens are charged.
+
     Args:
         resume_text: Extracted plain text from the uploaded PDF.
+        suggest_filters: When ``True``, ask the LLM to additionally return
+            ``prefilter_suggestions`` (title_include / title_exclude arrays).
 
     Returns:
         Formatted prompt string ready to send to the LLM.
     """
+    if suggest_filters:
+        # Insert the prefilter extension before the closing "JSON only:" line.
+        base = _IMPORT_PROMPT_FRESH.rstrip()
+        # Remove the trailing sentinel, add extension, restore sentinel.
+        sentinel = "JSON only:"
+        if base.endswith(sentinel):
+            base = base[: -len(sentinel)].rstrip()
+        return (
+            base
+            + "\n"
+            + _IMPORT_PROMPT_PREFILTER_EXTENSION.strip()
+            + "\n\nJSON only:"
+        ).format(resume_text=resume_text)
     return _IMPORT_PROMPT_FRESH.format(resume_text=resume_text)
+
+
+# Maximum length (characters) for a single prefilter pattern string.  Bounding
+# LLM output prevents pathologically long patterns from bloating config.json.
+_MAX_PATTERN_LEN = 64
+
+# Maximum number of patterns allowed in a single title_include or title_exclude
+# list within prefilter_suggestions.
+_MAX_PATTERNS_PER_LIST = 32
 
 
 def _parse_import_response(raw: str) -> dict | None:
@@ -1291,23 +1677,93 @@ def _parse_import_response(raw: str) -> dict | None:
     Strips markdown code fences, parses JSON, and fills missing keys with
     safe defaults so callers can always rely on the expected keys existing.
 
+    If ``prefilter_suggestions`` is present its ``title_include`` and
+    ``title_exclude`` arrays are validated to be disjoint (case-insensitive).
+    Validation failures in the suggestions section drop only that key — the
+    core profile data is still returned so the caller does not 502 the whole
+    request because of an optional field.  Only a failure to parse the
+    top-level JSON at all causes a ``None`` return.
+
+    Each pattern string must be ≤ ``_MAX_PATTERN_LEN`` characters and each list
+    must contain ≤ ``_MAX_PATTERNS_PER_LIST`` items.  Over-limit or invalid
+    suggestions are dropped with a warning rather than rejecting the whole
+    response.
+
     Args:
         raw: Raw text response from the LLM.
 
     Returns:
-        Parsed dict with all expected keys, or ``None`` if parsing fails.
+        Parsed dict with all expected keys, or ``None`` if the top-level JSON
+        itself cannot be parsed.
     """
     try:
         cleaned = strip_fences(raw)
         data = json.loads(cleaned)
     except (json.JSONDecodeError, ValueError):
-        app.logger.warning("[import] _parse_import_response: failed to parse LLM response (first 500 chars): %r", raw[:500])
+        app.logger.error(
+            "[import] _parse_import_response: failed to parse LLM "
+            "response as JSON — raw body (first 500 chars): %r",
+            raw[:500],
+        )
         return None
     data.setdefault("primary_skills", [])
     data.setdefault("education", [])
     data.setdefault("seniority", "")
     data.setdefault("preferred_industries", [])
     data.setdefault("location_center", None)
+
+    # Validate prefilter_suggestions when present.  Any validation failure
+    # drops only this optional key so the core profile is still returned.
+    if "prefilter_suggestions" in data:
+        pf = data["prefilter_suggestions"]
+        if isinstance(pf, dict):
+            inc = [str(s).lower() for s in pf.get("title_include", [])]
+            exc = [str(s).lower() for s in pf.get("title_exclude", [])]
+
+            # Enforce per-list length cap.  Drop rather than truncate so the
+            # LLM cannot silently bloat the config.
+            if len(inc) > _MAX_PATTERNS_PER_LIST or len(exc) > _MAX_PATTERNS_PER_LIST:
+                app.logger.warning(
+                    "[import] _parse_import_response: prefilter_suggestions "
+                    "list too long (include=%d, exclude=%d, max=%d) — "
+                    "dropping suggestions; profile data preserved.",
+                    len(inc),
+                    len(exc),
+                    _MAX_PATTERNS_PER_LIST,
+                )
+                del data["prefilter_suggestions"]
+            else:
+                # Enforce per-pattern length cap.
+                over_len = [s for s in inc + exc if len(s) > _MAX_PATTERN_LEN]
+                if over_len:
+                    app.logger.warning(
+                        "[import] _parse_import_response: prefilter_suggestions "
+                        "contains patterns exceeding max length (%d chars): %r — "
+                        "dropping suggestions; profile data preserved.",
+                        _MAX_PATTERN_LEN,
+                        over_len[:5],
+                    )
+                    del data["prefilter_suggestions"]
+                else:
+                    overlap = set(inc) & set(exc)
+                    if overlap:
+                        app.logger.warning(
+                            "[import] _parse_import_response: prefilter_suggestions "
+                            "title_include/title_exclude overlap — dropping suggestions; "
+                            "profile data preserved. Overlapping terms: %r",
+                            overlap,
+                        )
+                        del data["prefilter_suggestions"]
+                    else:
+                        # Normalise to lowercase lists in-place.
+                        data["prefilter_suggestions"] = {
+                            "title_include": inc,
+                            "title_exclude": exc,
+                        }
+        else:
+            # Unexpected type — drop the key rather than passing bad data.
+            del data["prefilter_suggestions"]
+
     return data
 
 
@@ -1498,6 +1954,60 @@ def _merge_import_result(current: dict, imported: dict) -> dict:
     return result
 
 
+def _merge_prefilter_suggestions(
+    existing_prefilter: dict,
+    suggestions: dict,
+) -> dict:
+    """Merge LLM-suggested prefilter patterns into the existing prefilter block.
+
+    Merge rules:
+    - ``title_include``: case-insensitive union of existing and suggested
+      patterns; existing user-added patterns are never removed.
+    - ``title_exclude``: same union-then-dedup rule.
+    - All other prefilter keys (``require_contract_time``,
+      ``require_contract_type``, etc.) are preserved unchanged from
+      ``existing_prefilter``.
+
+    The caller is responsible for ensuring ``suggestions`` has already passed
+    the disjoint-set check in ``_parse_import_response()`` — this function
+    does not re-validate.
+
+    Args:
+        existing_prefilter: The current ``prefilter`` block from
+            ``config.json`` (may be empty dict).
+        suggestions: The ``prefilter_suggestions`` dict from the parsed LLM
+            response, containing ``title_include`` and ``title_exclude`` lists
+            of lowercase strings.
+
+    Returns:
+        A new prefilter dict with merged title patterns and all other keys
+        preserved from ``existing_prefilter``.
+    """
+    result = dict(existing_prefilter)
+
+    def _merge_list(key: str) -> list[str]:
+        """Return deduped union of existing and suggested values for *key*.
+
+        Both existing and suggested patterns are normalised to lowercase so
+        the merged output is consistently cased.  Filter matching is already
+        case-insensitive, so this is semantically neutral while avoiding
+        mixed-case lists like ``["Engineer", "developer"]`` in config.json.
+        """
+        existing: list[str] = [v.lower() for v in (existing_prefilter.get(key) or [])]
+        existing_set = set(existing)
+        merged = list(existing)
+        for term in suggestions.get(key, []):
+            term_lower = term.lower()
+            if term_lower not in existing_set:
+                merged.append(term_lower)
+                existing_set.add(term_lower)
+        return merged
+
+    result["title_include"] = _merge_list("title_include")
+    result["title_exclude"] = _merge_list("title_exclude")
+    return result
+
+
 # ---------------------------------------------------------------------------
 # PDF resume import — async job tracking
 # ---------------------------------------------------------------------------
@@ -1568,6 +2078,7 @@ def _run_pdf_import_job(
     mode: str,
     providers_dict: dict,
     profile_path: str,
+    suggest_filters: bool = False,
 ) -> None:
     """Worker function executed in a daemon thread for large PDF imports.
 
@@ -1575,11 +2086,15 @@ def _run_pdf_import_job(
     stores the result or error in ``_pdf_jobs`` under ``job_id``.
 
     Args:
-        job_id:        UUID string identifying the job in ``_pdf_jobs``.
-        resume_text:   Pre-validated, sanitised resume text to send to the LLM.
-        mode:          ``"fresh"`` or ``"merge"``.
-        providers_dict: Loaded providers config dict (captured at request time).
-        profile_path:  Filesystem path to the profile JSON (for merge mode).
+        job_id:          UUID string identifying the job in ``_pdf_jobs``.
+        resume_text:     Pre-validated, sanitised resume text to send to LLM.
+        mode:            ``"fresh"`` or ``"merge"``.
+        providers_dict:  Loaded providers config dict (captured at request
+                         time).
+        profile_path:    Filesystem path to the profile JSON (for merge mode).
+        suggest_filters: When ``True``, the LLM is additionally asked to
+                         return ``prefilter_suggestions``
+                         (title_include / title_exclude).
     """
 
     with _pdf_jobs_lock:
@@ -1597,7 +2112,7 @@ def _run_pdf_import_job(
             return
 
         current_profile = load_profile(profile_path) if mode == "merge" else None
-        prompt = _build_import_prompt(resume_text)
+        prompt = _build_import_prompt(resume_text, suggest_filters=suggest_filters)
         result = generate_with_fallback(prompt, chain, set())
         if result is None:
             with _pdf_jobs_lock:
@@ -1638,13 +2153,17 @@ def _run_pdf_import_job(
                 "location_center": parsed.get("location_center"),
             }
 
+        job_result: dict = {
+            "success": True,
+            "profile": profile_result,
+            "model_used": model_used,
+        }
+        if suggest_filters and "prefilter_suggestions" in parsed:
+            job_result["prefilter_suggestions"] = parsed["prefilter_suggestions"]
+
         with _pdf_jobs_lock:
             _pdf_jobs[job_id]["status"] = "complete"
-            _pdf_jobs[job_id]["result"] = {
-                "success": True,
-                "profile": profile_result,
-                "model_used": model_used,
-            }
+            _pdf_jobs[job_id]["result"] = job_result
 
     except (ValueError, KeyError, TypeError, RuntimeError, OSError) as exc:
         with _pdf_jobs_lock:
@@ -1706,6 +2225,9 @@ def profile_import_pdf():
     if mode not in ("fresh", "merge"):
         mode = "fresh"
 
+    # Optional prefilter title-filter suggestions (off by default).
+    suggest_filters = request.form.get("suggest_filters") == "1"
+
     # Extract text
     pdf_bytes = uploaded.read()
     if len(pdf_bytes) > 10 * 1024 * 1024:
@@ -1746,11 +2268,16 @@ def profile_import_pdf():
         providers_dict = _load_providers_safe()
         _pdf_executor.submit(
             _run_pdf_import_job,
-            job_id, resume_text, mode, providers_dict, _PROFILE_PATH,
+            job_id,
+            resume_text,
+            mode,
+            providers_dict,
+            _PROFILE_PATH,
+            suggest_filters,
         )
         return jsonify({"async": True, "job_id": job_id}), 202
 
-    # Small PDF — synchronous path (unchanged behaviour)
+    # Small PDF — synchronous path
     providers_dict = _load_providers_safe()
     chain = build_provider_chain(providers_dict)
     if not chain:
@@ -1758,7 +2285,7 @@ def profile_import_pdf():
 
     # Build prompt and call LLM
     current_profile = load_profile(_PROFILE_PATH) if mode == "merge" else None
-    prompt = _build_import_prompt(resume_text)
+    prompt = _build_import_prompt(resume_text, suggest_filters=suggest_filters)
     result = generate_with_fallback(prompt, chain, set())
     if result is None:
         return jsonify({"success": False, "error": "All LLM providers failed. Check your API keys in Settings."}), 502
@@ -1792,7 +2319,15 @@ def profile_import_pdf():
             "location_center": parsed.get("location_center"),
         }
 
-    return jsonify({"success": True, "profile": profile_result, "model_used": model_used}), 200
+    response_payload: dict = {
+        "success": True,
+        "profile": profile_result,
+        "model_used": model_used,
+    }
+    if suggest_filters and "prefilter_suggestions" in parsed:
+        response_payload["prefilter_suggestions"] = parsed["prefilter_suggestions"]
+
+    return jsonify(response_payload), 200
 
 
 @app.route("/profile/import-pdf/status/<job_id>", methods=["GET"])
@@ -2014,6 +2549,10 @@ def profile():
     cfg = load_config(_CONFIG_PATH)
     prof = load_profile(_PROFILE_PATH)
 
+    # Establish the session CSRF token so the import drawer can include it on
+    # the POST /api/apply-prefilter-suggestions request.
+    session.setdefault("csrf_token", secrets.token_urlsafe(32))
+
     return render_template(
         "profile.html",
         view="profile",
@@ -2021,6 +2560,7 @@ def profile():
         cfg=cfg,
         saved=saved,
         error=error,
+        csrf_token=session["csrf_token"],
     ), status_code
 
 
@@ -2032,6 +2572,27 @@ def settings_config_redirect():
 # ---------------------------------------------------------------------------
 # Admin actions
 # ---------------------------------------------------------------------------
+
+_LOG_FILENAME_RE = re.compile(r"^ingest_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})\.log$")
+
+# Scheduler health thresholds (hours since last scheduled run).
+SCHEDULE_WARN_HOURS = 25
+SCHEDULE_CRITICAL_HOURS = 49
+
+
+@app.route("/admin")
+def admin():
+    """Administration page — runtime info, log downloads, ingest schedule, and database ops."""
+    session.setdefault("csrf_token", secrets.token_urlsafe(32))
+    listing_count = db.get_listing_count()
+    return render_template(
+        "admin.html",
+        view="admin",
+        listing_count=listing_count,
+        csrf_token=session["csrf_token"],
+        runtime_versions=RUNTIME_VERSIONS,
+    )
+
 
 @app.route("/admin/clear-db", methods=["POST"])
 def admin_clear_db():
@@ -2052,6 +2613,16 @@ def admin_clear_db():
         400 HTML fragment when the confirmation phrase is wrong.
         500 HTML fragment on database error.
     """
+    # CSRF check — token must match the session value established on GET /admin.
+    csrf_token = request.form.get("csrf_token", "")
+    if not csrf_token or csrf_token != session.get("csrf_token"):
+        html = (
+            '<p class="save-error" id="clear-db-result">'
+            "Invalid or missing CSRF token — request rejected."
+            "</p>"
+        )
+        return make_response(html, 400)
+
     confirmation = request.form.get("confirmation", "").strip()
 
     if confirmation != "DELETE":
@@ -2091,6 +2662,121 @@ def admin_clear_db():
         f'<div id="clear-db-panel" style="display:none"></div>'
     )
     return make_response(html, 200)
+
+
+@app.route("/admin/logs")
+def admin_logs():
+    """Return an HTML fragment listing available ingest log files."""
+    logs = []
+    try:
+        for entry in os.scandir(LOG_DIR):
+            if not entry.is_file():
+                continue
+            m = _LOG_FILENAME_RE.match(entry.name)
+            if not m:
+                continue
+            # Check readability
+            try:
+                size = entry.stat().st_size
+            except OSError:
+                continue
+            timestamp = f"{m.group(1)}-{m.group(2)}-{m.group(3)} {m.group(4)}:{m.group(5)}:{m.group(6)}"
+            # Human-readable size
+            if size >= 1_048_576:
+                size_str = f"{size / 1_048_576:.1f} MB"
+            elif size >= 1024:
+                size_str = f"{size / 1024:.1f} KB"
+            else:
+                size_str = f"{size} B"
+            logs.append({"filename": entry.name, "timestamp": timestamp, "size": size_str})
+    except FileNotFoundError:
+        pass  # LOG_DIR doesn't exist yet — empty list
+
+    logs.sort(key=lambda x: x["filename"], reverse=True)  # newest first
+    return render_template("admin/_log_list.html", logs=logs)
+
+
+@app.route("/admin/logs/<filename>/download")
+def admin_log_download(filename):
+    """Download an ingest log file."""
+    # Validate filename against strict regex
+    if not _LOG_FILENAME_RE.match(filename):
+        abort(404)
+
+    target = (LOG_DIR / filename).resolve()
+
+    # Symlink escape check — resolved path must be inside LOG_DIR.
+    # Use relative_to() rather than startswith() so the check is
+    # case-insensitive-safe and handles path separators correctly on Windows.
+    try:
+        target.relative_to(LOG_DIR.resolve())
+    except ValueError:
+        abort(404)
+
+    if not target.is_file():
+        abort(404)
+
+    return send_from_directory(
+        LOG_DIR,
+        filename,
+        as_attachment=True,
+        mimetype="text/plain; charset=utf-8",
+    )
+
+
+@app.route("/admin/schedule-state")
+def admin_schedule_state():
+    """Return an HTML fragment showing ingest run history and scheduler health."""
+    try:
+        runs = db.get_recent_ingest_runs(10)
+    # Catch-all: schedule state is best-effort; a DB error must never break the admin page.
+    except Exception:  # noqa: BLE001
+        runs = []
+
+    # Compute health badge
+    badge = "none"  # no data
+    badge_text = "No runs recorded yet"
+
+    if runs:
+        # Find most recent scheduled run
+        scheduled_runs = [r for r in runs if r.get("trigger_source") == "scheduled"]
+
+        if scheduled_runs:
+            last_scheduled = scheduled_runs[0]
+            age_hours = None
+            if last_scheduled.get("started_at"):
+                started = last_scheduled["started_at"]
+                if hasattr(started, "tzinfo") and started.tzinfo:
+                    now = datetime.now(timezone.utc)
+                else:
+                    now = datetime.utcnow()
+                age_hours = (now - started).total_seconds() / 3600
+
+            if last_scheduled.get("status") == "failed":
+                badge = "red"
+                badge_text = "Last scheduled run failed"
+            elif age_hours is not None and age_hours > SCHEDULE_CRITICAL_HOURS:
+                badge = "red"
+                badge_text = f"Scheduler may be down — no scheduled run in {SCHEDULE_CRITICAL_HOURS}+ hours"
+            elif age_hours is not None and age_hours > SCHEDULE_WARN_HOURS:
+                badge = "amber"
+                badge_text = f"Last scheduled run was {SCHEDULE_WARN_HOURS}+ hours ago"
+            elif last_scheduled.get("status") == "running":
+                badge = "amber"
+                badge_text = "Scheduled run in progress"
+            else:
+                badge = "green"
+                badge_text = "Scheduler healthy"
+        else:
+            badge = "none"
+            badge_text = "No scheduled runs recorded"
+
+    return render_template(
+        "admin/_schedule_state.html",
+        runs=runs,
+        badge=badge,
+        badge_text=badge_text,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2133,6 +2819,107 @@ def _validate_with_timeout(validator, api_key: str, model: str) -> tuple[str, st
         # Thread is still blocked (network hang) — treat as unreachable.
         return ("unreachable", f"Timed out after {_VALIDATE_TIMEOUT_SECONDS}s")
     return result_holder[0] if result_holder else ("unreachable", None)
+
+
+@app.route("/api/apply-prefilter-suggestions", methods=["POST"])
+def apply_prefilter_suggestions():
+    """Merge LLM-suggested title filters into config.json prefilter block.
+
+    Accepts a form-encoded POST with fields:
+
+    * ``csrf_token`` — session-scoped CSRF token (required; 403 on mismatch)
+    * ``title_include`` — JSON-encoded array of include patterns
+    * ``title_exclude`` — JSON-encoded array of exclude patterns
+
+    The suggestions are merged (union-then-dedup, case-insensitive) into the
+    existing ``config.json`` ``prefilter`` block via
+    ``_merge_prefilter_suggestions()``.  All other prefilter keys
+    (``require_contract_time``, ``require_contract_type``) are preserved.
+
+    The disjoint-set invariant is enforced here too: if the POST body itself
+    contains overlapping include/exclude terms the request is rejected with
+    400 so malformed client payloads cannot corrupt config.
+
+    Returns:
+        200 ``{"success": True}`` on success.
+        400 on missing/invalid input or overlapping include/exclude terms.
+        403 on CSRF token mismatch.
+        500 on config read/write failure.
+    """
+    # CSRF check — token must match the session value established on GET /profile.
+    csrf_token = request.form.get("csrf_token", "")
+    if not csrf_token or csrf_token != session.get("csrf_token"):
+        return jsonify({
+            "success": False,
+            "error": "Invalid or missing CSRF token — request rejected.",
+        }), 403
+
+    inc_json = request.form.get("title_include", "")
+    exc_json = request.form.get("title_exclude", "")
+
+    try:
+        inc_raw = json.loads(inc_json) if inc_json else None
+        exc_raw = json.loads(exc_json) if exc_json else None
+    except (json.JSONDecodeError, ValueError):
+        inc_raw = None
+        exc_raw = None
+
+    if not isinstance(inc_raw, list) or not isinstance(exc_raw, list):
+        return jsonify({
+            "success": False,
+            "error": (
+                "title_include and title_exclude must be JSON-encoded arrays."
+            ),
+        }), 400
+
+    inc = [str(s).lower() for s in inc_raw]
+    exc = [str(s).lower() for s in exc_raw]
+
+    # Intentional double-check: _parse_import_response validates the LLM response,
+    # but the form submission could be tampered between the preview render and the
+    # Apply click.  Re-validate at the HTTP boundary.
+    overlap = set(inc) & set(exc)
+    if overlap:
+        return jsonify({
+            "success": False,
+            "error": (
+                "title_include and title_exclude must be disjoint. "
+                f"Overlapping terms: {sorted(overlap)}"
+            ),
+        }), 400
+
+    try:
+        with open(_CONFIG_PATH, "r", encoding="utf-8") as fh:
+            cfg = json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc_io:
+        app.logger.error(
+            "[apply-prefilter-suggestions] failed to read config: %s", exc_io
+        )
+        return jsonify({
+            "success": False,
+            "error": "Could not read config.json.",
+        }), 500
+
+    existing_prefilter = cfg.get("prefilter") or {}
+    cfg["prefilter"] = _merge_prefilter_suggestions(
+        existing_prefilter,
+        {"title_include": inc, "title_exclude": exc},
+    )
+
+    try:
+        with open(_CONFIG_PATH, "w", encoding="utf-8") as fh:
+            json.dump(cfg, fh, indent=2)
+            fh.write("\n")
+    except OSError as exc_io:
+        app.logger.error(
+            "[apply-prefilter-suggestions] failed to write config: %s", exc_io
+        )
+        return jsonify({
+            "success": False,
+            "error": "Could not write config.json.",
+        }), 500
+
+    return jsonify({"success": True}), 200
 
 
 @app.route("/api/validate-keys", methods=["POST"])
@@ -2322,4 +3109,8 @@ if __name__ == "__main__":
 
     db.init_db()
     debug = os.environ.get("FLASK_DEBUG", "0") == "1"
-    app.run(debug=debug, port=5000)
+    # threaded=True is required for SSE (/ingest/stream) — without it Flask's
+    # dev server is single-threaded and an open SSE connection blocks all other
+    # requests, causing 429 errors.  Docker deployments use waitress (multi-
+    # threaded) via the Dockerfile CMD and never execute this code path.
+    app.run(debug=debug, port=5000, threaded=True)

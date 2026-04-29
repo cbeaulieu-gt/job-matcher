@@ -25,6 +25,8 @@
 #   - SSH access with key-based or password auth
 #   - docker + docker compose plugin installed (checked in Step 3)
 #   - sudo access for docker-setup.sh (requires root for chown operations)
+#   - sudo access on the remote for the live .env push step
+#     (the script stages to /tmp then sudo-installs to /opt/job-matcher-pr)
 #
 # RE-RUN SAFETY:
 #   All steps are idempotent. Re-running after a partial failure is safe.
@@ -274,13 +276,102 @@ for ENV_EXAMPLE in .env.prod.example .env.dev.example; do
     fi
 done
 
+# --- Live .env files (opt-in, with overwrite confirmation + chmod 600) ---
+#
+# The remote only runs `docker compose pull && up -d` during deploys; it never
+# invents its own env values. When `.env.*.example` gains new required fields
+# (e.g. the 2026-04-06 dev/prod split added SECRET_KEY and renamed POSTGRES_DB),
+# the server silently drifts unless someone copies the updated live file up.
+# This block fixes that: if a live `.env.prod` / `.env.dev` exists locally, we
+# scp it to the remote -- with an interactive confirmation if the remote already
+# has a live file so we never silently clobber a password that's in use.
+#
+# Files are chmod 600 on the remote so the secrets aren't world-readable.
+for LIVE_ENV in .env.prod .env.dev; do
+    LOCAL_LIVE="${LOCAL_PROJECT_ROOT}/${LIVE_ENV}"
+    REMOTE_LIVE="${REMOTE_PATH}/${LIVE_ENV}"
+
+    if [[ ! -f "${LOCAL_LIVE}" ]]; then
+        # No local live file -> nothing to push. The .example already landed above.
+        continue
+    fi
+
+    # Pre-push sanity check: catch unedited local copies before they hit the wire.
+    # The GHA preflight will reject this server-side, but failing fast here saves
+    # the round trip and is a clearer error for the operator at their workstation.
+    if grep -qE '^(POSTGRES_PASSWORD|SECRET_KEY)=changeme' "${LOCAL_LIVE}"; then
+        echo ""
+        warn "Local ${LIVE_ENV} still contains 'changeme_*' placeholder values:"
+        grep -nE '^(POSTGRES_PASSWORD|SECRET_KEY)=changeme' "${LOCAL_LIVE}" || true
+        if [[ "${LIVE_ENV}" == ".env.prod" ]]; then
+            read -r -p "Push anyway? The prod GHA deploy will reject this file. [y/N] " PUSH_ANYWAY
+        else
+            read -r -p "Push anyway? Not recommended for deployed environments. [y/N] " PUSH_ANYWAY
+        fi
+        echo ""
+        if [[ ! "${PUSH_ANYWAY}" =~ ^[Yy]$ ]]; then
+            warn "Skipped ${LIVE_ENV} -- remote unchanged."
+            continue
+        fi
+    fi
+
+    # Check whether the remote already has a live file and confirm overwrite.
+    # shellcheck disable=SC2029  # ${REMOTE_LIVE} and ${SSH_TARGET} intentionally expand client-side
+    if ssh "${SSH_TARGET}" "[[ -f '${REMOTE_LIVE}' ]]" 2>/dev/null; then
+        echo ""
+        warn "Remote already has a live ${LIVE_ENV} at ${REMOTE_PATH}."
+        warn "Overwriting will replace the credentials the running stack is using."
+        read -r -p "Overwrite remote ${LIVE_ENV} with the local copy? [y/N] " CONFIRM_OVERWRITE
+        echo ""
+        if [[ ! "${CONFIRM_OVERWRITE}" =~ ^[Yy]$ ]]; then
+            warn "Skipped live ${LIVE_ENV} -- remote unchanged."
+            continue
+        fi
+    fi
+
+    # Stage-then-install pattern: scp to a tmp path the SSH user owns, then
+    # use `sudo install` to atomically place the file at the final destination
+    # with correct mode and ownership. This avoids "Permission denied" when the
+    # target file is owned by root (e.g. from initial provisioning or GHA), and
+    # is atomic so the running stack never sees a half-written secrets file.
+    # shellcheck disable=SC2029  # ${LIVE_ENV} and ${SSH_TARGET} intentionally expand client-side
+    REMOTE_TMP=$(ssh "${SSH_TARGET}" "mktemp /tmp/.${LIVE_ENV}.XXXXXX")
+    if [[ -z "${REMOTE_TMP}" ]]; then
+        warn "Could not create temp file on remote -- skipped ${LIVE_ENV}."
+        continue
+    fi
+    scp -q "${LOCAL_LIVE}" "${SSH_TARGET}:${REMOTE_TMP}"
+    # Defense-in-depth: enforce 600 on the staged file in case the remote umask is loose.
+    # shellcheck disable=SC2029  # ${REMOTE_TMP} and ${SSH_TARGET} intentionally expand client-side
+    ssh "${SSH_TARGET}" "chmod 600 '${REMOTE_TMP}'"
+    # Atomically place the file at the final destination with correct mode
+    # and ownership. One `ssh -tt` session handles sudo prompt + install +
+    # temp-file cleanup together so sudo's `tty_tickets` credential cache
+    # applies consistently. (A previous two-pass attempt -- `sudo -v` then
+    # `sudo -n install` in separate ssh sessions -- failed with "a password
+    # is required" because tty_tickets scopes cached credentials per-TTY,
+    # and the two ssh calls landed on different TTYs.) Output streams to
+    # the user's terminal so they see the sudo prompt and any install
+    # errors directly; we rely on the ssh exit code for success/failure
+    # rather than capturing stderr into a variable.
+    # shellcheck disable=SC2029  # ${REMOTE_TMP}, ${REMOTE_LIVE}, ${SSH_TARGET} intentionally expand client-side
+    if ssh -tt "${SSH_TARGET}" "sudo install -m 600 -o \"\$(id -un)\" -g \"\$(id -gn)\" '${REMOTE_TMP}' '${REMOTE_LIVE}'"; then
+        ssh "${SSH_TARGET}" "rm -f '${REMOTE_TMP}'" 2>/dev/null || true
+        ok "Copied live ${LIVE_ENV} (chmod 600)"
+    else
+        warn "sudo install failed for ${LIVE_ENV} (see output above for details)."
+        ssh "${SSH_TARGET}" "rm -f '${REMOTE_TMP}'" 2>/dev/null || true
+        continue
+    fi
+done
+
 # --- Fix line endings (Windows → Unix) ---
 # scp from a Windows workstation copies files with CRLF line endings.
 # Bash on the remote will choke on \r in shell scripts (e.g. "set -euo pipefail\r"
 # becomes ": invalid option name"). Convert all text files to LF.
 step "Converting line endings to LF on remote..."
 # shellcheck disable=SC2029  # ${REMOTE_PATH} and ${SSH_TARGET} intentionally expand client-side
-ssh "${SSH_TARGET}" "cd '${REMOTE_PATH}' && sed -i 's/\r\$//' docker-compose.*.yml scripts/*.sh config/*.json .env*.example 2>/dev/null || true"
+ssh "${SSH_TARGET}" "cd '${REMOTE_PATH}' && sed -i 's/\r\$//' docker-compose.*.yml scripts/*.sh config/*.json .env*.example .env.prod .env.dev 2>/dev/null || true"
 ok "Line endings converted."
 
 ok "All deployment files copied to ${REMOTE_PATH}."

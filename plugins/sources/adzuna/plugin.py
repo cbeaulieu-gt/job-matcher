@@ -29,6 +29,17 @@ class AdzunaClient(JobSource):
 
     SOURCE = "adzuna"
 
+    # The search-config validator (ingest.validate_search_config) reads this
+    # tuple to know which config["search"] keys Adzuna requires.  These are
+    # the minimum fields needed for a successful API call; all others are
+    # optional (where, salary_min, distance, max_days_old).
+    REQUIRED_SEARCH_FIELDS: tuple[str, ...] = (
+        "country",
+        "what",
+        "results_per_page",
+        "max_pages",
+    )
+
     def __init__(
         self,
         config: dict,

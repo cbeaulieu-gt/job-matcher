@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Job Matcher · Administration</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="stylesheet" href="/static/style.css">
+  <!-- htmx 1.9.10 — to update: bump the version in the URL, then regenerate the hash with:
+       curl -fsSL https://unpkg.com/htmx.org@<VERSION>/dist/htmx.min.js | openssl dgst -sha384 -binary | openssl base64 -A
+       curl -fsSL https://unpkg.com/htmx.org@<VERSION>/dist/ext/json-enc.js | openssl dgst -sha384 -binary | openssl base64 -A -->
+  <script src="https://unpkg.com/htmx.org@1.9.10/dist/htmx.min.js" integrity="sha384-D1Kt99CQMDuVetoL1lrYwg5t+9QdHe7NLX/SoJYkXDFfX37iInKRy5xLSi8nO7UC" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/htmx.org@1.9.10/dist/ext/json-enc.js" integrity="sha384-nRnAvEUI7N/XvvowiMiq7oEI04gOXMCqD3Bidvedw+YNbj7zTQACPlRI3Jt3vYM4" crossorigin="anonymous"></script>
+</head>
+<body>
+{% include '_status_bar.html' %}
+<div class="page-wrap">
+
+  {# ── Header ─────────────────────────────────────────────────── #}
+  <header class="site-header">
+    <span class="site-logo">job<span>_</span>matcher</span>
+    <nav class="site-nav">
+      <a href="/"
+         class="nav-tab{% if view == 'feed' %} active{% endif %}">feed</a>
+      <a href="/bookmarks"
+         class="nav-tab{% if view == 'bookmarks' %} active{% endif %}">bookmarks</a>
+      <a href="/applied"
+         class="nav-tab{% if view == 'applied' %} active{% endif %}">applied</a>
+      <a href="/stats"
+         class="nav-tab{% if view == 'stats' %} active{% endif %}">stats</a>
+      <a href="/profile"
+         class="nav-tab{% if view == 'profile' %} active{% endif %}">profile</a>
+      <a href="/settings"
+         class="nav-tab{% if view == 'settings' %} active{% endif %}">settings</a>
+      <a href="/admin"
+         class="nav-tab{% if view == 'admin' %} active{% endif %}">admin</a>
+    </nav>
+  </header>
+
+  {# ── Page heading ─────────────────────────────────────────────── #}
+  <h1 class="page-heading">Administration</h1>
+
+  {# ── Admin sub-tabs ───────────────────────────────────────────── #}
+  <div class="settings-tabs" role="tablist">
+    <button
+      class="settings-tab-btn active"
+      role="tab"
+      aria-selected="true"
+      aria-controls="pane-runtime"
+      data-tab="runtime"
+      type="button">Runtime</button>
+    <button
+      class="settings-tab-btn"
+      role="tab"
+      aria-selected="false"
+      aria-controls="pane-logs"
+      data-tab="logs"
+      type="button">Logs</button>
+    <button
+      class="settings-tab-btn"
+      role="tab"
+      aria-selected="false"
+      aria-controls="pane-schedule"
+      data-tab="schedule"
+      type="button">Schedule</button>
+    <button
+      class="settings-tab-btn"
+      role="tab"
+      aria-selected="false"
+      aria-controls="pane-danger"
+      data-tab="danger"
+      type="button">Danger Zone</button>
+  </div>
+
+  {# ── Runtime pane ─────────────────────────────────────────────── #}
+  <div
+    id="pane-runtime"
+    class="tab-pane active"
+    role="tabpanel">
+    <h2 class="stats-section-heading">Runtime</h2>
+    <table class="stats-table stats-runtime-table">
+      <thead>
+        <tr>
+          <th>Component</th>
+          <th>Version</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in runtime_versions %}
+          <tr>
+            <td>{{ row.component }}</td>
+            <td class="stats-version">{{ row.version }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {# ── Logs pane ────────────────────────────────────────────────── #}
+  <div
+    id="pane-logs"
+    class="tab-pane"
+    role="tabpanel">
+    <h2 class="stats-section-heading">Ingest Logs</h2>
+    <div id="admin-logs-list" hx-get="/admin/logs" hx-trigger="load"></div>
+  </div>
+
+  {# ── Schedule pane ────────────────────────────────────────────── #}
+  <div
+    id="pane-schedule"
+    class="tab-pane"
+    role="tabpanel">
+    <h2 class="stats-section-heading">Ingest Schedule</h2>
+    <div id="admin-schedule-state" hx-get="/admin/schedule-state" hx-trigger="load, every 60s"></div>
+  </div>
+
+  {# ── Danger Zone pane ─────────────────────────────────────────── #}
+  <div
+    id="pane-danger"
+    class="tab-pane"
+    role="tabpanel">
+    <div class="danger-zone">
+      <h2 class="danger-zone-heading">Danger Zone</h2>
+
+      {# Result target — HTMX swaps success/error notices here #}
+      <div id="clear-db-result"></div>
+
+      <button
+        type="button"
+        class="btn-danger"
+        id="clear-db-trigger"
+        aria-expanded="false"
+        aria-controls="clear-db-panel">
+        Clear Database
+      </button>
+
+      <div class="clear-db-panel" id="clear-db-panel" role="region" aria-label="Clear database confirmation">
+        <ul class="clear-db-warnings">
+          <li>All job listings will be permanently deleted.</li>
+          <li>This cannot be undone.</li>
+          <li>Bookmarked and applied listings will also be lost.</li>
+        </ul>
+        <p class="clear-db-count">
+          Current record count:
+          <strong>{{ listing_count }}</strong>
+          {{ "listing" if listing_count == 1 else "listings" }}
+        </p>
+
+        <form
+          class="clear-db-form"
+          hx-post="/admin/clear-db"
+          hx-target="#clear-db-result"
+          hx-swap="innerHTML"
+          id="clear-db-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label class="clear-db-label" for="clear-db-confirmation">
+            Type DELETE to confirm
+          </label>
+          <input
+            type="text"
+            id="clear-db-confirmation"
+            name="confirmation"
+            class="clear-db-input"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="DELETE"
+            oninput="document.getElementById('clear-db-submit').disabled = (this.value !== 'DELETE');">
+          <button
+            type="submit"
+            id="clear-db-submit"
+            class="btn-danger-confirm"
+            disabled>
+            Delete All Listings
+          </button>
+          <button
+            type="button"
+            class="clear-db-cancel"
+            id="clear-db-cancel">
+            Cancel
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+{# ── Tab switching script ──────────────────────────────────────── #}
+<script>
+(function () {
+  var buttons = document.querySelectorAll('.settings-tab-btn');
+  var panes   = document.querySelectorAll('.tab-pane');
+
+  function activateTab(tabId) {
+    buttons.forEach(function (btn) {
+      var isActive = btn.dataset.tab === tabId;
+      btn.classList.toggle('active', isActive);
+      btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    });
+    panes.forEach(function (pane) {
+      pane.classList.toggle('active', pane.id === 'pane-' + tabId);
+    });
+  }
+
+  buttons.forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      activateTab(btn.dataset.tab);
+    });
+  });
+
+  // On page load, read ?tab= and activate that tab (overrides server-side default).
+  var params = new URLSearchParams(window.location.search);
+  var tabParam = params.get('tab');
+  if (tabParam && document.getElementById('pane-' + tabParam)) {
+    activateTab(tabParam);
+  }
+}());
+</script>
+
+{# ── Danger Zone script ───────────────────────────────────────── #}
+<script>
+(function () {
+  var trigger  = document.getElementById('clear-db-trigger');
+  var panel    = document.getElementById('clear-db-panel');
+  var cancel   = document.getElementById('clear-db-cancel');
+  var form     = document.getElementById('clear-db-form');
+  var input    = document.getElementById('clear-db-confirmation');
+  var resultEl = document.getElementById('clear-db-result');
+
+  if (!trigger || !panel) return;
+
+  function showPanel() {
+    panel.classList.add('visible');
+    trigger.setAttribute('aria-expanded', 'true');
+    if (input) input.focus();
+  }
+
+  function hidePanel() {
+    panel.classList.remove('visible');
+    trigger.setAttribute('aria-expanded', 'false');
+    if (input) input.value = '';
+    var submit = document.getElementById('clear-db-submit');
+    if (submit) submit.disabled = true;
+  }
+
+  trigger.addEventListener('click', showPanel);
+  if (cancel) cancel.addEventListener('click', hidePanel);
+
+  if (form) {
+    form.addEventListener('htmx:afterRequest', function (evt) {
+      if (evt.detail.successful) {
+        window.location.reload();
+      }
+    });
+  }
+}());
+</script>
+</body>
+</html>

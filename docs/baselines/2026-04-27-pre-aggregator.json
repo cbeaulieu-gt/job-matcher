@@ -1,0 +1,6 @@
+{
+  "captured_at": "2026-04-27T00:00:00Z",
+  "label": "pre-aggregator",
+  "_note": "Baseline not capturable from this environment (no DB access). This stub is committed as an artifact placeholder per the plan (§4 / CLAUDE.md Verify Artifact Persistence rule). The actual pre-aggregator baseline must be captured on the deployment environment using: python scripts/capture_ingest_baseline.py --label pre-aggregator --output docs/baselines/2026-04-27-pre-aggregator.json. This file must be replaced with real data before Phase B merges.",
+  "sources": {}
+}

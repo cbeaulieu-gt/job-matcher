@@ -100,6 +100,24 @@ function Add-Result {
 }
 
 # ---------------------------------------------------------------------------
+# Resolve project venv interpreter
+# ---------------------------------------------------------------------------
+
+$venvPython = if ($IsWindows) {
+    Join-Path $WorktreeRoot ".venv\Scripts\python.exe"
+} else {
+    Join-Path $WorktreeRoot ".venv/bin/python"
+}
+
+if (-not (Test-Path $venvPython)) {
+    Write-Error (
+        "Project venv not found at '$venvPython'. " +
+        "Run 'uv pip install -r requirements.txt' first to create it."
+    )
+    exit 1
+}
+
+# ---------------------------------------------------------------------------
 # Pre-flight checks
 # ---------------------------------------------------------------------------
 
@@ -159,34 +177,47 @@ try {
             Where-Object { ($_ -is [string]) -and ($_.Trim() -ne "") } |
             Sort-Object)
 
-        # Read current fixture.
-        $fixtureJson    = Get-Content -Path $fixtureFile -Raw -Encoding UTF8
-        $fixtureSources = @($fixtureJson | ConvertFrom-Json)
-
-        # Compare using Compare-Object (symmetric diff).
-        $diff = Compare-Object -ReferenceObject $fixtureSources -DifferenceObject $dbSources
-
-        if ($null -eq $diff) {
-            $step1Result = "PASS"
-            $step1Notes  = "no drift ($($fixtureSources.Count) keys)"
-            Write-Verbose "Source strings match fixture; no update needed."
+        # Guard: refuse to clobber fixture when the DB returns nothing.
+        # This prevents a destructive false-pass when DATABASE_URL points at
+        # an empty DB (e.g. jobmatcher_test instead of jobmatcher_dev).
+        if ($dbSources.Count -eq 0) {
+            $step1Notes = (
+                "DB returned 0 source strings. Refusing to overwrite fixture " +
+                "with []. Verify DATABASE_URL points at a non-empty DB " +
+                "(likely jobmatcher_dev, not jobmatcher_test)."
+            )
+            Write-Warning $step1Notes
         }
         else {
-            $added   = @($diff | Where-Object { $_.SideIndicator -eq "=>" } | ForEach-Object { $_.InputObject })
-            $removed = @($diff | Where-Object { $_.SideIndicator -eq "<=" } | ForEach-Object { $_.InputObject })
+            # Read current fixture.
+            $fixtureJson    = Get-Content -Path $fixtureFile -Raw -Encoding UTF8
+            $fixtureSources = @($fixtureJson | ConvertFrom-Json)
 
-            Write-Host "  Drift detected - updating fixture:"
-            if ($added.Count   -gt 0) { Write-Host "  Added  : $($added   -join ', ')" -ForegroundColor Green  }
-            if ($removed.Count -gt 0) { Write-Host "  Removed: $($removed -join ', ')" -ForegroundColor Yellow }
+            # Compare using Compare-Object (symmetric diff).
+            $diff = Compare-Object -ReferenceObject $fixtureSources -DifferenceObject $dbSources
 
-            # Write refreshed fixture: sorted JSON array with trailing newline.
-            $newJson = (ConvertTo-Json @($dbSources | Sort-Object)) + "`n"
-            Set-Content -Path $fixtureFile -Value $newJson -Encoding UTF8
+            if ($null -eq $diff) {
+                $step1Result = "PASS"
+                $step1Notes  = "no drift ($($fixtureSources.Count) keys)"
+                Write-Verbose "Source strings match fixture; no update needed."
+            }
+            else {
+                $added   = @($diff | Where-Object { $_.SideIndicator -eq "=>" } | ForEach-Object { $_.InputObject })
+                $removed = @($diff | Where-Object { $_.SideIndicator -eq "<=" } | ForEach-Object { $_.InputObject })
 
-            $step1Result = "PASS"
-            $step1Notes  = "$($added.Count) key(s) added, $($removed.Count) key(s) removed - fixture updated"
-        }
-    }
+                Write-Host "  Drift detected - updating fixture:"
+                if ($added.Count   -gt 0) { Write-Host "  Added  : $($added   -join ', ')" -ForegroundColor Green  }
+                if ($removed.Count -gt 0) { Write-Host "  Removed: $($removed -join ', ')" -ForegroundColor Yellow }
+
+                # Write refreshed fixture: sorted JSON array with trailing newline.
+                $newJson = (ConvertTo-Json @($dbSources | Sort-Object)) + "`n"
+                Set-Content -Path $fixtureFile -Value $newJson -Encoding UTF8
+
+                $step1Result = "PASS"
+                $step1Notes  = "$($added.Count) key(s) added, $($removed.Count) key(s) removed - fixture updated"
+            }
+        } # end else ($dbSources.Count -ne 0)
+    } # end else ($psqlExit -eq 0)
 }
 catch {
     $step1Notes = "Unexpected error: $_"
@@ -217,7 +248,7 @@ try {
         $preBaseline
     )
     Write-Verbose "Running: python $captureArgs"
-    & python @captureArgs 2>&1 | Write-Verbose
+    & $venvPython @captureArgs 2>&1 | Write-Verbose
     $captureExit = $LASTEXITCODE
 
     if ($captureExit -ne 0) {
@@ -297,7 +328,7 @@ else {
         Write-Host "  (This may take several minutes while scraping and LLM scoring run)"
 
         $ingestScript = Join-Path $WorktreeRoot "ingest.py"
-        & python $ingestScript --hours 24 --verbose 2>&1 | Tee-Object -FilePath $smokeLog
+        & $venvPython $ingestScript --hours 24 --verbose 2>&1 | Tee-Object -FilePath $smokeLog
         $ingestExitCode = $LASTEXITCODE
 
         # Restore env var.
@@ -378,7 +409,7 @@ try {
         $postBaseline
     )
     Write-Verbose "Running: python $captureArgs"
-    & python @captureArgs 2>&1 | Write-Verbose
+    & $venvPython @captureArgs 2>&1 | Write-Verbose
     $captureExit = $LASTEXITCODE
 
     if ($captureExit -ne 0) {

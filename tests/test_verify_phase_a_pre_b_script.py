@@ -5,16 +5,21 @@ These tests do not execute the PowerShell script end-to-end. They verify:
 2. The param block declares the four expected parameters.
 3. The script body references all four step labels used in the summary table.
 4. The script parses cleanly under pwsh (regression for #357 array-literal bug).
+5. The script uses the project venv python, not bare 'python' (#359).
+6. The script aborts early with a helpful message when the venv is missing (#359).
+7. The Step 1 fixture refresh guard rejects an empty DB result set (#360).
 
-Tests 1-3 are pure file-system assertions (no DB, no subprocess).
-Test 4 invokes pwsh only if it is on PATH; skipped otherwise so Linux CI
+Tests 1-3, 5, 7 are pure file-system assertions (no DB, no subprocess).
+Tests 4 and 6 invoke pwsh only if it is on PATH; skipped otherwise so Linux CI
 without pwsh does not false-fail.
 """
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -197,4 +202,139 @@ class TestVerifyPhaseAPreBScriptParses:
         assert result.stderr.strip() == "", (
             f"pwsh emitted unexpected stderr while parsing "
             f"{_SCRIPT_PATH.name}:\n{result.stderr.strip()}"
+        )
+
+
+class TestVerifyScriptUsesProjectVenv:
+    """Issue #359 — script must invoke the project venv, not bare 'python'.
+
+    Bare `python` resolves via PATH to the global interpreter on Windows,
+    which typically lacks psycopg2. The fix resolves the venv at script start
+    and uses that resolved path for all python invocations.
+    """
+
+    @pytest.fixture(scope="class")
+    def script_content(self) -> str:
+        """Return the script text once per class."""
+        return _SCRIPT_PATH.read_text(encoding="utf-8")
+
+    def test_no_bare_python_invocation(self, script_content: str) -> None:
+        """Script must not call bare 'python' adjacent to @captureArgs.
+
+        The buggy pattern is '& python @captureArgs'. After the fix both
+        occurrences must use a variable (e.g. '& $venvPython @captureArgs').
+        A simple string check is sufficient here — the parse test in
+        TestVerifyPhaseAPreBScriptParses verifies syntactic correctness.
+        """
+        # Any occurrence of '& python @' (with optional whitespace between
+        # the & and python) is the bare invocation pattern.
+        import re
+        bare_pattern = re.compile(r"&\s+python\s+@captureArgs")
+        assert not bare_pattern.search(script_content), (
+            "Script still contains bare '& python @captureArgs'. "
+            "Replace both occurrences with '& $venvPython @captureArgs' "
+            "as required by issue #359."
+        )
+
+    def test_venv_resolution_present(self, script_content: str) -> None:
+        """Script must contain the venv interpreter path substring.
+
+        The fix should resolve either:
+          .venv\\Scripts\\python.exe  (Windows)
+          .venv/bin/python            (POSIX)
+        At least one of these substrings must appear in the script.
+        """
+        has_windows_venv = r".venv\Scripts\python.exe" in script_content
+        has_posix_venv = ".venv/bin/python" in script_content
+        assert has_windows_venv or has_posix_venv, (
+            "Script does not resolve the project venv interpreter. "
+            "Expected '.venv\\Scripts\\python.exe' or '.venv/bin/python' "
+            "to appear in the script body (issue #359)."
+        )
+
+
+class TestVerifyScriptAbortsWhenVenvMissing:
+    """Issue #359 — script must exit non-zero with a clear hint when venv absent.
+
+    If $WorktreeRoot/.venv does not exist the script must fail before reaching
+    the DB or any step logic, printing a message that mentions 'venv not found'
+    (or 'venv' and 'not found'/'missing') so the developer knows exactly what
+    to fix.
+    """
+
+    def test_aborts_when_venv_missing(self) -> None:
+        """Script exits non-zero and mentions missing venv when .venv absent.
+
+        Raises:
+            pytest.skip.Exception: If pwsh is not found on PATH.
+        """
+        pwsh = shutil.which("pwsh")
+        if pwsh is None:
+            pytest.skip("pwsh not on PATH -- skipping venv-missing test")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # tmpdir has no .venv, so the script should abort immediately.
+            result = subprocess.run(
+                [
+                    pwsh,
+                    "-NoProfile",
+                    "-NoLogo",
+                    "-File",
+                    str(_SCRIPT_PATH.resolve()),
+                    "-WorktreeRoot",
+                    tmpdir,
+                    "-DatabaseUrl",
+                    "postgresql://fake:fake@localhost:5432/fakedb",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env={**os.environ, "DATABASE_URL": ""},
+            )
+
+        assert result.returncode != 0, (
+            "Script should exit non-zero when .venv is missing, "
+            f"but exited 0.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        combined = (result.stdout + result.stderr).lower()
+        assert "venv" in combined, (
+            "Script error output should mention 'venv' when .venv is missing, "
+            f"but got:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+
+
+class TestVerifyScriptStep1EmptyDbGuard:
+    """Issue #360 — Step 1 must refuse to clobber fixture when DB returns 0 rows.
+
+    When DATABASE_URL points at an empty DB, psql returns zero source strings.
+    The old code wrote '[]' to the fixture and reported PASS — a destructive
+    false-pass. The fix must check the count before writing and FAIL with a
+    remediation hint.
+    """
+
+    @pytest.fixture(scope="class")
+    def script_content(self) -> str:
+        """Return the script text once per class."""
+        return _SCRIPT_PATH.read_text(encoding="utf-8")
+
+    def test_empty_db_guard_pattern_present(self, script_content: str) -> None:
+        """Script must contain an explicit count-zero guard before writing.
+
+        The guard checks $dbSources.Count -eq 0 (or -lt 1) before calling
+        Set-Content. A parse-level assertion provides regression coverage
+        without requiring a live DB connection.
+        """
+        import re
+        # Match patterns like: if ($dbSources.Count -eq 0)
+        # or: if ($dbSources.Count -lt 1)
+        guard_pattern = re.compile(
+            r"\$dbSources\.Count\s+-(?:eq\s+0|lt\s+1)",
+            re.IGNORECASE,
+        )
+        assert guard_pattern.search(script_content), (
+            "Step 1 is missing the empty-result guard. "
+            "Expected a pattern like '$dbSources.Count -eq 0' or "
+            "'$dbSources.Count -lt 1' before the fixture Set-Content call "
+            "(issue #360). Without this guard, an empty DB clobbers the "
+            "fixture to '[]' and reports PASS."
         )

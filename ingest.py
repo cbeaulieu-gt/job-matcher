@@ -1159,6 +1159,7 @@ def _build_source_clients(
     agg_clients = agg_provider.make_clients(
         providers_data=agg_providers,
         search=config.get("search", {}),
+        only_sources=aggregator_keys,
     )
 
     # Build legacy clients for remaining sources.

@@ -489,3 +489,230 @@ def test_make_clients_skips_source_on_schema_version_error(caplog):
             )
 
     assert clients == []
+
+
+# ---------------------------------------------------------------------------
+# Bug A — only_sources allow-list filters keyless sources (issue #363)
+# ---------------------------------------------------------------------------
+
+def _full_providers_data() -> dict:
+    """Build a providers_data dict with all 10 registered sources.
+
+    Keyless sources (himalayas, jobicy, remoteok, remotive) have no
+    credential fields, but they still need entries here so that the
+    enabled-filter logic passes them through.  Keyed sources include
+    minimal credentials so they are not stripped by the enablement filter.
+    """
+    return {
+        "provider_order": [],
+        "llm": {},
+        "job_sources": {
+            "arbeitnow": {"enabled": True},
+            "himalayas": {"enabled": True},
+            "jobicy": {"enabled": True},
+            "remoteok": {"enabled": True},
+            "remotive": {"enabled": True},
+            "the_muse": {"enabled": True},
+            "adzuna": {"enabled": True, "app_id": "x", "app_key": "y"},
+            "jooble": {"enabled": True, "api_key": "z"},
+            "jsearch": {"enabled": True, "api_key": "z"},
+            "usajobs": {"enabled": True, "api_key": "z", "user_agent": "u"},
+        },
+    }
+
+
+def test_only_sources_filters_keyless():
+    """Bug A: make_clients(only_sources={'arbeitnow'}) returns only arbeitnow.
+
+    With JOB_AGGREGATOR_SOURCES=arbeitnow the aggregator must produce
+    exactly one client whose SOURCE is 'arbeitnow'.  Keyless sources
+    (himalayas, jobicy, remoteok, remotive) must NOT appear even though
+    they pass through the credentials dict unchanged (they have no
+    required credential fields so make_enabled_sources would include
+    them without the only_sources guard).
+    """
+    from job_sources.aggregator_provider import JobAggregatorProvider
+
+    provider = JobAggregatorProvider()
+
+    # Build mock clients for every registered source so the patch can
+    # return a realistic multi-source list.
+    mock_clients = []
+    for src in (
+        "arbeitnow", "himalayas", "jobicy", "remoteok",
+        "remotive", "the_muse", "adzuna", "jooble",
+    ):
+        mc = MagicMock()
+        mc.SOURCE = src
+        mock_clients.append(mc)
+
+    with patch(
+        "job_sources.aggregator_provider.make_enabled_sources",
+        return_value=mock_clients,
+    ):
+        clients = provider.make_clients(
+            providers_data=_full_providers_data(),
+            search=_MINIMAL_SEARCH,
+            only_sources={"arbeitnow"},
+        )
+
+    assert len(clients) == 1, (
+        f"Expected 1 client for only_sources={{'arbeitnow'}}, got "
+        f"{len(clients)}: {[c.SOURCE for c in clients]}"
+    )
+    assert clients[0].SOURCE == "arbeitnow"
+
+
+def test_only_sources_none_returns_all():
+    """Bug A regression guard: only_sources=None returns all enabled clients.
+
+    When only_sources is None (the default), make_clients must return
+    all clients produced by make_enabled_sources — current behavior is
+    preserved.
+    """
+    from job_sources.aggregator_provider import JobAggregatorProvider
+
+    provider = JobAggregatorProvider()
+
+    mock_clients = []
+    for src in ("arbeitnow", "himalayas", "jobicy", "remoteok", "remotive"):
+        mc = MagicMock()
+        mc.SOURCE = src
+        mock_clients.append(mc)
+
+    with patch(
+        "job_sources.aggregator_provider.make_enabled_sources",
+        return_value=mock_clients,
+    ):
+        clients = provider.make_clients(
+            providers_data=_full_providers_data(),
+            search=_MINIMAL_SEARCH,
+            only_sources=None,
+        )
+
+    assert len(clients) >= 5, (
+        f"Expected at least 5 clients with only_sources=None, got "
+        f"{len(clients)}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Bug B — translation calls normalise() so source/title are populated (#363)
+# ---------------------------------------------------------------------------
+
+# A raw arbeitnow API response dict — the shape returned by pages(), which
+# does NOT include 'source' or 'source_id'; those come from normalise().
+_RAW_ARBEITNOW_RECORD: dict[str, Any] = {
+    "slug": "python-developer-at-techcorp-berlin-12345",
+    "title": "Python Developer",
+    "company_name": "TechCorp Berlin",
+    "url": "https://www.arbeitnow.com/jobs/python-developer-12345",
+    "created_at": 1714204800,  # Unix timestamp
+    "description": "<p>We are looking for a <b>Python Developer</b>.</p>",
+    "remote": False,
+    "location": "Berlin, Germany",
+    "job_types": ["full_time"],
+    "tags": ["python", "django"],
+    "visa_sponsorship": False,
+    "language": "en",
+}
+
+# A raw record where 'title' is absent (simulates a bad upstream record
+# that some sources may produce).
+_RAW_ARBEITNOW_RECORD_NO_TITLE: dict[str, Any] = {
+    "slug": "untitled-job-xyz",
+    "title": None,
+    "company_name": None,
+    "url": "https://www.arbeitnow.com/jobs/untitled-job-xyz",
+    "created_at": None,
+    "description": "",
+    "remote": False,
+    "location": None,
+    "job_types": [],
+    "tags": [],
+    "visa_sponsorship": False,
+    "language": "en",
+}
+
+
+def test_translated_listing_has_source():
+    """Bug B: pages() must call normalise() so source/title are populated.
+
+    The wrapper's pages() method yields raw API dicts from the upstream
+    plugin.  Raw dicts do not contain a 'source' key — that field is
+    populated by the plugin's normalise() method.  If pages() skips
+    normalise(), every listing will have source=None (the actual failure
+    mode seen in the live run).
+
+    This test verifies that a listing emitted by the wrapper has:
+    - dict['source'] == 'arbeitnow' (never None)
+    - dict['title'] is a non-empty string
+    """
+    from unittest.mock import patch
+
+    from job_sources.aggregator_provider import _SourceClientWrapper
+
+    from job_aggregator.plugins.arbeitnow.plugin import Plugin as ArbeitnowPlugin
+    from job_aggregator.schema import SearchParams
+
+    upstream = ArbeitnowPlugin(credentials={}, search=SearchParams())
+
+    # Patch pages() to return one raw page so we don't hit the network.
+    with patch.object(
+        upstream,
+        "pages",
+        return_value=iter([[_RAW_ARBEITNOW_RECORD]]),
+    ):
+        wrapper = _SourceClientWrapper(upstream)
+        pages = list(wrapper.pages())
+
+    assert len(pages) == 1
+    assert len(pages[0]) == 1
+    listing = pages[0][0]
+
+    assert listing.get("source") == "arbeitnow", (
+        f"Expected source='arbeitnow', got source={listing.get('source')!r}; "
+        "pages() may not be calling normalise() before translate_job_record()"
+    )
+    assert listing.get("title"), (
+        f"Expected non-empty title, got title={listing.get('title')!r}"
+    )
+
+
+def test_translated_listing_rejects_none_title():
+    """Bug B regression guard: records with title=None are skipped.
+
+    Policy: if normalise() produces a record with title=None, the wrapper
+    must NOT emit a translated listing for that record (skip it rather
+    than emitting source=arbeitnow, title=None, which would crash
+    prefilter() at ingest.py:370 via title.lower()).
+
+    The test asserts that the translated page contains 0 listings for a
+    raw record whose 'title' is None after normalisation.
+    """
+    from unittest.mock import patch
+
+    from job_sources.aggregator_provider import _SourceClientWrapper
+
+    from job_aggregator.plugins.arbeitnow.plugin import Plugin as ArbeitnowPlugin
+    from job_aggregator.schema import SearchParams
+
+    upstream = ArbeitnowPlugin(credentials={}, search=SearchParams())
+
+    # Patch pages() to return one raw page with a no-title record.
+    with patch.object(
+        upstream,
+        "pages",
+        return_value=iter([[_RAW_ARBEITNOW_RECORD_NO_TITLE]]),
+    ):
+        wrapper = _SourceClientWrapper(upstream)
+        pages = list(wrapper.pages())
+
+    # The wrapper must yield a page (even if empty) rather than crashing,
+    # and must NOT include the broken record.
+    all_listings = [listing for page in pages for listing in page]
+    for listing in all_listings:
+        assert listing.get("title"), (
+            "Wrapper emitted a listing with title=None; should have "
+            f"been skipped. Listing: {listing}"
+        )

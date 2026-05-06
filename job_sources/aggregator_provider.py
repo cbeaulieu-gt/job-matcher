@@ -21,6 +21,7 @@ Phase A scope
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Iterator
 
@@ -106,15 +107,37 @@ class _SourceClientWrapper:
     def pages(self) -> Iterator[list[dict]]:
         """Yield pages of translated DB-row dicts.
 
-        Delegates to the upstream plugin's ``pages()`` generator, then
-        translates each ``JobRecord`` dict in each page via
-        :func:`translate_job_record`.
+        Delegates to the upstream plugin's ``pages()`` generator.  Each
+        raw record is first **normalised** via the plugin's own
+        ``normalise()`` method (which maps source-specific field names
+        to the canonical :class:`~job_aggregator.schema.JobRecord` shape
+        and populates ``source`` / ``source_id``), then translated to
+        the in-tree DB row shape via :func:`translate_job_record`.
+
+        Records whose ``title`` is ``None`` or empty after normalisation
+        are silently skipped with a warning log rather than emitted as
+        broken rows.  Emitting them would crash ``prefilter()`` at
+        ``ingest.py:370`` (``title.lower()``).
 
         Yields:
             Lists of translated listing dicts, one list per page.
+            Pages may be shorter than the raw page when records are
+            skipped due to a missing title.
         """
         for raw_page in self._client.pages():
-            yield [translate_job_record(record) for record in raw_page]
+            translated: list[dict] = []
+            for raw in raw_page:
+                normalised = self._client.normalise(raw)
+                if not normalised.get("title"):
+                    logger.warning(
+                        "%s: skipping record with missing title "
+                        "(source_id=%r) — would crash prefilter()",
+                        self.SOURCE,
+                        normalised.get("source_id"),
+                    )
+                    continue
+                translated.append(translate_job_record(normalised))
+            yield translated
 
 
 # ---------------------------------------------------------------------------
@@ -293,6 +316,7 @@ class JobAggregatorProvider:
         *,
         providers_data: dict[str, Any],
         search: dict[str, Any],
+        only_sources: Iterable[str] | None = None,
     ) -> list[_SourceClientWrapper]:
         """Return ready-to-use clients for enabled, credentialled sources.
 
@@ -308,12 +332,23 @@ class JobAggregatorProvider:
         4. Catch ``CredentialsError``, ``PluginConflictError``, and
            ``SchemaVersionError`` and log a warning rather than aborting
            (Risk #5).
-        5. Wrap each returned upstream ``JobSource`` in
+        5. Apply the ``only_sources`` allow-list **after**
+           ``make_enabled_sources`` returns.  This is the correct place to
+           filter because keyless sources (himalayas, jobicy, remoteok,
+           remotive) have no entries in the credentials dict — filtering the
+           credentials dict alone is a no-op for them (Bug A, issue #363).
+        6. Wrap each returned upstream ``JobSource`` in
            ``_SourceClientWrapper``.
 
         Args:
             providers_data: Full dict from ``credentials.load_providers()``.
             search: The ``config["search"]`` sub-dict.
+            only_sources: When non-``None``, only clients whose ``SOURCE``
+                attribute is in this iterable are returned.  Pass
+                ``None`` (the default) to return all enabled clients.
+                The ``JOB_AGGREGATOR_SOURCES`` env-var logic in
+                ``ingest.py`` passes the parsed key set here so that
+                keyless sources are properly excluded.
 
         Returns:
             List of :class:`_SourceClientWrapper` instances ready to iterate.
@@ -363,7 +398,19 @@ class JobAggregatorProvider:
                 exc,
             )
 
-        # Step 5: wrap upstream clients
+        # Step 5: apply only_sources allow-list AFTER make_enabled_sources.
+        # Filtering the credentials dict (as ingest.py did before this fix)
+        # is insufficient because keyless sources have no credential entries
+        # to begin with — the upstream registry instantiates them regardless.
+        # Filtering here, on the returned client list, catches all source
+        # types correctly (Bug A fix, issue #363).
+        if only_sources is not None:
+            allow_set = frozenset(only_sources)
+            upstream_clients = [
+                c for c in upstream_clients if c.SOURCE in allow_set
+            ]
+
+        # Step 6: wrap upstream clients
         return [_SourceClientWrapper(c) for c in upstream_clients]
 
     def scrape(self, url: str) -> str:

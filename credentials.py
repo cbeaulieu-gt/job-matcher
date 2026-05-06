@@ -251,6 +251,58 @@ def load_providers(
                 f"Could not read providers.json: {exc}"
             ) from exc
         # Env vars are NOT consulted when the file is present.
+
+        # -------------------------------------------------------------------
+        # In-memory providers.json shape auto-migration (Phase B Stream 0, refs #366).
+        #
+        # Cross-reference: scripts/migrate_providers_json.py is the on-disk migrator.
+        # It runs once at deploy time on a presumed legacy-shape file and uses
+        # `schema_version == "1.0"` as its idempotency signal. This in-memory
+        # version runs on every load_providers() call and must handle anything
+        # the file might contain, so it diverges from the script in four edge
+        # cases:
+        #
+        #   1. Native-only input: script would clobber `plugins` (line 101 of
+        #      the script unconditionally overwrites). We pass through unchanged.
+        #   2. Both keys present: script prefers `job_sources`. We prefer `plugins`
+        #      and log a warning naming the dropped legacy key.
+        #   3. Empty legacy + native: script clobbers `plugins` with `{}`. We drop
+        #      empty `job_sources` silently and preserve `plugins`.
+        #   4. `schema_version: "1.0"` + `job_sources`: script no-ops on the
+        #      version check. We force-migrate by shape, preserving `schema_version`.
+        #
+        # These divergences are intentional. The script never sees these inputs in
+        # normal operation (it runs once on legacy files at deploy time); the
+        # in-memory version must handle them defensively because it runs every load.
+        #
+        # The migration touches only the `job_sources` <-> `plugins` rename.
+        # Sibling top-level keys (`llm`, `provider_order`, `schema_version`, etc.)
+        # are passed through unchanged. Nothing is written to disk.
+        # -------------------------------------------------------------------
+        has_job_sources = "job_sources" in data
+        has_plugins = "plugins" in data
+
+        if has_job_sources and has_plugins:
+            job_sources_empty = not data["job_sources"]
+            if job_sources_empty:
+                # Edge case 3: empty legacy leftover alongside native — drop silently.
+                data = {k: v for k, v in data.items() if k != "job_sources"}
+            else:
+                # Edge case 2: both keys non-empty — prefer plugins, warn about dropped legacy.
+                logger.warning(
+                    "providers.json contains both 'job_sources' and 'plugins' keys. "
+                    "Preferring 'plugins' and dropping 'job_sources'. "
+                    "Remove 'job_sources' from providers.json to silence this warning."
+                )
+                data = {k: v for k, v in data.items() if k != "job_sources"}
+        elif has_job_sources and not has_plugins:
+            # Edge case 1 (legacy-only) and Edge case 4 (versioned-legacy):
+            # migrate job_sources -> plugins regardless of schema_version marker.
+            migrated = {k: v for k, v in data.items() if k != "job_sources"}
+            migrated["plugins"] = dict(data["job_sources"])
+            data = migrated
+        # else: native-only (has_plugins, no has_job_sources) — pass through as-is.
+
         return data
 
     # --- Path 2: providers.json absent — try migration ---

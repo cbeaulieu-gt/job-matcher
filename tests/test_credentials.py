@@ -103,11 +103,14 @@ class TestLoadProvidersFromFile:
         assert result["llm"]["anthropic"]["api_key"] == "sk-ant-test"
         assert result["llm"]["anthropic"]["model"] == "claude-haiku-4-5-20251001"
 
-    def test_returns_job_sources_section(self, tmp_path):
+    def test_returns_plugins_section(self, tmp_path):
+        # Stream 0 (Phase B #366): load_providers() migrates job_sources -> plugins
+        # in-memory. The on-disk fixture still uses the legacy key; the returned
+        # dict uses the native 'plugins' key.
         _write(tmp_path / "providers.json", _VALID_PROVIDERS_JSON)
         result = load_providers(providers_path=str(tmp_path / "providers.json"))
-        assert result["job_sources"]["adzuna"]["app_id"] == "my-app-id"
-        assert result["job_sources"]["adzuna"]["app_key"] == "my-app-key"
+        assert result["plugins"]["adzuna"]["app_id"] == "my-app-id"
+        assert result["plugins"]["adzuna"]["app_key"] == "my-app-key"
 
     def test_invalid_json_raises_credential_error(self, tmp_path):
         (tmp_path / "providers.json").write_text("{not valid json", encoding="utf-8")
@@ -523,7 +526,11 @@ class TestPartialAdzunaCredentials:
     """load_providers() handles partial Adzuna credentials gracefully."""
 
     def test_app_id_set_app_key_missing_returns_partial(self, tmp_path):
-        """providers.json with app_id but no app_key is returned as-is — no crash."""
+        """providers.json with app_id but no app_key is returned as-is — no crash.
+
+        Stream 0 (Phase B #366): on-disk fixture uses legacy job_sources key;
+        load_providers() migrates in-memory so the returned dict uses 'plugins'.
+        """
         partial_adzuna = {
             "provider_order": ["anthropic"],
             "llm": {
@@ -535,13 +542,17 @@ class TestPartialAdzunaCredentials:
         }
         _write(tmp_path / "providers.json", partial_adzuna)
         result = load_providers(providers_path=str(tmp_path / "providers.json"))
-        # Should return the dict without crashing
-        assert result["job_sources"]["adzuna"]["app_id"] == "my-app-id"
+        # Should return the dict without crashing; key is now 'plugins' after migration
+        assert result["plugins"]["adzuna"]["app_id"] == "my-app-id"
         # app_key is absent from the dict — callers must handle a missing key
-        assert "app_key" not in result["job_sources"]["adzuna"]
+        assert "app_key" not in result["plugins"]["adzuna"]
 
     def test_app_key_set_app_id_missing_returns_partial(self, tmp_path):
-        """providers.json with app_key but no app_id is returned as-is — no crash."""
+        """providers.json with app_key but no app_id is returned as-is — no crash.
+
+        Stream 0 (Phase B #366): on-disk fixture uses legacy job_sources key;
+        load_providers() migrates in-memory so the returned dict uses 'plugins'.
+        """
         partial_adzuna = {
             "provider_order": ["anthropic"],
             "llm": {
@@ -553,8 +564,8 @@ class TestPartialAdzunaCredentials:
         }
         _write(tmp_path / "providers.json", partial_adzuna)
         result = load_providers(providers_path=str(tmp_path / "providers.json"))
-        assert result["job_sources"]["adzuna"]["app_key"] == "my-app-key"
-        assert "app_id" not in result["job_sources"]["adzuna"]
+        assert result["plugins"]["adzuna"]["app_key"] == "my-app-key"
+        assert "app_id" not in result["plugins"]["adzuna"]
 
 
 # ===========================================================================

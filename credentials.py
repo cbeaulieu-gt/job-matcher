@@ -24,6 +24,7 @@ empty".  Env vars do NOT override — this is intentional and documented in
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -253,55 +254,84 @@ def load_providers(
         # Env vars are NOT consulted when the file is present.
 
         # -------------------------------------------------------------------
-        # In-memory providers.json shape auto-migration (Phase B Stream 0, refs #366).
+        # In-memory providers.json shape DUAL-EMIT (Phase B Stream 0, refs #366).
         #
-        # Cross-reference: scripts/migrate_providers_json.py is the on-disk migrator.
-        # It runs once at deploy time on a presumed legacy-shape file and uses
-        # `schema_version == "1.0"` as its idempotency signal. This in-memory
-        # version runs on every load_providers() call and must handle anything
-        # the file might contain, so it diverges from the script in four edge
-        # cases:
+        # This is a database column-rename pattern (expand -> migrate -> contract):
+        #   - Stream 0 (this PR): expand. load_providers() returns BOTH `job_sources`
+        #     (legacy key, what existing readers expect) AND `plugins` (native key,
+        #     what Stream 1+ readers will use), holding identical (deep-copied) data.
+        #   - Stream 1: migrate readers from `job_sources` to `plugins`.
+        #   - Stream 2: contract. Drop `job_sources` from the dual-emit.
         #
-        #   1. Native-only input: script would clobber `plugins` (line 101 of
-        #      the script unconditionally overwrites). We pass through unchanged.
-        #   2. Both keys present: script prefers `job_sources`. We prefer `plugins`
-        #      and log a warning naming the dropped legacy key.
-        #   3. Empty legacy + native: script clobbers `plugins` with `{}`. We drop
-        #      empty `job_sources` silently and preserve `plugins`.
-        #   4. `schema_version: "1.0"` + `job_sources`: script no-ops on the
-        #      version check. We force-migrate by shape, preserving `schema_version`.
+        # Cross-reference: scripts/migrate_providers_json.py is the on-disk migrator
+        # that writes a one-time native-shape file. It does NOT dual-emit (its output
+        # file has only `plugins`). The in-memory dual-emit exists because we cannot
+        # update every in-process reader atomically with the on-disk migration; the
+        # migration window needs both shapes available simultaneously.
         #
-        # These divergences are intentional. The script never sees these inputs in
-        # normal operation (it runs once on legacy files at deploy time); the
-        # in-memory version must handle them defensively because it runs every load.
+        # Edge cases (all produce dict with both keys = same deep-copied data):
+        #   - Legacy-only:    add `plugins` as deep copy of `job_sources`.
+        #   - Native-only:    add `job_sources` as deep copy of `plugins`.
+        #   - Both, A != B:   prefer `plugins`, warn about dropped legacy A,
+        #                     sync both keys to plugins value (deep-copied).
+        #   - Empty legacy + native:  drop empty legacy silently, sync from native.
+        #   - Empty native + legacy:  drop empty native silently, sync from legacy.
+        #   - schema_version: preserved as sibling key.
+        #   - llm:            preserved as sibling key (passthrough invariant).
         #
-        # The migration touches only the `job_sources` <-> `plugins` rename.
         # Sibling top-level keys (`llm`, `provider_order`, `schema_version`, etc.)
         # are passed through unchanged. Nothing is written to disk.
+        #
+        # The two keys are DEEP COPIES (copy.deepcopy) so that a caller mutating
+        # the dict through one key cannot silently corrupt the other.
         # -------------------------------------------------------------------
         has_job_sources = "job_sources" in data
         has_plugins = "plugins" in data
+        job_sources_empty = has_job_sources and not data["job_sources"]
+        plugins_empty = has_plugins and not data["plugins"]
 
         if has_job_sources and has_plugins:
-            job_sources_empty = not data["job_sources"]
             if job_sources_empty:
-                # Edge case 3: empty legacy leftover alongside native — drop silently.
-                data = {k: v for k, v in data.items() if k != "job_sources"}
+                # Empty legacy leftover alongside native: drop legacy silently,
+                # sync both keys from plugins value.
+                canonical = copy.deepcopy(data["plugins"])
+                data = {k: v for k, v in data.items()
+                        if k not in ("job_sources", "plugins")}
+                data["job_sources"] = canonical
+                data["plugins"] = copy.deepcopy(canonical)
+            elif plugins_empty:
+                # Empty native alongside legacy: drop empty native silently,
+                # sync both keys from job_sources value.
+                canonical = copy.deepcopy(data["job_sources"])
+                data = {k: v for k, v in data.items()
+                        if k not in ("job_sources", "plugins")}
+                data["job_sources"] = canonical
+                data["plugins"] = copy.deepcopy(canonical)
             else:
-                # Edge case 2: both keys non-empty — prefer plugins, warn about dropped legacy.
+                # Both keys non-empty: prefer plugins, warn about dropped legacy.
                 logger.warning(
-                    "providers.json contains both 'job_sources' and 'plugins' keys. "
-                    "Preferring 'plugins' and dropping 'job_sources'. "
-                    "Remove 'job_sources' from providers.json to silence this warning."
+                    "providers.json contains both 'job_sources' and 'plugins' "
+                    "keys with non-empty values. Preferring 'plugins' and syncing "
+                    "'job_sources' to match. Remove 'job_sources' from "
+                    "providers.json to silence this warning."
                 )
-                data = {k: v for k, v in data.items() if k != "job_sources"}
+                canonical = copy.deepcopy(data["plugins"])
+                data = {k: v for k, v in data.items()
+                        if k not in ("job_sources", "plugins")}
+                data["job_sources"] = canonical
+                data["plugins"] = copy.deepcopy(canonical)
         elif has_job_sources and not has_plugins:
-            # Edge case 1 (legacy-only) and Edge case 4 (versioned-legacy):
-            # migrate job_sources -> plugins regardless of schema_version marker.
-            migrated = {k: v for k, v in data.items() if k != "job_sources"}
-            migrated["plugins"] = dict(data["job_sources"])
-            data = migrated
-        # else: native-only (has_plugins, no has_job_sources) — pass through as-is.
+            # Legacy-only (incl. versioned-legacy with schema_version marker):
+            # add plugins as deep copy of job_sources; keep job_sources too.
+            canonical = copy.deepcopy(data["job_sources"])
+            data["job_sources"] = canonical
+            data["plugins"] = copy.deepcopy(canonical)
+        elif has_plugins and not has_job_sources:
+            # Native-only: add job_sources as deep copy of plugins.
+            canonical = copy.deepcopy(data["plugins"])
+            data["plugins"] = canonical
+            data["job_sources"] = copy.deepcopy(canonical)
+        # else: neither key present — pass through as-is (no migration possible).
 
         return data
 

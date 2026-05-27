@@ -42,7 +42,7 @@ docker compose version
 
 ```bash
 # 1. Clone the repo into /opt (recommended path — scripts reference it)
-sudo git clone https://github.com/glitchwerks/job-matcher-pr.git /opt/job-matcher-pr
+sudo git clone https://github.com/glitchwerks/job-matcher.git /opt/job-matcher-pr
 cd /opt/job-matcher-pr
 
 # 2. Run the one-time setup script (requires root for chown)
@@ -95,12 +95,12 @@ Two independent Compose stacks run on the same host, each fully isolated.
 ```
 Host VM
 ├── job-matcher-pr-dev  (Compose project)
-│   ├── web             → ghcr.io/.../job-matcher-pr:<sha>  → port 5000
+│   ├── web             → ghcr.io/.../job-matcher:<sha>  → port 5000
 │   ├── db              → postgres:16-alpine  → pgdata_dev volume
 │   └── scheduler       → mcuadros/ofelia (cron executor)
 │
 └── job-matcher-pr-prod (Compose project)
-    ├── web             → ghcr.io/.../job-matcher-pr:latest  → port 5001
+    ├── web             → ghcr.io/.../job-matcher:latest  → port 5001
     ├── db              → postgres:16-alpine  → pgdata_prod volume
     └── scheduler       → mcuadros/ofelia (cron executor)
 ```
@@ -265,7 +265,7 @@ Deploy workflow triggers (workflow_run on CI success)
         │
         ├── build-and-push job (runs on ubuntu-latest, GitHub-hosted)
         │   ├── Builds Docker image via docker/build-push-action
-        │   ├── Non-main branch → pushes ghcr.io/.../job-matcher-pr:<sha>
+        │   ├── Non-main branch → pushes ghcr.io/.../job-matcher:<sha>
         │   └── main branch     → pushes :latest and :<sha>
         │
         ├── deploy-dev job (non-main branches, self-hosted runner)
@@ -304,7 +304,7 @@ manual-test job — runs pytest with a Postgres service container
         │ passes (lint not required)
         ▼
 build-and-push-manual job — builds + pushes image to GHCR
-        │   Non-main → ghcr.io/.../job-matcher-pr:<sha> and :<short-sha>-<branch>
+        │   Non-main → ghcr.io/.../job-matcher:<sha> and :<short-sha>-<branch>
         │   main     → :latest, :<sha>, and :<short-sha>-main
         ▼
 deploy-dev-manual  (if branch != main) → dev stack, port 5000

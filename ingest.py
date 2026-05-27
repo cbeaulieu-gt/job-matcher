@@ -43,6 +43,19 @@ from job_sources import make_enabled_sources, get_required_search_fields
 from providers import build_provider_chain, LLMProvider
 from credentials import CredentialError, load_providers
 
+# ---------------------------------------------------------------------------
+# Feature-flag: JOB_AGGREGATOR_SOURCES (Phase A)
+# ---------------------------------------------------------------------------
+# When set, comma-separated source keys in this env var are routed through
+# JobAggregatorProvider; all other sources use LegacyInTreeProvider.
+# Example: JOB_AGGREGATOR_SOURCES=arbeitnow
+# When unset (default), all sources use LegacyInTreeProvider (today's path).
+# Phase B removes this flag and routes all sources through JobAggregatorProvider.
+#
+# grep -rn JOB_AGGREGATOR_SOURCES returning empty after Phase B is the
+# removal verification criterion (Decision Log #11).
+_JOB_AGGREGATOR_SOURCES_ENV = "JOB_AGGREGATOR_SOURCES"
+
 # Load environment variables from a local .env file if present.
 # Precedence: parent-process env (shell, VSCode task, docker env_file) always
 # wins. This covers the native `python ingest.py` path where no external env
@@ -422,6 +435,9 @@ _REMOTE_KEYWORDS = ("remote", "worldwide")
 # on subsequent runs, so this rate limit only applies to new locations.
 _GEOCODE_USER_AGENT = "job_matcher/1.0 (github.com/job-matcher)"
 _GEOCODE_MIN_INTERVAL_S = 1.0  # Nominatim policy: 1 req/sec max
+# Constructor-level safety net — prevents indefinite hangs if Nominatim stalls
+# at the TCP layer (per-call timeouts in _resolve() still apply for each query).
+_NOMINATIM_TIMEOUT_SECONDS = 10
 
 
 def _is_remote_location(location: str) -> bool:
@@ -525,7 +541,7 @@ class GeoFilter:
     def _geolocator_instance(self):
         """Return (or lazily create) the Nominatim geolocator."""
         if self._geolocator is None:
-            self._geolocator = Nominatim(user_agent=_GEOCODE_USER_AGENT)
+            self._geolocator = Nominatim(user_agent=_GEOCODE_USER_AGENT, timeout=_NOMINATIM_TIMEOUT_SECONDS)
         return self._geolocator
 
     def _resolve(self, location_text: str) -> tuple[float, float] | None:
@@ -1077,6 +1093,95 @@ def _inject_env_var_credentials(providers: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Feature-flag source routing (Phase A)
+# ---------------------------------------------------------------------------
+
+def _build_source_clients(
+    providers: dict,
+    config: dict,
+    providers_path: str,
+) -> list:
+    """Return a flat list of source clients using the Phase A feature flag.
+
+    When ``JOB_AGGREGATOR_SOURCES`` is unset, all sources are returned by
+    the legacy ``make_enabled_sources`` path unchanged.
+
+    When ``JOB_AGGREGATOR_SOURCES`` is set (e.g. ``"arbeitnow"``):
+    - Named sources are fetched via ``JobAggregatorProvider.make_clients()``.
+    - Remaining sources are fetched via ``LegacyInTreeProvider.make_clients()``
+      with the named sources' ``enabled`` flags set to ``False`` in a copy of
+      ``providers`` so they are not double-fetched.
+
+    The returned list is ordered: aggregator clients first, legacy clients
+    second (preserving the existing pipeline ordering within each group).
+
+    Args:
+        providers:      Full dict from ``load_providers()``.
+        config:         Full config dict (includes ``config["search"]``).
+        providers_path: Path to providers.json (for ``ensure_plugins_registered``).
+
+    Returns:
+        Flat list of source client objects (satisfy ``SourceClient`` Protocol).
+    """
+    from job_sources.auto_register import ensure_plugins_registered
+    ensure_plugins_registered(providers_path)
+
+    flag_value = os.environ.get(_JOB_AGGREGATOR_SOURCES_ENV, "").strip()
+    if not flag_value:
+        # No flag set — use legacy path for all sources.
+        return make_enabled_sources(providers, config)
+
+    aggregator_keys = {
+        k.strip() for k in flag_value.split(",") if k.strip()
+    }
+    logger.info(
+        "JOB_AGGREGATOR_SOURCES=%r — routing %s through JobAggregatorProvider",
+        flag_value,
+        sorted(aggregator_keys),
+    )
+
+    from job_sources.aggregator_provider import JobAggregatorProvider
+    from job_sources.legacy_provider import LegacyInTreeProvider
+
+    agg_provider = JobAggregatorProvider()
+    leg_provider = LegacyInTreeProvider()
+
+    # Build aggregator clients for the named sources only.
+    # We filter providers["job_sources"] to only the named keys so that
+    # make_clients() does not try to instantiate plugins not in the flag set.
+    agg_job_sources = {
+        k: v for k, v in (providers.get("job_sources") or {}).items()
+        if k in aggregator_keys
+    }
+    agg_providers = dict(providers)
+    agg_providers["job_sources"] = agg_job_sources
+
+    agg_clients = agg_provider.make_clients(
+        providers_data=agg_providers,
+        search=config.get("search", {}),
+        only_sources=aggregator_keys,
+    )
+
+    # Build legacy clients for remaining sources.
+    # Disable the aggregator-routed sources so they are not double-fetched.
+    legacy_providers = dict(providers)
+    legacy_job_sources = dict(providers.get("job_sources") or {})
+    for key in aggregator_keys:
+        if key in legacy_job_sources:
+            entry = dict(legacy_job_sources[key])
+            entry["enabled"] = False
+            legacy_job_sources[key] = entry
+    legacy_providers["job_sources"] = legacy_job_sources
+
+    legacy_clients = leg_provider.make_clients(
+        providers_data=legacy_providers,
+        search=config.get("search", {}),
+    )
+
+    return list(agg_clients) + list(legacy_clients)
+
+
+# ---------------------------------------------------------------------------
 # Plugin isolation helper
 # ---------------------------------------------------------------------------
 
@@ -1247,10 +1352,7 @@ def run(
 
         _inject_env_var_credentials(providers)
 
-        from job_sources.auto_register import ensure_plugins_registered
-        ensure_plugins_registered(providers_path)
-
-        sources = make_enabled_sources(providers, config)
+        sources = _build_source_clients(providers, config, providers_path)
         if not sources:
             logger.warning(
                 "No job sources are enabled. Enable at least one source in Settings > Sources."
@@ -1320,6 +1422,9 @@ def run(
         # Per-provider cost tracking: {provider_name: {input, output, cost}}
         provider_costs: dict[str, dict] = {}
         source_fetch_counts: dict[str, int] = {}
+        # Track unknown model_used values already warned this run so each
+        # distinct SKU emits at most one WARN per run (not one per listing).
+        _warned_unknown_models: set[str] = set()
 
         # Cutoff used for --hours filtering.
         hours_cutoff: datetime | None = None
@@ -1444,6 +1549,25 @@ def run(
                                 src_name,
                                 title,
                             )
+                            # Warn when model_used is not in the pricing table
+                            # so that new or renamed SKUs surface in logs
+                            # rather than silently falling back to Haiku rates.
+                            # Dedup: warn at most once per unknown SKU per run
+                            # so a 500-listing run with one new model does not
+                            # produce 500 identical WARN lines.
+                            _model_used = score_result.get("model_used")
+                            if (
+                                db._lookup_pricing(_model_used) is None
+                                and _model_used not in _warned_unknown_models
+                            ):
+                                _warned_unknown_models.add(_model_used)
+                                logger.warning(
+                                    "Unknown model_used %r — Haiku fallback"
+                                    " rates will be used for cost estimation."
+                                    " Add it to db._PRICING_TABLE to silence"
+                                    " this warning.",
+                                    _model_used,
+                                )
                             if _verbose:
                                 logger.info(
                                     "  verdict: %s\n  matched: %s\n  missing: %s\n  concerns: %s",

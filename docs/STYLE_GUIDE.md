@@ -304,6 +304,22 @@ All buttons extend `.btn` (base). Add a modifier class for semantic variants.
 | `.btn-danger-confirm` | `--score-low-text` text + border, `--score-low-bg` bg | Final confirmation submit; starts `disabled`; inverts (red bg, dark text) on hover |
 | `.btn-clear-key` | `--text-muted` / `--border-subtle` → `--score-low-text` / `--score-low-border` on hover | Inline button next to configured password fields; signals "clear this key"; `--font-mono` 0.72rem; `padding: 4px 8px`; `flex-shrink: 0`; `border-radius: var(--radius-md)` |
 
+#### `.btn-save` in a horizontal flex row
+
+`.btn-save` carries `margin-top: 4px` (designed for standalone form submits) and `align-self: flex-start`. The `align-self` overrides any `align-items` set on the parent, so setting `align-items: center` on the wrapper has no effect on `.btn-save` itself. The `margin-top: 4px` then causes the flex container to be 4px taller than its siblings, making adjacent buttons (e.g. Dismiss) render visually taller than intended.
+
+The correct fix when placing `.btn-save` in a horizontal flex row alongside another button is to cancel its `margin-top` inline:
+
+```html
+<!-- Correct: cancel .btn-save's margin-top inline -->
+<div style="display: flex; gap: 8px;">
+  <button type="submit" class="btn btn-save" style="margin-top:0">Apply</button>
+  <button type="button" class="btn btn-dismiss">Dismiss</button>
+</div>
+```
+
+See `templates/profile.html:376` (prefilter suggestions panel) for the reference pattern. A broader refactor to invert the defaults is planned — until then, the inline `margin-top:0` is the correct approach for this layout.
+
 ### Forms & Settings
 
 | Class | Element | Notes |
@@ -533,7 +549,7 @@ Tab switching is handled by a small inline JS block (no library).
 
 | Class | Color | Notes |
 |---|---|---|
-| `.save-notice` | Green (`--score-high-*`) | Success; auto-fades after 4s via `notice-fade-out` animation |
+| `.save-notice` | Green (`--score-high-*`) | Success; auto-fades after 4s via `notice-fade-out` animation. At 100% the keyframe also collapses `max-height`, `margin-bottom`, `padding`, and `border-width` to `0` so the box takes up no layout space after the fade completes. `overflow: hidden` is required on the element for the collapse to animate smoothly. |
 | `.save-error` | Red (`--score-low-*`) | Persistent error |
 | `.setup-banner` | Amber (`--score-mid-*`) | Setup/configuration prompt; left border `--text-accent` |
 

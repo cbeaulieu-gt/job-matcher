@@ -196,6 +196,12 @@ Then run:
 .venv\Scripts\python app.py
 ```
 
+> **Password characters:** If your `POSTGRES_PASSWORD` contains URI-reserved
+> characters (`@`, `:`, `/`, `#`, `?`, etc.), percent-encode them in
+> `DATABASE_URL` — e.g. `p@ss` → `p%40ss`. The app auto-encodes the password
+> on startup as a safety net, but encoding it in the file avoids any
+> edge-case surprises (e.g. `psql` CLI or other tools reading the same URL).
+
 Docker is unaffected: `docker-compose.dev.yml` and `docker-compose.prod.yml`
 read `.env.dev` / `.env.prod` via compose's `env_file:` directive, which
 populates the container environment before Python starts. Variables set by the
@@ -426,7 +432,7 @@ Add these in **Settings → Secrets and variables → Actions** for the CI failu
 
 > **This is the primary and recommended deployment path.** Docker on Linux is the active deployment method. The native Windows deployment path has been retired — see [`docs/LEGACY_DEPLOYMENT.md`](docs/LEGACY_DEPLOYMENT.md) if you need those instructions.
 
-Use this approach to run Job Matcher as a Docker Compose stack on a Linux VM. The stack consists of a `web` container (Flask + waitress), a `db` container (PostgreSQL), and a `scheduler` container (Ofelia) that runs ingestion daily.
+Use this approach to run Job Matcher as a Docker Compose stack on a Linux VM. The stack consists of a `web` container (Flask + waitress), a `db` container (PostgreSQL), and a `scheduler` container (Ofelia) that runs ingestion daily. All services use bounded log rotation (`json-file` driver, 10 MB per file, 3 files max — ≤ 30 MB total per service) to prevent unbounded disk growth.
 
 For full documentation — stack architecture, environment variables, CI/CD pipeline, scheduled ingestion, backups, troubleshooting, teardown, and migration from Windows — see **[docs/DOCKER.md](docs/DOCKER.md)**.
 
@@ -434,7 +440,7 @@ For full documentation — stack architecture, environment variables, CI/CD pipe
 
 ```bash
 # Clone into the recommended path (scripts reference /opt/job-matcher-pr)
-sudo git clone https://github.com/cbeaulieu-gt/job-matcher-pr.git /opt/job-matcher-pr
+sudo git clone https://github.com/glitchwerks/job-matcher.git /opt/job-matcher-pr
 cd /opt/job-matcher-pr
 
 # One-time VM provisioning: creates directories, copies config examples, starts both stacks

@@ -20,6 +20,12 @@ python ingest.py -v                # Short form of --verbose
 # Run web UI (http://localhost:5000)
 python app.py
 
+# Phase A feature flag: route specific sources through JobAggregatorProvider
+# JOB_AGGREGATOR_SOURCES=arbeitnow python ingest.py --hours 24
+#   → arbeitnow fetched via job_aggregator; all other sources via legacy loader
+# Unset (default): all sources use the legacy in-tree loader
+# Phase B removal criterion: grep -rn JOB_AGGREGATOR_SOURCES returns empty
+
 # Run tests (requires PostgreSQL pointed at a TEST database — set DATABASE_URL)
 # Option A: use jobmatcher_test (created automatically on fresh docker volume;
 #           for existing setups run once: docker exec job-matcher-pr-dev-db-1
@@ -45,8 +51,10 @@ pytest -k "test_title_include"     # By name pattern
 
 The app is two decoupled processes sharing a PostgreSQL database (connection via `DATABASE_URL`):
 
+- **`app.py`** — Thin entry point: `from web import create_app; app = create_app()` plus a `__main__` runner for the dev server. WSGI servers (waitress in Docker, gunicorn) import `app` directly. Contains no routes, helpers, or business logic.
+- **`web/`** — Flask layer. `web/__init__.py::create_app()` constructs the app, registers Jinja filters, security hooks, context processors, blueprints, `db.init_db()`, and plugins. Blueprints: `feed_bp` (`web/feed.py`), `ingest_bp` (`web/ingest.py`), `settings_bp` (`web/settings.py`), `profile_bp` (`web/profile.py`), `admin_bp` (`web/admin.py`) — all registered with `url_prefix=""` so every URL path is unchanged. Template filters live in `web/filters.py`; CSRF/host guards in `web/security.py`.
+- **`services/`** — Pure Python, zero Flask imports. Unit-testable in isolation. Modules: `profile_store.py` (config/profile path constants and load/save helpers), `pdf_import.py` (async PDF-to-profile extraction), `provider_schemas.py` (LLM and job-source schema builders, config warnings, runtime versions), `ingest_control.py` (subprocess lifecycle, SSE state, stdout reader).
 - **`ingest.py`** — CLI pipeline: multiple job source APIs → pre-filter → scrape full JD → score with configured LLM provider → insert into DB. Runs on a schedule or manually.
-- **`app.py`** — Flask web server. Read-only views of scored listings plus HTMX write actions (bookmark, dismiss, apply). Talks to LLM providers only for key validation (`/api/validate-keys`); all scoring happens in `ingest.py`.
 - **`db.py`** — All PostgreSQL access via `psycopg2`. JSON array columns (`matched_skills`, `missing_skills`, `concerns`) are serialized/deserialized here.
 
 ### Ingestion pipeline (per listing)
@@ -92,8 +100,13 @@ Results include a `model_used` field stored as `"provider/model"` per listing. S
 - `scripts/docker-setup.sh` — one-time VM provisioning
 - `scripts/docker-status.sh` / `scripts/docker-teardown.sh` — ops helpers
 - `scripts/deploy-remote-linux.sh` — workstation-driven remote update. Pushes compose files, scripts, config examples, **and live `.env.prod` / `.env.dev`** (with overwrite confirmation + chmod 600). Run this after editing any `.env.*.example` schema to get the new required fields onto the server.
+- **As of issue #373**, `deploy.yml` (all four deploy jobs) also syncs compose files, scripts, and `.env.*.example` to `/opt/job-matcher-pr/` on every deploy via a `Sync deploy files` step that runs before the Preflight check. `deploy-remote-linux.sh` is now only needed for (a) first-time server provisioning and (b) pushing updated live `.env.prod` / `.env.dev` secret values to the server.
+
+**Log rotation:** all services use the `json-file` driver with `max-size: 10m` and `max-file: 3` (≤ 30 MB total per service), configured via a shared YAML anchor in each compose file.
 
 **Env-file migration rule:** when `.env.prod.example` or `.env.dev.example` gains a new required field (a new `SECRET_KEY`-style variable, a renamed DB, etc.), the running server's live `.env.*` does **not** automatically pick it up. The `deploy-prod` GHA job now runs a preflight `docker compose config` + `changeme_*` grep against `/opt/job-matcher-pr/.env.prod` and will fail the run with `::error::` if the live file is missing, unedited, or still has unresolved compose variables — catch the drift at CI time instead of during a partial `up -d`.
+
+**Password encoding:** if `POSTGRES_PASSWORD` contains URI-reserved characters (`@`, `:`, `/`, `#`, `?`), percent-encode them — e.g. `p@ss` → `p%40ss`. Docker Compose interpolates `POSTGRES_PASSWORD` directly into `DATABASE_URL`; `db.py` auto-encodes the password at startup as a safety net, but encoding it in the env file is the authoritative fix and ensures other tools (e.g. `psql`, `pg_dump`) also work correctly.
 
 ## UI Development
 

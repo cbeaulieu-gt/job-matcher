@@ -23,16 +23,96 @@ immediately rather than at the first database call.
 """
 
 import json
+import logging
 import os
 import threading
+from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 import psycopg2
 import psycopg2.extras
 import psycopg2.pool
 
+logger = logging.getLogger(__name__)
+
+
 # ---------------------------------------------------------------------------
 # DATABASE_URL — required; no fallback to avoid committing credentials.
 # ---------------------------------------------------------------------------
+
+def _encode_database_url_password(url: str) -> str:
+    """Return *url* with its password component percent-encoded.
+
+    libpq's URI parser treats ``@``, ``:``, ``/``, ``#``, ``?``, and other
+    RFC 3986 reserved characters as structural delimiters, so a raw password
+    like ``p@ss:word`` silently breaks the connection string.
+
+    This function uses ``urllib.parse.urlsplit`` to extract the password, then
+    decodes it (in case it is already encoded) and re-encodes it.  The
+    decode-then-encode round-trip makes the operation **idempotent**: calling
+    it twice on the same URL always produces the same result.
+
+    **Limitation — ``/``, ``#``, ``?`` in passwords:**  These characters act
+    as URL structural delimiters and cause ``urlsplit`` itself to misparse the
+    URL *before* the password component can be extracted.  When the password
+    contains them the URL is already broken at the point this function runs
+    and cannot be automatically repaired.  Users must percent-encode such
+    characters manually in their ``.env`` file:
+    ``p/ss`` → ``p%2Fss``, ``p#ss`` → ``p%23ss``, ``p?ss`` → ``p%3Fss``.
+
+    Characters handled automatically: ``@`` (→ ``%40``), ``:`` (→ ``%3A``),
+    and any other non-delimiter reserved character that ``urlsplit`` can still
+    extract from the password field.
+
+    If the URL has no password component, or cannot be parsed (e.g. a DSN
+    key=value string), it is returned unchanged.
+
+    Args:
+        url: A ``postgresql://`` (or ``postgres://``) connection string.
+
+    Returns:
+        The same URL with its password component safely percent-encoded,
+        or the original string if no password was found / parsing failed.
+    """
+    try:
+        parsed = urlsplit(url)
+    except (ValueError, AttributeError) as exc:
+        logger.warning(
+            "Failed to URL-encode DATABASE_URL password (%s);"
+            " using raw value",
+            type(exc).__name__,
+        )
+        return url
+
+    if not parsed.password:
+        return url
+
+    # Decode first so that an already-encoded password is not double-encoded,
+    # then re-encode with an empty safe set so every reserved char is escaped.
+    raw_password = unquote(parsed.password)
+    encoded_password = quote(raw_password, safe="")
+
+    if encoded_password == parsed.password:
+        # Password was already correctly encoded — avoid reconstructing URL
+        # (preserves any unusual but valid original formatting).
+        return url
+
+    # Reconstruct netloc with the encoded password.
+    # urlsplit stores netloc as "user:password@host:port".  We rebuild it
+    # rather than using urlunsplit on parsed directly because SplitResult
+    # does not expose a setter for individual netloc parts.
+    user = parsed.username or ""
+    host = parsed.hostname or ""
+    port = f":{parsed.port}" if parsed.port else ""
+    netloc = f"{user}:{encoded_password}@{host}{port}"
+
+    return urlunsplit((
+        parsed.scheme,
+        netloc,
+        parsed.path,
+        parsed.query,
+        parsed.fragment,
+    ))
+
 
 _DATABASE_URL: str | None = os.environ.get("DATABASE_URL")
 if not _DATABASE_URL:
@@ -40,6 +120,11 @@ if not _DATABASE_URL:
         "DATABASE_URL environment variable is required. "
         "Set it in your .env file (see .env.example)."
     )
+
+# Percent-encode the password so URI-reserved characters (@ : / # ?) do not
+# confuse libpq's URL parser.  This is idempotent — already-encoded URLs are
+# left unchanged.
+_DATABASE_URL = _encode_database_url_password(_DATABASE_URL)
 
 # ---------------------------------------------------------------------------
 # Explicit allowlist for user-supplied sort keys → safe SQL ORDER BY clauses.
@@ -51,9 +136,12 @@ _ALLOWED_SORT_COLUMNS: dict[str, str] = {
 _DEFAULT_SORT_CLAUSE = "score DESC"
 
 # ---------------------------------------------------------------------------
-# Pricing fallback constants — Haiku pricing used when the caller does not
-# supply per-model rates.  Kept here only for backward compatibility with
-# code paths that call get_usage_stats() without pricing arguments.
+# Pricing fallback constants — Haiku pricing applied to rows whose
+# ``model_used`` value does not appear in ``_PRICING_TABLE``.  Using Haiku
+# rates for unknown SKUs gives a best-effort cost estimate rather than
+# suppressing the cost figure entirely.  These constants are also accepted
+# as keyword arguments by ``get_usage_stats()`` for backward compatibility
+# with callers that previously passed explicit rates.
 # The authoritative pricing table lives in providers/anthropic_provider.py.
 # ---------------------------------------------------------------------------
 
@@ -947,31 +1035,42 @@ def get_usage_stats(
     COALESCE so the arithmetic is always well-defined.
 
     Cost estimation uses per-model pricing from ``_lookup_pricing()``.  When
-    a row's ``model_used`` value maps to a known model, the actual rates for
-    that provider/model are used.  When the model is unknown or absent the
-    row's cost contribution is ``None`` (unknown), and the per-day and total
-    ``cost_usd`` / ``estimated_cost_usd`` fields are ``None`` when *any* row
-    in the aggregation has an unknown model — this signals to the UI that a
-    precise estimate cannot be shown rather than silently returning a wrong
-    number.
+    a row's ``model_used`` value maps to a known entry in ``_PRICING_TABLE``,
+    the exact rates for that provider/model are used.  When the model is
+    unrecognised, ``_FALLBACK_INPUT_COST_PER_MTOK`` /
+    ``_FALLBACK_OUTPUT_COST_PER_MTOK`` (Haiku rates) are applied so that the
+    aggregate is always a finite number rather than ``None``.  The names of
+    any models that required the fallback are collected in the
+    ``unknown_models`` list so callers can surface a best-effort annotation
+    in the UI.
 
     The ``input_cost_per_mtok`` / ``output_cost_per_mtok`` parameters are
-    kept for backward compatibility but are no longer used internally; all
-    cost calculations go through ``_lookup_pricing()``.
+    accepted for backward compatibility with callers that previously supplied
+    explicit rates; when provided they override the module-level fallback
+    constants for that call only.
 
     Args:
-        input_cost_per_mtok:  Ignored — kept for backward-compatible callers.
-        output_cost_per_mtok: Ignored — kept for backward-compatible callers.
+        input_cost_per_mtok: Fallback input rate (USD/MTok) applied to rows
+            whose model is not in ``_PRICING_TABLE``.  Defaults to Haiku
+            pricing (``_FALLBACK_INPUT_COST_PER_MTOK``).
+        output_cost_per_mtok: Fallback output rate (USD/MTok) applied to rows
+            whose model is not in ``_PRICING_TABLE``.  Defaults to Haiku
+            pricing (``_FALLBACK_OUTPUT_COST_PER_MTOK``).
 
     Returns:
         Dict with keys:
             total_scored        -- count of listings with score IS NOT NULL
             total_tokens_input  -- sum of tokens_input across all rows
             total_tokens_output -- sum of tokens_output across all rows
-            estimated_cost_usd  -- float total cost, or None if any model is unknown
+            estimated_cost_usd  -- float total cost (never None); unknown
+                                   models contribute at fallback rates
+            unknown_models      -- sorted list of distinct model_used values
+                                   that were not found in _PRICING_TABLE and
+                                   therefore used fallback rates; empty when
+                                   all models are known
             by_date             -- list of per-day dicts, most recent first;
                                    each dict has: date, scored, tokens_input,
-                                   tokens_output, cost_usd (float or None)
+                                   tokens_output, cost_usd (always a float)
     """
     with get_connection() as conn:
         totals_row = conn.execute(
@@ -1000,18 +1099,25 @@ def get_usage_stats(
             """
         ).fetchall()
 
-        total_cost: float | None = 0.0
+        total_cost: float = 0.0
+        unknown_models: list[str] = []
         for mrow in model_rows:
             pricing = _lookup_pricing(mrow["model_used"])
             if pricing is None:
-                # At least one model_used value is unknown — cost is indeterminate.
-                total_cost = None
-                break
-            in_rate, out_rate = pricing
+                # Unknown model — apply Haiku fallback rates so the aggregate
+                # remains a finite number rather than being suppressed.
+                in_rate = input_cost_per_mtok
+                out_rate = output_cost_per_mtok
+                model_label = mrow["model_used"] or "(null)"
+                if model_label not in unknown_models:
+                    unknown_models.append(model_label)
+            else:
+                in_rate, out_rate = pricing
             total_cost += (
                 mrow["tokens_input"]  / 1_000_000 * in_rate
                 + mrow["tokens_output"] / 1_000_000 * out_rate
             )
+        unknown_models.sort()
 
         # PostgreSQL: DATE(col) works identically to SQLite for ISO timestamp strings.
         day_rows = conn.execute(
@@ -1029,6 +1135,8 @@ def get_usage_stats(
         ).fetchall()
 
     # Aggregate per-date across all models that appeared on that day.
+    # Unknown models contribute at fallback rates so cost_usd is always a
+    # finite number rather than None.
     by_date_map: dict[str, dict] = {}
     for row in day_rows:
         date_key = str(row["date"])
@@ -1039,7 +1147,6 @@ def get_usage_stats(
                 "tokens_input": 0,
                 "tokens_output": 0,
                 "cost_usd": 0.0,
-                "_has_unknown": False,
             }
         bucket = by_date_map[date_key]
         bucket["scored"] += row["scored"]
@@ -1049,19 +1156,17 @@ def get_usage_stats(
         bucket["tokens_output"] += tok_out
         pricing = _lookup_pricing(row["model_used"])
         if pricing is None:
-            bucket["_has_unknown"] = True
-        elif not bucket["_has_unknown"]:
+            # Unknown model — use Haiku fallback rates.
+            in_rate = input_cost_per_mtok
+            out_rate = output_cost_per_mtok
+        else:
             in_rate, out_rate = pricing
-            bucket["cost_usd"] += (
-                tok_in  / 1_000_000 * in_rate
-                + tok_out / 1_000_000 * out_rate
-            )
+        bucket["cost_usd"] += (
+            tok_in  / 1_000_000 * in_rate
+            + tok_out / 1_000_000 * out_rate
+        )
 
-    by_date: list[dict] = []
-    for bucket in by_date_map.values():
-        has_unknown = bucket.pop("_has_unknown")
-        bucket["cost_usd"] = None if has_unknown else bucket["cost_usd"]
-        by_date.append(bucket)
+    by_date: list[dict] = list(by_date_map.values())
     # Sort most-recent first (keys are ISO date strings — lexicographic DESC works).
     by_date.sort(key=lambda d: d["date"], reverse=True)
 
@@ -1070,6 +1175,7 @@ def get_usage_stats(
         "total_tokens_input": total_tokens_input,
         "total_tokens_output": total_tokens_output,
         "estimated_cost_usd": total_cost,
+        "unknown_models": unknown_models,
         "by_date": by_date,
     }
 

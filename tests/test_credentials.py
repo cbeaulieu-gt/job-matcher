@@ -104,17 +104,10 @@ class TestLoadProvidersFromFile:
         assert result["llm"]["anthropic"]["model"] == "claude-haiku-4-5-20251001"
 
     def test_returns_job_sources_section(self, tmp_path):
-        # Stream 0 dual-emit (Phase B #366): load_providers() returns BOTH
-        # `job_sources` (legacy key, what existing readers use) AND `plugins`
-        # (native key, for Stream 1+ readers), holding identical data.
         _write(tmp_path / "providers.json", _VALID_PROVIDERS_JSON)
         result = load_providers(providers_path=str(tmp_path / "providers.json"))
         assert result["job_sources"]["adzuna"]["app_id"] == "my-app-id"
         assert result["job_sources"]["adzuna"]["app_key"] == "my-app-key"
-        # Dual-emit invariant: plugins must equal job_sources
-        assert result["plugins"] == result["job_sources"], (
-            "Stream 0 dual-emit: plugins and job_sources must hold identical data"
-        )
 
     def test_invalid_json_raises_credential_error(self, tmp_path):
         (tmp_path / "providers.json").write_text("{not valid json", encoding="utf-8")

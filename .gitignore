@@ -15,9 +15,6 @@ config/providers.demo.json
 logs/
 logs-dev/
 
-# Phase A pre-Phase-B verification artifacts (local only; not committed)
-docs/baselines/*-smoke.json
-
 # Python artifacts
 __pycache__/
 *.pyc

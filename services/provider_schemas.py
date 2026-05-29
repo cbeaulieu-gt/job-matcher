@@ -37,6 +37,7 @@ import os
 import subprocess
 import sys
 import threading
+from functools import lru_cache
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
 from typing import Any, Callable, Optional
@@ -189,31 +190,53 @@ def _config_warnings(
 # ---------------------------------------------------------------------------
 
 
-def _get_search_validation_issues(
-    providers_path: Optional[str] = None,
-    config_path: Optional[str] = None,
-) -> list[ValidationIssue]:
-    """Return search-config validation issues for all enabled sources.
+def _mtime(path: str) -> float:
+    """Return the modification time of *path*, or ``0.0`` if it is absent.
 
-    Loads providers and config safely (returns empty list on any error) and
-    delegates to :func:`ingest.validate_search_config`.  Used by both the
-    ``/settings`` GET render and the ``/api/ingest/preflight`` endpoint so
-    the same validation logic is never duplicated.
+    Used as part of the cache key for :func:`_cached_validation`.  Returning
+    ``0.0`` for a missing file mirrors the existing graceful-fallback behaviour
+    in :func:`_get_search_validation_issues` — no extra error is raised.
 
     Args:
-        providers_path: Override path to ``providers.json``.  Defaults to
-            :data:`services.profile_store._PROVIDERS_PATH`.
-        config_path: Override path to ``config.json``.  Defaults to
-            :data:`services.profile_store._CONFIG_PATH`.
+        path: Filesystem path to stat.
+
+    Returns:
+        ``os.path.getmtime(path)`` when the file exists, ``0.0`` otherwise.
+    """
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return 0.0
+
+
+@lru_cache(maxsize=None)
+def _cached_validation(
+    mtime_tuple: tuple[float, float],
+    providers_path: str,
+    config_path: str,
+) -> list[ValidationIssue]:
+    """Load config files from disk and return validation issues.
+
+    This function is wrapped with :func:`functools.lru_cache`.  The cache key
+    is *(mtime_tuple, providers_path, config_path)* so any out-of-process
+    modification to either config file (including a ``/settings`` POST rewrite)
+    automatically busts the cache via the changed mtime.
+
+    Callers should **not** call this function directly; use
+    :func:`_get_search_validation_issues` instead.
+
+    Args:
+        mtime_tuple: 2-tuple of ``(providers_mtime, config_mtime)`` floats
+            used purely as a cache-busting key.  ``0.0`` encodes a missing
+            file (see :func:`_mtime`).
+        providers_path: Absolute path to ``providers.json``.
+        config_path: Absolute path to ``config.json``.
 
     Returns:
         List of :class:`ingest.ValidationIssue` objects.  Empty when all
-        enabled sources have complete search configuration.
+        enabled sources have complete search configuration or when the config
+        files cannot be loaded.
     """
-    if providers_path is None:
-        providers_path = _PROVIDERS_PATH
-    if config_path is None:
-        config_path = _CONFIG_PATH
     try:
         providers = load_providers(providers_path=providers_path)
     except CredentialError:
@@ -230,6 +253,40 @@ def _get_search_validation_issues(
         return []
 
     return validate_search_config(config, providers)
+
+
+def _get_search_validation_issues(
+    providers_path: Optional[str] = None,
+    config_path: Optional[str] = None,
+) -> list[ValidationIssue]:
+    """Return search-config validation issues for all enabled sources.
+
+    Results are mtime-keyed: repeated calls with unchanged config files are
+    served from an :func:`functools.lru_cache` in-memory cache.  Any
+    out-of-process modification to either file (including a ``/settings``
+    POST rewrite) busts the cache automatically via the changed mtime.
+
+    Delegates to :func:`_cached_validation` for the actual disk reads and
+    validation logic.  Used by both the ``/settings`` GET render and the
+    ``/api/ingest/preflight`` endpoint so the same validation logic is never
+    duplicated.
+
+    Args:
+        providers_path: Override path to ``providers.json``.  Defaults to
+            :data:`services.profile_store._PROVIDERS_PATH`.
+        config_path: Override path to ``config.json``.  Defaults to
+            :data:`services.profile_store._CONFIG_PATH`.
+
+    Returns:
+        List of :class:`ingest.ValidationIssue` objects.  Empty when all
+        enabled sources have complete search configuration.
+    """
+    if providers_path is None:
+        providers_path = _PROVIDERS_PATH
+    if config_path is None:
+        config_path = _CONFIG_PATH
+    mts = (_mtime(providers_path), _mtime(config_path))
+    return _cached_validation(mts, providers_path, config_path)
 
 
 # ---------------------------------------------------------------------------

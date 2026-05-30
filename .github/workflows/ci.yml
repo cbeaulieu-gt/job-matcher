@@ -41,6 +41,9 @@ jobs:
             exit 1
           fi
 
+      - name: Lint Jinja/HTML templates (djLint)
+        run: djlint templates/ --lint
+
   test:
     runs-on: ubuntu-latest
     services:

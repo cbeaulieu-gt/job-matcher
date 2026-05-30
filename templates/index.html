@@ -12,7 +12,7 @@
 </head>
 <body
   hx-on:ingestComplete="htmx.ajax('GET', '/feed/fragment', {target: '#feed-content', swap: 'outerHTML'})">
-{% include '_status_bar.html' %}
+{% include "_status_bar.html" %}
 {% if demo_mode %}
 <div class="demo-banner" role="status">&#x2697; Demo Mode &mdash; sample data only, no real API calls</div>
 {% endif %}
@@ -166,7 +166,7 @@
 
 </div>
 
-{% include '_ingest_drawer.html' %}
+{% include "_ingest_drawer.html" %}
 <script src="{{ url_for('static', filename='ingest-drawer.js') }}"></script>
 </body>
 </html>

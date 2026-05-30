@@ -1,0 +1,10 @@
+[tool.djlint]
+profile = "jinja"
+indent = 2
+# H023: entity refs are intentional (icon glyphs, symbols — no icon-font dependency)
+# H030/H031: meta tags not required in partial/fragment templates
+# H021: inline styles are intentional in a handful of dynamic-colour components
+# H025: orphan tags are an HTMX pattern (partial responses)
+# J004/J018: url_for() refactor is out-of-scope for linting enforcement
+# T028: spaceless Jinja tags in class attributes are intentional for conditional classes
+ignore = "H023,H030,H031,H021,H025,J004,J018,T028"

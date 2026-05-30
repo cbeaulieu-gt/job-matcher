@@ -1,6 +1,7 @@
 # job-matcher 2.0 — Architecture Decision Record
 
-> **Status:** LOCKED 2026-05-29 (brainstorming session + OpenDesign handoff reconciliation).
+> **Status:** REVISED v2 2026-05-29 — reviewed on PR #752 (`project-reviewer` + `inquisitor`); ADR-003/004/005/006/009
+> updated below; re-review pending. (v1 "LOCKED" was premature.)
 > **Scope:** cross-cutting architectural decisions for the 2.0 initiative; they constrain every cycle.
 > **Companion:** `2026-05-29-job-matcher-2.0-roles-foundation-design.md` (Cycle 0+1 spec).
 > **Tracking:** Epic glitchwerks/job-matcher#751 · milestone #12 · cycles #747–#750.
@@ -30,6 +31,25 @@
 | 013 | Payload validation (pydantic) with the Cycle 2 API, not upfront | Cycle 2 |
 | 014 | Resume file storage = local mounted volume, no object store | Cycle 3 |
 | 015 | SSE live ingest stream: document proxy no-buffer; no new service | Cycle 2 |
+
+---
+
+## v2 changes (from the PR #752 review — `project-reviewer` + `inquisitor`)
+
+The aggressive review of v1 produced 3 blockers + a contradiction, all resolved here and in the design spec:
+
+- **B1 — lifecycle vs `description_source` collision** → design §2.5 renames the new axis to
+  `lifecycle` (`discovered`\|`scored`), orthogonal to the untouched `description_source`. (design D11)
+- **B2 — dedup defeated the many-to-many fan-out** → design §4.1 makes dedup match-aware
+  (`(listing, role)`), upsert-then-check. (design D12)
+- **B3 — non-atomic migration on the autocommit pool** → design §3.3 wraps the seed in one explicit
+  transaction gated by a `schema_version` sentinel + a post-commit assertion. (design D13)
+- **PK contradiction** → ADR-006 (above) resolves to serial-int PK + separate UNIQUE `slug`; FKs target
+  the int. (design D16)
+- Plus resolved concerns: Cycle-1 feed reads a `MAX(matches.score)` roll-up (design D14); roles are
+  soft-delete-only to remove the mid-run FK crash path (design D15); B-mode worst case = K scoring calls,
+  accepted + budget-logged (design D17); ADR-003/004/005 scoped to new tables only (note under ADR-005);
+  ADR-009 chokepoint + contract tests specified concretely and #580/#581/#582 stay open until they exist.
 
 ---
 
@@ -90,16 +110,31 @@ computing deltas; ranges use the midpoint. No-salary postings are a red flag, ne
 **Decision.** Use `JSONB` for these columns. Enables native validation + GIN-indexed containment
 queries (combined view, "roles with skill X") that `TEXT` cannot.
 
-**Consequences.** Better query power and integrity; trivial now, a conversion migration later.
+**Consequences.** Better query power and integrity on the new tables.
 
-## ADR-006 — ID strategy
+> **Scope note for ADR-003/004/005 (REVISED v2 — resolves the ADR-012 tension the `inquisitor` raised).**
+> These type choices apply to **new tables/columns only** (Profile/Role/JobPreferences/Match, `base_salary`,
+> `target_salary`, the JSONB arrays). **Existing `listings` columns (`REAL` salary, `TEXT` timestamps,
+> `TEXT`-JSON) are explicitly OUT OF SCOPE for Cycle 0** — they are not converted in-place. Mixed-type
+> reads are handled by per-table row mappers (design §3.2). IF a future cycle ever converts the legacy
+> `listings` columns, that lossy in-place `ALTER ... USING` migration is exactly the "error-prone" trigger
+> ADR-012 names — and would adopt migration tooling at that point. No lossy conversion of populated legacy
+> columns ships in 2.0, so the deferred-conversion risk the review flagged does not materialize here.
 
-**Decision.** Internal primary keys are serial integers (consistent with `listings.id`). Use stable
-**slug-style string IDs only where an entity is cross-referenced by humans or other rows** — Skills
-(referenced by `role.applicable_skills`) and Roles (referenced by `matches.role_id`, `default_resume_id`).
-Don't mix conventions ad hoc.
+## ADR-006 — ID strategy (REVISED v2 — resolves the PK/slug contradiction)
 
-**Consequences.** Predictable references; aligns with single-user (ADR-007) — no UUIDs needed.
+**Context.** v1 was self-contradictory: this ADR said "serial-int PKs" while the data-model §2 used a
+string slug `id` as the `matches.role_id` FK target. `roles.id` cannot be both. The `inquisitor` flagged
+this as the FK the whole join hangs on.
+
+**Decision (resolved).** **The PK is the serial integer `id`, and it is the FK target.** A separate
+**`slug TEXT UNIQUE`** column carries the human-stable display/URL key — it is **never** an FK target.
+- `skills.id` (serial int) is what `roles.applicable_skills` stores (an `int[]`).
+- `roles.id` (serial int) is what `matches.role_id` and `roles.default_resume_id` reference.
+- `slug` is mutable-but-stable for display; renaming a skill/role changes `name`, not `slug`, and never
+  touches an FK. Design spec §2.2/§2.3/§2.5/§3.2 are aligned to this (D16).
+
+**Consequences.** One unambiguous FK target; predictable references; aligns with single-user (no UUIDs).
 
 ## ADR-007 — Single-user; multi-user deferred to v3
 
@@ -136,15 +171,27 @@ debt: duplicated card markup (#580), filters lost on refresh (#581), duplicated 
 `web/feed.py:77-94` vs `:136-153`). "Discipline" as a doc checklist is fragile — newcomers don't see
 it, shortcuts bypass it.
 
-**Decision.** Make it **structural + tested**, not remembered:
-1. **One render chokepoint** — a single feed-render service/function is the *only* way to produce feed
-   HTML; one shared card partial; one shared query parser covering new `role`/`combined`/`state` dims.
-2. **CI contract tests** — full-page vs fragment markup byte-identical for the same query; filters/role/
-   view survive a refresh; card markup string exists in exactly one template.
-Supersedes #580/#581/#582 (close as superseded when Cycle 2 lands — tracked in #749).
+**Decision.** Make it **structural + tested**, not remembered. Concretely (REVISED v2 — the `inquisitor`
+charged that v1 stated this as a checklist, not a testable contract):
+1. **One render chokepoint** — a single function is the *only* way to produce feed HTML. Indicative
+   signature: `render_feed(query: FeedQuery, *, fragment: bool) -> str` (full page wraps the same body
+   the fragment returns). One shared `_feed_cards.html` partial `{% include %}`d by both; one shared
+   `parse_feed_query(request) -> FeedQuery` covering the new `role` / `combined` / `lifecycle` dims.
+2. **Literal CI contract tests:**
+   - `test_feed_fullpage_and_fragment_card_markup_identical` — for a fixed `FeedQuery` fixture, the
+     `#feed-content` subtree of `GET /` equals the entire body of `GET /feed/fragment` (byte-for-byte
+     after normalizing whitespace).
+   - `test_feed_card_markup_single_source` — the card markup string/macro appears in exactly one
+     template file (grep assertion).
+   - `test_fragment_refresh_preserves_query` — a fragment fetch with filters/role/view params returns the
+     same filtered set as the full page with those params.
 
-**Consequences.** Violations fail CI instead of shipping; converts ~80% of the fragility from human
-memory to mechanical enforcement.
+**Do NOT close #580/#581/#582 as "superseded" on the strength of this ADR** (the `inquisitor` flagged
+this as laundering unsolved debt). Close them only when the chokepoint + the three tests above **exist in
+code** (Cycle 2, #749).
+
+**Consequences.** Violations fail CI instead of shipping; converts the fragility from human memory to
+mechanical enforcement — but only once the tests land, which is why the issues stay open until then.
 
 ## ADR-010 — Explicit write contract: PATCH semantics; never echo secrets
 

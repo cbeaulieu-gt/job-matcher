@@ -1,18 +1,35 @@
+---
+title: job-matcher 2.0 — Cycle 0 (Foundation) + Cycle 1 (Roles ingest/scoring)
+status: revised-v2 — re-review pending
+touches:
+  - db.py
+  - ingest.py
+  - web/feed.py
+  - web/**
+  - services/**
+  - plugins/sources/**
+  - templates/**
+  - conftest.py
+  - tests/**
+tracking: { epic: 751, milestone: 12, cycles: [747, 748] }
+---
+
 # job-matcher 2.0 — Cycle 0 (Foundation) + Cycle 1 (Roles ingest/scoring) — design spec
 
-> **Status:** model LOCKED 2026-05-29. Awaiting user review of this spec before plan-writing.
-> **Tracking:** Epic glitchwerks/job-matcher#751 · milestone #12 · Cycle 0 #747 · Cycle 1 #748.
-> **Scope of this spec:** Cycles 0 and 1 only (the foundation + the ingest/scoring overhaul).
-> Cycle 2 (API + UI, #749) and Cycle 3 (Resumes, #750) get their own specs.
+> **Status:** REVISED v2 — 2026-05-29. v1 was reviewed on PR glitchwerks/job-matcher#752 by
+> `project-reviewer` + `inquisitor` (aggressive pass); this revision resolves the 3 blockers + the PK
+> contradiction + the concerns they raised. **Not yet re-reviewed.** ("LOCKED" was premature in v1.)
+> **Tracking:** Epic #751 · milestone #12 · Cycle 0 #747 · Cycle 1 #748.
+> **Scope:** Cycles 0 and 1 only. Cycle 2 (API + UI, #749) and Cycle 3 (Resumes, #750) get their own specs.
 
 ---
 
 ## 1. Background & intent
 
-job-matcher today is a single-profile job *scorer*: one `config/profile.json` (the candidate) plus
-one `config/config.json` search query drive an ingest pipeline that scores listings against a single
-profile and stores them in PostgreSQL. There is **no Role concept** and **no Resume concept** —
-"applied" is just a boolean column on `listings` (`db.py:359`).
+job-matcher today is a single-profile job *scorer*: one `config/profile.json` + one `config/config.json`
+search query drive an ingest pipeline that scores listings against a single profile and stores them in
+PostgreSQL. There is **no Role concept** and **no Resume concept** — "applied" is a boolean column on
+`listings` (`db.py:359`).
 
 2.0 introduces two new core domain concepts:
 
@@ -20,55 +37,46 @@ profile and stores them in PostgreSQL. There is **no Role concept** and **no Res
    own search + scoring lens. A listing may match multiple roles (**many-to-many**).
 2. **Resumes** — a managed entity, tailorable to a job (Cycle 3 — out of scope here).
 
-This spec covers the **foundation** (the data model moved into PostgreSQL + migration) and the
-**ingest/scoring overhaul** that makes the pipeline multi-role aware.
+This spec covers the **foundation** (data model into PostgreSQL + migration) and the **ingest/scoring
+overhaul** that makes the pipeline multi-role aware.
 
 ### Authority
 
-- **The model in this spec is authoritative** — it is the product of the brainstorming session
-  (2026-05-29) and supersedes the OpenDesign handoff docs where they differ.
+- **The model in this spec is authoritative** (product of the 2026-05-29 brainstorming session); it
+  supersedes the OpenDesign handoff docs where they differ.
 - OpenDesign `ui-layout.md` is authoritative for **UI/IA** (Cycle 2).
-- OpenDesign `data-model.md`, `api-surface.md`, `design-principles.md`, `roles-editor-rebuild.md`
-  are **bridging references**, captured 2026-05-29 at
+- OpenDesign `data-model.md`, `api-surface.md`, `design-principles.md`, `roles-editor-rebuild.md` are
+  **bridging references**, captured 2026-05-29 at
   `C:\Users\chris\AppData\Roaming\Open Design\namespaces\release-stable-win\data\projects\0115656f-3dfa-45ce-a2d7-e6857d2f2f6a\docs\`.
 
-> **Recommended follow-up (flagged, not done):** copy the four OpenDesign reference docs into the
-> repo (`docs/design/`) so this spec can cite them durably. External absolute paths are not durable
-> citations per the project's "Cite Sources" discipline. Pending user approval.
+> **O4 (still open):** copy the four OpenDesign reference docs into the repo (`docs/design/`) so this
+> spec cites them durably. External absolute paths are not durable citations. Pending user OK.
 
 ---
 
 ## 2. The three-category entity model (NORMATIVE)
 
-The model divides into three top-level categories the user navigates, plus the join + posting
-entities. `?` = optional/nullable. Types indicative; **verify exact types against the repo at build**.
+`?` = optional/nullable. Types indicative; verify exact column types against the repo at build — EXCEPT
+where ADR-003/004/005/006 fix a type, which are normative.
 
 ### 2.1 Profile (singleton) — "who the candidate is"
 
 ```
 Profile {
-  // identity
+  id:               int        // serial PK; singleton enforced via CHECK (id = 1)
   name:             str
   email:            str
   country:          str
   current_location: { label: str, lat?: num, lng?: num }   // home/base = distance ORIGIN
-  current_role:     str            // what they do today (≠ target roles)
-  residency:        {                                  // ← OUR model (gap in handoff docs)
-    authorized_regions: str[]      // e.g. ["US"] — where the candidate may legally work
-    needs_sponsorship:  bool
-  }
-  // identity facts
+  current_role:     str
+  residency:        { authorized_regions: str[], needs_sponsorship: bool }   // OUR model (gap in handoff)
   education:        Education[]
-  primary_skills:   Skill[]        // shared bucket {id,name,years} — see 2.2
-  // scoring baselines (apply to ALL roles; roles ADD to these — OUR model, decision #1/#2)
-  anti_preferences: str[]          // baseline list
-  scoring_notes:    str[]          // baseline list
-  // compensation anchor (NOT a floor) — seeds role.target_salary + drives feed delta
-  base_salary:      { amount: num, currency: str, period: "year"|"hour" }
-  // Tier-2 shared defaults a role may override
-  defaults:         { seniority: str, preferred_industries: str[] }
+  primary_skills:   Skill[]        // shared bucket — see 2.2
+  anti_preferences: str[]          // baseline (roles ADD to this — D2)
+  scoring_notes:    str[]          // baseline (roles ADD to this — D1)
+  base_salary:      { amount: num, currency: str, period: "year"|"hour" }   // anchor, NOT a floor
+  defaults:         { seniority: str, preferred_industries: str[] }          // Tier-2 shared defaults
 }
-
 Education { degree_type: str, degree_field: str, school: str, graduation_year: int }
 ```
 
@@ -76,103 +84,142 @@ Education { degree_type: str, degree_field: str, school: str, graduation_year: i
 
 ```
 Skill {
-  id:    str     // STABLE id — roles reference skills by id (text key too fragile)
-  name:  str     // (was legacy `description`)
+  id:    int     // SERIAL PK — the cross-reference key (ADR-006). roles reference THIS.
+  slug:  str     // UNIQUE, human-stable display key (mutable name → slug regenerated is NOT done;
+                 //   slug is set once at create and stays; rename changes `name`, not `slug`)
+  name:  str     // display name (was legacy `description`); mutable
   years: int     // (was legacy `years_active`)
 }
-// legacy `active` boolean is DROPPED. No per-role weighting anywhere — emphasis via scoring_notes.
+// legacy `active` boolean DROPPED. No per-role weighting — emphasis via scoring_notes.
 ```
+
+**PK/FK resolution (was the v1 ADR-006-vs-§2 contradiction):** the FK target is the **serial int `id`**.
+`role.applicable_skills` stores **integer skill ids**, not slugs. The `slug` is a separate UNIQUE column
+for human-stable display/URLs only — never an FK target. Same pattern for Role (2.3).
 
 ### 2.3 Role (N per profile) — "what the candidate is aiming for"
 
 ```
 Role {
-  id:     str
-  name:   str
-  color:  str            // identity color; UI shell recolors on switch (Cycle 2)
-  active: bool           // false = paused (stops ingesting; not deleted)
+  id:       int          // SERIAL PK — FK target for matches.role_id (ADR-006)
+  slug:     str          // UNIQUE display key
+  name:     str
+  color:    str          // identity color (Cycle 2 shell)
+  active:   bool         // false = PAUSED (temporarily excluded from ingest; row & matches retained)
+  archived: bool         // true = soft-deleted (hidden from UI + ingest; row & matches retained) — see 2.7
 
-  // Tier 1 — target-defined (no shared base)
-  search_what:   str               // the core query — this *is* the role
-  prefilter: { title_include: str[], title_exclude: str[] }
-  threshold:     num               // 0–10 min score to surface
+  // Tier 1 — target-defined
+  search_what:   str
+  prefilter:     { title_include: str[], title_exclude: str[] }
+  threshold:     num
   scoring_notes: str[]             // per-role ADDITIONS (appended to Profile baseline)
 
   // per-role attributes
   anti_preferences:  str[]         // per-role ADDITIONS (appended to Profile baseline)
   target_salary:     num           // seeded from profile.base_salary, then editable
-  applicable_skills: str[]         // BINARY refs into profile.primary_skills[].id
-  default_resume_id: str?          // Cycle 3 — linked default resume
+  applicable_skills: int[]         // BINARY refs → skills.id (serial ints)
+  default_resume_id: int?          // Cycle 3
 
-  // Tier 2 — shared default w/ override (SPARSE: present key = override; absent = inherit)
+  // Tier 2 — sparse override (present key = override; absent = inherit)
   overrides: { seniority?: str, preferred_industries?: str[] }
+
+  updated_at: timestamptz          // bumped on any edit — drives mid-run staleness check (2.7)
 }
 ```
 
-`location` / `radius` / `work_arrangement` / `job_types` are deliberately **absent** — they are
-global (Job Preferences), never per-role.
+`location` / `radius` / `work_arrangement` / `job_types` are deliberately **absent** — global (2.4).
 
-### 2.4 Job Preferences (singleton, global) — "where & how the candidate will work"
+### 2.4 Job Preferences (singleton, global)
 
 ```
 JobPreferences {
-  locations:        Location[]                       // willing-to-work places
-  radius_km:        num                              // SINGLE global radius applied to every location
-  work_arrangement: ("onsite"|"hybrid"|"remote")[]   // multi-select HARD PULL FILTER
+  id:               int        // serial PK; singleton via CHECK (id = 1)
+  locations:        Location[]
+  radius_km:        num        // SINGLE global radius
+  work_arrangement: ("onsite"|"hybrid"|"remote")[]    // multi-select HARD PULL FILTER
   job_types:        ("contract"|"contract_to_hire"|"full_time"|"part_time"|"internship")[]  // HARD PULL FILTER
-  max_days_old:     int?                             // global freshness gate
-
-  // salary handling — user-selectable mode (OUR model, decision #3)
+  max_days_old:     int?
   salary_mode:      "floor" | "display"
-  floor_amount:     num?            // required when salary_mode == "floor"
+  floor_amount:     num?       // required when salary_mode == "floor"
 }
-
 Location { label: str, lat?: num, lng?: num }   // NO per-location radius
 ```
 
-- `work_arrangement` / `job_types` / `max_days_old` are **hard pull filters** — exclude postings at
-  ingestion, before LLM scoring.
-- **`salary_mode == "floor"`** → hard-filter out postings below `floor_amount` at ingestion.
-- **`salary_mode == "display"`** → no salary filter; the feed shows delta-vs-`base_salary`
-  (Cycle 2 UI): neutral text below base (`−10% vs base`), green above (`+20% vs base`).
-- **No extracted salary** is a **red flag, never an auto-drop** (Cycle 2 may offer an opt-in hide filter).
+- `work_arrangement` / `job_types` / `max_days_old` are **hard pull filters** (exclude at ingestion).
+- `salary_mode=="floor"` → drop postings below `floor_amount` at ingestion.
+- `salary_mode=="display"` → no salary filter; feed shows delta-vs-`base_salary` (Cycle 2): neutral below
+  base (`−10% vs base`), green above (`+20% vs base`).
+- **No extracted salary** = red flag, never auto-dropped (Cycle 2 may offer an opt-in hide filter).
 
 ### 2.5 Listing + Match (the posting and its per-role scores)
 
 ```
-Listing {                          // the existing `listings` table, extended
-  ...all existing columns (title, company, location, salary_*, description, source, source_id, …)
-  state:             "snippet" | "scored"   // snippet = discovered, not yet LLM-scored (NEW)
-  applied_resume_id: str?                    // Cycle 3 link-only
-  // per-listing scoring columns (score, verdict, matched_skills, …) are SUPERSEDED by Match rows
+Listing {                          // existing `listings` table, extended
+  ...all existing columns (title, company, location, salary_*, description, source, source_id,
+                           description_source, seen, …)
+  lifecycle:         "discovered" | "scored"   // NEW — see naming note below
+  applied_resume_id: int?                        // Cycle 3 link-only
+  // legacy scoring columns (score, verdict, matched_skills, …) are RETAINED but INERT in 2.0 —
+  //   read authority moves to `matches` in Cycle 1 (see §4.6); kept for backfill provenance/rollback.
 }
 
 Match {                            // NEW join — one row per (listing, role) scored pair
-  listing_id:     fk → listings.id
-  role_id:        fk → roles.id
-  score:          num              // 0–10 (tiers: hi 8+, mid 5–7, lo <5)
-  matched_skills: str[]            // serialized JSON (same pattern db.py uses today)
-  missing_skills: str[]
-  concerns:       str[]
+  listing_id:     int  fk → listings.id  ON DELETE CASCADE
+  role_id:        int  fk → roles.id     // roles are soft-deleted (2.7), so this never dangles
+  score:          num
+  matched_skills: jsonb            // ADR-005
+  missing_skills: jsonb
+  concerns:       jsonb
   verdict:        str
-  model_used:     str              // "provider/model"
+  model_used:     str
   tokens_input:   int
   tokens_output:  int
-  overridden_via: str[]            // which Tier-2 overrides applied (Combined-view marker, Cycle 2)
+  overridden_via: jsonb            // Tier-2 overrides applied (Combined-view marker, Cycle 2)
+  scored_at:      timestamptz
   PRIMARY KEY (listing_id, role_id)
 }
 ```
 
+**Naming note — `lifecycle`, NOT `state='snippet'` (was a v1 BLOCKER).** The repo already has
+`listings.description_source` (`'full'|'snippet'`, `db.py:363`) meaning *the description text came from a
+short API snippet vs a full scrape* — and that listing **has been scored**. The live `/snippets` route +
+`db.get_snippet_feed()` (`db.py:880-933`) surface `description_source='snippet' AND scored`. The new axis
+means something different — *not yet LLM-scored* — so it is a **separate column named `lifecycle`** with
+values `discovered`|`scored`. The two axes are orthogonal and both retained:
+
+| `description_source` (existing, unchanged) | `lifecycle` (new) | meaning |
+|---|---|---|
+| `full` / `snippet` | `discovered` | fetched, not yet scored (no Match rows) |
+| `full` | `scored` | scraped full JD, scored |
+| `snippet` | `scored` | scored from a short API description (today's `/snippets`) |
+
+The `/snippets` route + `get_snippet_feed()` keep filtering on `description_source='snippet'` (now also
+`lifecycle='scored'`). No vocabulary collision. The Cycle-2 "awaiting scrape/score" UI keys off
+`lifecycle='discovered'`.
+
 ### 2.6 Entity-relationship summary
 
 ```
-Profile (1) ──owns──> Skill (*)           Profile (1) ──owns──> Role (*)
-Role (*) ──applicable_skills──> Skill (*)  (binary id refs, many-to-many)
-Listing (1) ──< Match >── (1) Role         (many-to-many scoring; Match is the join)
+Profile (1) ──owns──> Skill (*)            Profile (1) ──owns──> Role (*)
+Role (*) ──applicable_skills (int refs)──> Skill (*)
+Listing (1) ──< Match >── (1) Role          (many-to-many; Match is the join)
 JobPreferences (1) ──hard-filters──> Listing ingestion
-Profile.base_salary ──derived %──> Listing.salary  (feed delta, Cycle 2)
+Profile.base_salary ──derived %──> feed delta (Cycle 2)
 Resume / Application — DEFERRED to Cycle 3 (applied_resume_id is link-only)
 ```
+
+### 2.7 Role lifecycle & ingest concurrency (was a v1 CONCERN)
+
+- **Soft-delete only (decision 3A).** UI "delete" sets `archived=true`; the row and `id` **never**
+  disappear, so `matches.role_id` never dangles and a mid-run Match write can't hit a missing-FK crash.
+  `active=false` = paused (temporary); `archived=true` = retired (permanent-ish, hidden). Archived roles
+  are excluded from ingest and the UI but their historical Matches stay valid.
+- **Hard purge** (truly delete a role + its Matches, `ON DELETE CASCADE`) is a separate explicit Admin
+  action, **gated on no ingest running** (checked via `ingest_control._ingest_running()`). Not exposed as
+  routine UI delete.
+- **Run-start snapshot + staleness.** Ingest snapshots active roles at run start (§4.7). If a role's
+  `updated_at` changes between snapshot and a Match write for that role, ingest logs a staleness warning
+  (the run used the snapshot config; the next run picks up edits). No mid-run config reload.
 
 ---
 
@@ -180,207 +227,241 @@ Resume / Application — DEFERRED to Cycle 3 (applied_resume_id is link-only)
 
 ### 3.1 Current state (captured)
 
-- `listings` table: `db.py:332-366` (CREATE TABLE) — scoring lives in columns on this table today
-  (`score, matched_skills, missing_skills, concerns, verdict, model_used, tokens_*`, `db.py:348-358`).
-- Idempotent migration pattern: `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` loop, `db.py:368-382`.
-- `ingest_runs` table: `db.py:421-435`. Geocache: `db.py:410-416`.
-- Candidate fields today: `config/profile.example.json` (`primary_skills` with `description/years_active/active`,
-  `education`, `seniority`, `anti_preferences`, `preferred_industries`, `location{center,radius_km,…}`,
-  `scoring_notes`). Search/prefilter: `config/config.json` (`search.what/where/distance/salary_min/max_days_old`,
-  `scoring.threshold`, `prefilter.title_include/title_exclude/require_contract_*`).
+- `listings`: `db.py:332-366`; scoring in columns (`db.py:348-358`); `description_source` at `:363`.
+- Idempotent migration pattern: `ADD COLUMN IF NOT EXISTS` loop, `db.py:368-382`; single-statement
+  guarded migration precedent (#114) `db.py:388-405`.
+- Connection pool is **autocommit=True** (`db.py:297-308`); `_Conn.commit()` exists for explicit txns.
+- `ingest_runs`: `db.py:421-435` (per-run `fetched/filtered/scored/failed_count`). Geocache `:410-416`.
+- Candidate fields: `config/profile.example.json`. Search/prefilter: `config/config.example.json`
+  (`prefilter.require_contract_time` ∈ {full_time, part_time}; `require_contract_type` ∈ {permanent, contract}
+  — verified `config.example.json:25-26`, matched in `ingest.py:394-407`).
 
 ### 3.2 New tables (added to `db.init_db()`)
 
-All created with `CREATE TABLE IF NOT EXISTS`; column additions via the existing `ADD COLUMN IF NOT
-EXISTS` loop, so `init_db()` stays idempotent and safe to re-run (consistent with `db.py:368-382`).
-
 | Table | Shape | Notes |
 |---|---|---|
-| `profile` | singleton (enforce single row, e.g. `id=1`) | Profile (2.1); JSON columns for `education`, `anti_preferences`, `scoring_notes`, `defaults`, `residency`, `base_salary` following the existing JSON-in-TEXT pattern |
-| `skills` | rows `{id, name, years}` | stable `id` (e.g. slug or serial-backed text key) |
-| `job_preferences` | singleton | JobPreferences (2.4); `locations` as JSON; arrays as JSON |
-| `roles` | collection | Role (2.3); `prefilter`, `scoring_notes`, `anti_preferences`, `applicable_skills`, `overrides` as JSON columns |
-| `matches` | join, PK `(listing_id, role_id)` | Match (2.5); FKs to `listings.id` and `roles.id`; indexes on `role_id` and `listing_id` |
+| `schema_version` | `(version int PK, applied_at timestamptz)` | NEW — migration sentinel; see §3.3 |
+| `profile` | singleton, `CHECK (id = 1)` | Profile (2.1); JSONB for `education/anti_preferences/scoring_notes/defaults/residency/base_salary` |
+| `skills` | `id SERIAL PK`, `slug TEXT UNIQUE`, `name`, `years` | FK target = `id` |
+| `job_preferences` | singleton, `CHECK (id = 1)` | JobPreferences (2.4); JSONB for arrays/locations |
+| `roles` | collection, `id SERIAL PK`, `slug UNIQUE` | Role (2.3); JSONB for `prefilter/scoring_notes/anti_preferences/applicable_skills/overrides`; `active/archived/updated_at` |
+| `matches` | join, PK `(listing_id, role_id)` | Match (2.5); FK `listing_id`→`listings.id` ON DELETE CASCADE, `role_id`→`roles.id`; indexes on `role_id`, `listing_id` |
 
-`listings` additions: `state TEXT NOT NULL DEFAULT 'scored'`, `applied_resume_id TEXT NULL`.
+`listings` additions: `lifecycle TEXT NOT NULL DEFAULT 'scored'`, `applied_resume_id INTEGER NULL`.
 
-> **Decision — keep vs drop legacy scoring columns on `listings`.** Recommendation: **retain** the
-> legacy columns through Cycle 1 (do not drop), backfill `matches` from them during migration, and
-> have new writes target `matches`. Dropping is a separate cleanup once all reads move to `matches`
-> (Cycle 2). Rationale: avoids a destructive, hard-to-reverse migration mid-transition; the columns
-> are cheap to carry. Flag for reviewer.
+**Table-creation order (was a v1 CONCERN):** `init_db()` must create parents before children —
+`skills`, `roles`, `job_preferences`, `profile` before `matches` (which FKs `roles` + `listings`).
+An integration test asserts `init_db()` succeeds against a **completely empty** DB.
 
-### 3.3 Migration (one-time, idempotent)
+**`db/` package + JSONB mappers (ADR-002/005):** the `db/` package split ships a `db/__init__.py` that
+re-exports all existing public symbols (callers' `import db` / `from db import …` keep working — no
+caller churn in Cycles 0–1). Each entity module owns its row mapper; the legacy TEXT-JSON
+`_deserialise_row` is **not** reused on JSONB tables (psycopg2 returns JSONB as Python objects already) —
+mixed-type joins (e.g. `listings` TEXT-JSON × `matches` JSONB) must use per-column-aware mapping.
 
-1. **Seed Profile** from `config/profile.json`:
-   - `primary_skills[].description → name`, `years_active → years`, assign stable `id`; drop `active`.
-   - `education`, `anti_preferences` (→ baseline), `scoring_notes` (→ baseline) copied across.
-   - `seniority`, `preferred_industries` → `defaults`.
-   - `location.center` → `current_location.label`; `location.radius_km` → JobPreferences `radius_km`.
-   - `base_salary`, `residency`, `current_role` are **new** — seed empty/defaults; user fills via UI (Cycle 2).
-2. **Seed JobPreferences** from `config.json`: `search.distance`/`location.radius_km` → `radius_km`;
-   `max_days_old` → global; `prefilter.require_contract_*` → `job_types`/`work_arrangement` (best-effort
-   map, flag ambiguous); `search.salary_min` → `salary_mode="floor"`, `floor_amount=salary_min`
-   (preserves today's filtering behavior as the migration default).
-3. **Seed one Role** from `config.json` `search`: `search_what = search.what`, `prefilter` from
-   `prefilter.title_include/exclude`, `threshold = scoring.threshold`, `active = true`, a default color,
-   `applicable_skills = all skill ids` (so behavior is unchanged), empty per-role additions/overrides.
-4. **Backfill `matches`** from existing `listings` scoring columns against the single migrated Role:
-   one `Match` per already-scored listing (`seen=1`); set `listings.state='scored'`. Listings with
-   `seen=0` (score failed) → `state` stays `'scored'` with no match, or `'snippet'` — **decision: set
-   `'snippet'`** so the retry path (Cycle 1) re-scores them.
+**`ingest_runs` multi-role accounting (was a v1 CONCERN):** add `matches_written INT`, `roles_processed
+INT`; `finish_ingest_run()` reports them. "scored" stays = listings transitioned to `lifecycle='scored'`.
 
-Migration runs inside `db.init_db()` guarded by an existence check (skip if `profile` row present), so
-re-runs are no-ops — same defensive pattern as the JSearch reclassify migration (`db.py:388-405`).
+**Legacy scoring columns (O1 — RESOLVED): retained but inert.** Keep `listings.score/verdict/...`
+through 2.0 for backfill provenance + rollback; **nothing reads them after Cycle 1** (feed reads
+`matches`, §4.6). Dropping them is a post-2.0 cleanup issue. Type conversions of existing `listings`
+columns (REAL/TEXT) are **out of scope** here (see ADR-003/004/005 scope note).
+
+### 3.3 Migration (one-time, ATOMIC, idempotent) — was a v1 BLOCKER
+
+Run inside `db.init_db()`, gated by `schema_version`. The seed runs in **one explicit transaction**
+(`raw.autocommit=False` for the block; `conn.commit()` once at the end — the seam at `db.py:297-308`):
+
+```
+if schema_version < 1:
+  BEGIN
+    1. Seed Profile from config/profile.json
+         (skills: description→name + assign slug + serial id; drop `active`;
+          education/anti_preferences→baseline/scoring_notes→baseline; seniority/preferred_industries→defaults;
+          location.center→current_location.label; base_salary/residency/current_role → empty defaults)
+    2. Seed JobPreferences from config.json (radius_km from search.distance/location.radius_km;
+         max_days_old; salary_min → salary_mode='floor', floor_amount=salary_min;
+         require_contract_* → job_types/work_arrangement per the table below)
+    3. Seed one Role from config.json search (search_what, prefilter, threshold, active=true,
+         archived=false, applicable_skills = ALL skill ids → behavior unchanged, empty additions/overrides)
+    4. Backfill matches: one Match per seen=1 listing against the seeded Role (copy score/verdict/
+         skills/concerns/model/tokens); set listing.lifecycle='scored'.
+         seen=0 listings (score failed) → lifecycle='discovered' (O3 RESOLVED) so Cycle-1 retry re-scores.
+    5. INSERT schema_version (1, now())
+  COMMIT   // all-or-nothing: an interrupted run rolls back; re-run repeats cleanly
+  ASSERT  (post-commit) COUNT(matches) == COUNT(listings WHERE seen=1)   // log + alert if mismatch
+```
+
+The guard is **`schema_version`**, not "profile row exists" — an interrupted run (no commit) leaves
+`schema_version` unset, so the next `init_db()` re-runs the whole seed cleanly. No half-migrated lock.
+
+**Contract-type mapping (O5 — RESOLVED, enumerated):**
+
+| legacy (`config.json`) | → new | note |
+|---|---|---|
+| `require_contract_time = "full_time"` | `job_types += [full_time]` | |
+| `require_contract_time = "part_time"` | `job_types += [part_time]` | |
+| `require_contract_type = "contract"` | `job_types += [contract]` | |
+| `require_contract_type = "permanent"` | (no member) | "permanent" = NOT-contract; represented by full/part-time presence, not a `job_types` entry |
+| field `null`/absent | no constraint on that axis | |
+| any unrecognized value | **log warning, drop (no filter)** | never silently over/under-filter |
+
+Because the legacy two-axis (time × type) model collapses into one `job_types` multiselect (lossy), a
+**first-run UI confirmation** (Cycle 2) prompts the user to verify migrated job-type prefs.
 
 ### 3.4 Cycle 0 acceptance criteria
 
-- [ ] `db.init_db()` creates all new tables; re-running is a no-op (idempotency test).
-- [ ] Migration populates Profile + JobPreferences + one Role from existing flat files.
-- [ ] Existing `listings` preserved; `matches` backfilled for `seen=1` rows; `seen=0` → `state='snippet'`.
-- [ ] Tests: schema creation, migration idempotency, JSON round-trip for the new JSON columns,
-      `conftest.py` test-DB guard respected (scoped DELETE by `source_id` prefix — no TRUNCATE).
+- [ ] `init_db()` creates all tables on a **completely empty** DB (FK order correct) and is a no-op on re-run.
+- [ ] Migration seeds Profile + JobPreferences + one Role from flat files; backfills `matches` for `seen=1`.
+- [ ] **Interrupted-migration test:** kill between step 1 and step 5 (no commit) → re-run completes the seed
+      (no half-migrated lock); post-commit assertion `COUNT(matches)==COUNT(seen=1)` holds.
+- [ ] `seen=0` → `lifecycle='discovered'`; `seen=1` → `lifecycle='scored'`.
+- [ ] Contract-type mapping table applied; unrecognized value logs + drops the filter.
+- [ ] JSONB round-trip; `conftest.py` test-DB guard respected (scoped DELETE by `source_id` prefix, no TRUNCATE).
 
 ---
 
 ## 4. Cycle 1 — Roles ingest/scoring overhaul
 
-### 4.1 The pipeline stays plugin-major
+### 4.1 Plugin-major loop with match-aware dedup (dedup fix was a v1 BLOCKER)
 
-The current pipeline iterates **per source/plugin** (pull → filter → scrape → score → insert), and
-`ingest.py` is already DB-aware (`import db` at `ingest.py:41`; `db.init_db()` `:1196`;
-`db.listing_exists()` `:1383`; geocache `:553-575`; `db.insert_listing()` `:639`). 2.0 keeps that
-outer loop **unchanged** — Roles are an *inner* fan-out, not a phase-major restructuring.
+Outer per-source/plugin loop is **unchanged** (`ingest.py` is DB-aware: `import db` `:41`; dedup `:1383`;
+`insert_listing` `:639`). Roles are an inner fan-out. **Dedup is now match-aware** — the old boolean
+`listing_exists()` skip (`ingest.py:1383-1394`) would short-circuit the whole listing and never score a
+2nd role; it is replaced by upsert-listing-then-check-match-per-role:
 
 ```
-for each active SOURCE/PLUGIN:                       # OUTER LOOP — UNCHANGED
-  if plugin.supports_role_query:                     # A-capable: rich server-side filtering
-      for each active ROLE:
-          fetch role-scoped query (role.search_what + filters)
-          per listing:
-              hours filter → geo/residency filter → dedup (1 row per source/source_id)
-              → prefilter(role) → scrape JD (ONCE per listing) → score(role) → write Match
-  else:                                              # B-only: global list, no useful server filter
-      fetch global list
+for each active SOURCE/PLUGIN:
+  if plugin.supports_role_query:                 # A-capable
+    for each active ROLE:
+      fetch role-scoped query (role.search_what + filters)
       per listing:
-          hours filter → geo/residency filter → dedup → scrape JD (ONCE per listing)
-          for each active ROLE whose prefilter(role) passes:
-              score(role) → write Match
+        hours → geo/residency → UPSERT listing (INSERT ... ON CONFLICT(source,source_id) DO NOTHING
+                                                 RETURNING id; else SELECT id)
+        if Match(listing_id, role_id) absent:
+            prefilter(role) → scrape JD (once, cached) → score(role) → write Match
+        # else: already scored for this role → skip
+  else:                                          # B-only global list
+    fetch global list
+    per listing:
+      hours → geo/residency → UPSERT listing → scrape JD (once)
+      for each active ROLE whose prefilter(role) passes AND Match(listing_id, role_id) absent:
+          score(role) → write Match
 ```
 
-Invariants:
-- **Scoring is always per-Role**, written to `matches` (never to `listings` columns for new writes).
-- **Scrape happens once per listing**, shared across roles (cost) — even in B-mode where multiple
-  roles score the same listing.
-- The existing per-source short-circuit semantics are preserved (auth 401/403 drops a provider for
-  the run; transient failure skips the current listing) — see `credentials.score_listing_with_fallback`.
+Key change: **dedup is per `(listing, role)` Match, not per listing row.** A role added to a pre-existing
+corpus now scores against existing listings (the bug v1 shipped). Scrape still happens once per listing.
+Per-source short-circuit semantics (401/403 drops a provider; transient skips the listing) preserved.
 
 ### 4.2 Plugin capability flag
 
-Add `supports_role_query: bool` to the source-plugin contract (default `false` → B-mode, the safe
-fallback). A-capable plugins implement role-scoped fetch using `role.search_what` + the role's gates.
-Document in `docs/PLUGIN_DEVELOPMENT.md` and the `plugins/sources/_template/`.
+Add `supports_role_query: bool` (default `False` → B-mode) as a class attribute on `JobSource`
+(`job_sources/base.py`), documented in `docs/PLUGIN_DEVELOPMENT.md` + `plugins/sources/_template/`.
 
-### 4.3 Per-role prefilter is the cost gate
+### 4.3 Per-role prefilter (cost gate) + B-mode cost ceiling (decision 4)
 
-B-only sources scoring every listing against every active role multiplies LLM cost by role count.
-Mitigation (baked in): a listing is LLM-scored for a role **only if it passes that role's
-`prefilter.title_include/exclude`**. The prefilter is title-substring matching (cheap, no API call) —
-the same kind of gate that exists today, now evaluated per-role. A cost test asserts that a listing
-failing a role's prefilter incurs **zero** scoring calls for that role.
+A listing is LLM-scored for a role only if it passes that role's `prefilter.title_include/exclude`
+(cheap title-substring gate; zero API cost for non-matches). **Accepted worst case:** a listing passing
+**K of N** roles' prefilters incurs **K scoring calls** (scrape is shared; scoring is not). At ~500
+listings/run × overlapping roles this is K× today's cost — **accepted for single-user scale (decision 4)**.
+Mitigation: ingest logs a **per-run scoring-call + estimated-cost budget line**; no hard cap in Cycle 1.
+A-capable sources also multiply *fetch* calls by role count → plugins must respect per-source rate limits
+across the role loop (note in `PLUGIN_DEVELOPMENT.md`).
 
 ### 4.4 Geo + residency filter
 
-- Distance origin = `Profile.current_location`; radius = `JobPreferences.radius_km`; applied to
-  `JobPreferences.locations[]` (a listing passes if within radius of **any** willing location).
-- A listing whose `work_arrangement` is **remote** **bypasses the distance filter** but is checked
-  against `Profile.residency` (`authorized_regions` / `needs_sponsorship`). Residency-incompatible
-  remote postings are filtered.
-- `geocode_fallback` behavior carries over from today (`pass` default).
+- Distance origin = `Profile.current_location`; radius = `JobPreferences.radius_km`; pass if within radius
+  of **any** willing `JobPreferences.locations[]`.
+- **Remote** postings bypass the distance filter but are checked against `Profile.residency`
+  (`authorized_regions`/`needs_sponsorship`); residency-incompatible remote postings filtered.
+- `geocode_fallback` carries over (`pass` default).
 
 ### 4.5 Effective scoring inputs per Role
 
-The LLM scoring prompt for a `(listing, role)` pair is assembled from:
+| Input | Resolution |
+|---|---|
+| skills | `primary_skills.filter(s.id ∈ role.applicable_skills)` |
+| seniority | `role.overrides.seniority ?? profile.defaults.seniority` |
+| preferred_industries | `role.overrides.preferred_industries ?? profile.defaults.preferred_industries` |
+| anti_preferences | `profile.anti_preferences ++ role.anti_preferences` (concatenate) |
+| scoring_notes | `profile.scoring_notes ++ role.scoring_notes` (concatenate) |
+| target_salary / threshold | per-role |
 
-| Input | Source | Resolution |
-|---|---|---|
-| skills | `Profile.primary_skills` filtered by `role.applicable_skills` (binary) | `effective_skills = primary_skills.filter(s ∈ role.applicable_skills)` |
-| seniority | `role.overrides.seniority ?? profile.defaults.seniority` | sparse override |
-| preferred_industries | `role.overrides.preferred_industries ?? profile.defaults.preferred_industries` | sparse override |
-| anti_preferences | `profile.anti_preferences (baseline) + role.anti_preferences (additions)` | **concatenate** (OUR model) |
-| scoring_notes | `profile.scoring_notes (baseline) + role.scoring_notes (additions)` | **concatenate** (OUR model) |
-| target_salary | `role.target_salary` | per-role |
-| threshold | `role.threshold` | min score to surface |
+Response schema unchanged (`score, matched_skills, missing_skills, concerns, verdict`); written to a
+`Match` row.
 
-The scoring response schema is unchanged (`score, matched_skills, missing_skills, concerns, verdict`);
-results write to a `Match` row with `model_used` + token counts (as today, but per-role).
+### 4.6 Feed read authority during Cycle 1 (decision 2B) — was a v1 CONCERN
 
-### 4.6 Snippets (store-then-score)
+`matches` is authoritative the moment it exists. **Cycle 1 includes a contained change to
+`get_feed()`/`get_snippet_feed()`** to read a roll-up `MAX(matches.score)` per listing (over active,
+non-archived roles), instead of `listings.score`. This is the "best-fit" scalar the Cycle-2 badge will
+also use — forward-compatible, not throwaway. Legacy `listings.score` is **not** read after this change
+(kept inert per §3.2). No dual-write, no split-brain window.
 
-A discovered posting that has **not** been LLM-scored persists with `state='snippet'` (raw posting
-data, no `Match` rows). Scoring promotes it to `state='scored'` and writes its `Match` rows. This
-enables the Cycle 2 "awaiting scrape" feed state and an on-demand scrape/score action. In Cycle 1 the
-backend support is: write `state='snippet'` when a posting is stored pre-scoring, and a function to
-promote (scrape if needed → score → write matches → `state='scored'`).
+### 4.7 Snippets (store-then-score) + control surface
 
-> **Decision — snippet creation policy.** Recommendation: a posting becomes a `snippet` when it
-> passes coarse filters + at least one role's prefilter but scoring is deferred/failed; the normal
-> path still scores inline and writes `state='scored'` directly. The "always store as snippet first,
-> score in a second pass" variant is a larger pipeline change — **defer** unless the reviewer wants it.
-> Flag for reviewer.
-
-### 4.7 CLI / control surface
-
-- **Role `active` toggle** — a run processes only `active=true` roles (read from DB at run start).
-- **`--role "<name>"`** — narrow a run to a single role (looked up by name/id in the DB). Works
-  because ingest is already DB-aware (`ingest.py:41`).
-- **`--rescore`** — rebuild `matches` across all active roles (extends today's `--rescore`). A
-  per-Role "re-score just this role's listings" action is also exposed (used by the Cycle 2 UI when a
-  single role is edited).
+- `lifecycle='discovered'` = stored, not yet scored (no Matches). Promotion: scrape-if-needed → score →
+  write Matches → `lifecycle='scored'`. **Inline-score remains the default** (O2 RESOLVED); a posting
+  becomes `discovered` only when scoring is deferred/failed. Failed-scoring carries a `score_error TEXT`
+  on the listing so the Cycle-2 UI can distinguish "awaiting score" from "score failed."
+- **Role active toggle** — run processes only `active=true AND archived=false` roles (snapshot at start, §2.7).
+- **`--role "<slug|name>"`** — narrow a run to one role (DB lookup).
+- **`--rescore`** — rebuild `matches` across active roles; per-Role "re-score just this role" action for
+  the Cycle-2 UI when a single role is edited.
 
 ### 4.8 Cycle 1 acceptance criteria
 
-- [ ] A-capable and B-only sources both produce correct per-role `Match` rows.
+- [ ] A-capable + B-only sources both produce correct per-role `Match` rows.
+- [ ] **Role-added-to-existing-corpus test:** score Role A, then add Role B and re-run → Role B gets
+      Matches for pre-existing listings (guards the dedup fix; do NOT test only the single-fresh-run path).
 - [ ] A listing matching two roles → two `Match` rows, one `listings` row.
-- [ ] Per-role prefilter gates LLM calls (cost test: prefilter-fail → 0 scoring calls for that role).
-- [ ] Remote-residency filter: a remote posting incompatible with `residency` is filtered; a
-      compatible one passes despite being outside the distance radius.
-- [ ] Snippet → scored promotion path covered by a test.
-- [ ] `--role` and `--rescore` (all-active + single-role) behave per 4.7.
-- [ ] **Full CI gate green** (mirror CI, not a subset): `ruff check`, `pytest` against the test DB,
-      plus any `black --check` / `mypy` the workflow runs. State expected test count at plan time.
+- [ ] Per-role prefilter gates LLM calls (prefilter-fail → 0 scoring calls); per-run cost budget logged.
+- [ ] Remote-residency filter behaves (incompatible remote dropped; compatible passes outside radius).
+- [ ] `lifecycle` discovered→scored promotion; `lifecycle` × `description_source` coexist on one row correctly.
+- [ ] **Mid-run role edit/delete test:** archiving a role mid-run does not crash Match writes; staleness warning logged.
+- [ ] Feed reads `MAX(matches.score)` roll-up (decision 2B).
+- [ ] **Full CI gate green** (mirror CI, not a subset): `ruff check`, `pytest` (test DB), plus any
+      `black --check` / `mypy` the workflow runs. State expected test count at plan time.
 
 ---
 
-## 5. Cross-cycle decisions log (2026-05-29)
+## 5. Cross-cycle decisions log
 
 | # | Decision | Rationale |
 |---|---|---|
-| D1 | `scoring_notes` = Profile baseline + per-Role additions | existing notes are general; superset is more flexible (our session, authoritative) |
+| D1 | `scoring_notes` = Profile baseline + per-Role additions | general baseline + role specifics |
 | D2 | `anti_preferences` = Profile baseline + per-Role additions | some universal, some role-specific |
-| D3 | Salary = `base_salary` anchor (Profile) + per-Role `target_salary` + user-selectable `salary_mode` (floor \| display) | richer than a flat floor; preserves filtering as an option |
-| D4 | `residency`/work-auth on Profile + remote-residency filter | gap in handoff docs; needed for correct remote filtering |
-| D5 | All config in PostgreSQL | enables UI CRUD, FK integrity for `matches`, role lifecycle; departs from legacy flat-file philosophy deliberately |
-| D6 | Ingest stays plugin-major; roles are inner fan-out | preserves proven structure + per-source short-circuit semantics |
-| D7 | Per-source `supports_role_query` flag; B-mode default | not all sources allow server-side filtering |
-| D8 | Many-to-many via `matches` join | preserves cross-role signal the LLM is paid to produce |
+| D3 | Salary = `base_salary` anchor + per-Role `target_salary` + `salary_mode` (floor\|display) | richer than a flat floor |
+| D4 | `residency` on Profile + remote-residency filter | gap in handoff docs |
+| D5 | All config in PostgreSQL | UI CRUD, FK integrity, role lifecycle |
+| D6 | Plugin-major loop; roles inner fan-out | preserves proven structure |
+| D7 | Per-source `supports_role_query`; B-mode default | not all sources allow server-side filtering |
+| D8 | Many-to-many via `matches` join | preserves cross-role signal |
 | D9 | Scrape once per listing | cost |
-| D10 | Per-application resume = link only (`applied_resume_id`); Application entity deferred | lightest weight that satisfies the requirement |
+| D10 | Per-application resume = link only; Application deferred | lightest weight |
+| **D11** | Lifecycle axis named `discovered`\|`scored`, separate from existing `description_source` | avoids the vocabulary collision (v1 blocker) |
+| **D12** | Dedup is match-aware (`(listing,role)`), not row-existence | makes the many-to-many fan-out actually work (v1 blocker) |
+| **D13** | Migration is one atomic transaction gated by `schema_version` | interrupted runs roll back, not half-lock (v1 blocker) |
+| **D14** | Cycle-1 feed reads `MAX(matches.score)` roll-up (2B) | `matches` authoritative immediately; no split-brain |
+| **D15** | Roles soft-delete only (`archived`); hard-purge is ingest-quiescent admin action (3A) | no mid-run FK crash; matches history preserved |
+| **D16** | PK = serial int; `slug` is a separate UNIQUE display key; FKs target the int | resolves the v1 PK/slug contradiction |
+| **D17** | B-mode worst case = K scoring calls for K matched roles; accepted + budget-logged (no hard cap) | single-user scale |
 
-## 6. Open items for the reviewer
+## 6. Open items
 
-- **O1** — Keep vs drop legacy `listings` scoring columns during transition (§3.2). Lean: keep through Cycle 1.
-- **O2** — Snippet creation policy: inline-score-default vs always-snippet-first (§4.6). Lean: inline default.
-- **O3** — `seen=0` listings → `state='snippet'` on migration (§3.3 step 4). Confirm.
-- **O4** — Copy OpenDesign reference docs into `docs/design/` for durable citations (§1). Needs user OK.
-- **O5** — Exact `job_types`/`work_arrangement` mapping from legacy `require_contract_*` (§3.3 step 2)
-  is best-effort; confirm the enum mapping at build.
+- **O4** — Copy OpenDesign reference docs into `docs/design/` for durable citations (§1). Pending user OK.
+  *(O1, O2, O3, O5 resolved in v2 — see §3.2/§4.7/§3.3.)*
 
 ## 7. References
 
-- Current schema & migration pattern: `db.py:332-405` (listings + migrations), `db.py:421-435` (ingest_runs).
-- Ingest DB-awareness: `ingest.py:41` (`import db`), `:1196` (`init_db`), `:1383-1390` (dedup), `:639` (`insert_listing`).
-- Current candidate fields: `config/profile.example.json`; search/prefilter: `config/config.json` (CLAUDE.md § Config & profile).
-- OpenDesign handoff (captured 2026-05-29): `ui-layout.md` (UI authority), `data-model.md`, `api-surface.md`,
-  `design-principles.md`, `roles-editor-rebuild.md` (bridging references).
-- Tracking: Epic #751, milestone #12, Cycle 0 #747, Cycle 1 #748, Cycle 2 #749, Cycle 3 #750.
+- Schema/migration: `db.py:332-405` (listings + migrations), `:297-308` (autocommit pool + commit seam),
+  `:363` (`description_source`), `:421-435` (`ingest_runs`), `:880-933` (`get_snippet_feed`).
+- Ingest: `ingest.py:41` (`import db`), `:1196` (`init_db`), `:1383-1394` (boolean dedup being replaced),
+  `:394-407` (contract-type prefilter), `:639` (`insert_listing`).
+- Contract-type values: `config/config.example.json:25-26`.
+- Feed render coupling (Cycle 2): `web/feed.py:77-94` / `:136-153`; history `glitchwerks/job-matcher-pr#223`/`#224`;
+  open `glitchwerks/job-matcher#580`/`#581`/`#582`.
+- Review of v1: PR #752 (`project-reviewer` + `inquisitor`, 2026-05-29).
+- OpenDesign handoff (captured 2026-05-29): `ui-layout.md` (UI authority) + `data-model.md`/`api-surface.md`/
+  `design-principles.md`/`roles-editor-rebuild.md` (bridging).
+- Tracking: epic #751, milestone #12, cycles #747–#750.

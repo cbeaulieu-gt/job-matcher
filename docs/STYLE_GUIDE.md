@@ -16,6 +16,13 @@ The aesthetic is intentionally spare: one max-width column, no sidebar, no gradi
 
 All values live in the `:root` block of `static/style.css`. **Never hard-code hex values** — always reference a token.
 
+**Exception — inline SVG data URIs:** CSS custom properties cannot be referenced inside a `url("data:image/svg+xml,...")` payload, so hex color literals are permitted there. When you use one, add a comment naming the token it approximates and keep the two in sync by hand:
+
+```css
+/* chevron icon — approximates --border-strong (#525c72) at this opacity */
+background-image: url("data:image/svg+xml,%3Csvg ...fill='%23545c6b'.../%3E");
+```
+
 ### Backgrounds
 
 | Token | Value | Use |
@@ -779,7 +786,7 @@ Both states carry `margin-bottom: 16px` to maintain consistent spacing above `.c
 
 Follow these when writing new CSS or HTML:
 
-1. **Always use CSS custom properties.** Never hard-code a hex value. If no token fits, add one to `:root` and document it here.
+1. **Always use CSS custom properties.** Never hard-code a hex value. If no token fits, add one to `:root` and document it here. The one accepted exception is inline SVG data URIs — see the note in §2 Design Tokens.
 
 2. **Positive states use `--score-high-*`.** Anything that signals "good", "configured", "active", or "matching" uses the green tier triplet. This includes remote badges, validated keys, and matched skills.
 
